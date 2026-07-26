@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from dns.rcode import Rcode
 from loguru import logger
-
+from smartdns.core.cache import TTLCache
 from .worker import Worker
 
 if TYPE_CHECKING:
@@ -27,6 +27,9 @@ class Master:
         self.worker_count = config.worker_count
         self.workers: list[Worker] = []
         self.portals: list[BlockingPortal] = []
+        self._cache = (
+            TTLCache(maxsize=config.cache_size) if config.cache_size > 0 else None
+        )
 
     async def start(self) -> None:
         """启动 Master 服务"""
@@ -51,10 +54,10 @@ class Master:
         """分发请求到Worker并返回响应Message"""
         logger.info(f"Master接收到请求: {request}")
         # 读取缓存
-        # cached_response = self._cache.get(request) if self._cache else None
-        # if cached_response is not None:
-        #     logger.debug(f"从缓存中获取响应: {cached_response}")
-        #     return cached_response
+        cached_response = self._cache.get(request) if self._cache else None
+        if cached_response is not None:
+            logger.debug(f"从缓存中获取响应: {cached_response}")
+            return cached_response
         # 随机选择一个worker处理
         worker_id = random.randint(0, self.worker_count - 1)
         portal = self.portals[worker_id]
@@ -66,8 +69,8 @@ class Master:
             result = await wrap_future(future)
             logger.info(f"Worker {worker_id}处理完成请求: {request}, 响应: {result}")
             # 将响应缓存起来
-            # if self._cache:
-            #     self._cache.set(request, result)
+            if self._cache:
+                self._cache.set(request, result)
             return result
         except Exception as e:
             logger.error(f"分发请求到Worker {worker_id}时发生错误: {e}")

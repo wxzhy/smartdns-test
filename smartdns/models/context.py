@@ -148,8 +148,7 @@ class Context:
 
     request: Request
     responses: list[Response] | None = None
-    has_response: bool = False
     stop: bool = False
     is_subquery: bool = False
-    subqueries: Context | None = None
+    subquery: Context | None = None
     ext: dict = Field(default_factory=dict, description="扩展字段，用于存储额外信息")
