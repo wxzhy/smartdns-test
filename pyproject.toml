@@ -4,4 +4,45 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "anyio>=4.14.2",
+    "dnspython[doh,idna]>=2.8.0",
+    "loguru>=0.7.3",
+    "pydantic-settings[yaml]>=2.14.2",
+]
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "N",
+    "B",
+    "UP",
+    "SIM",
+    "C4",
+    "ASYNC",
+    "RUF",
+    "PT",
+    "TID",
+    "PTH",
+    "PERF",
+    "FURB",
+    "RET",
+    "TC",
+    "PLC",
+    "PLE",
+    "PLW",
+    "PIE",
+    "COM",
+]
+ignore = ["RUF001", "RUF002", "RUF003", "COM812"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.0",
+    "ty>=0.0.63",
+]
