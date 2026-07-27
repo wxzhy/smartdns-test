@@ -1,9 +1,11 @@
-from dns.resolver import LRUCache
-from typing import TYPE_CHECKING
 from time import time
+from typing import TYPE_CHECKING
+
+from dns.resolver import LRUCache
 
 if TYPE_CHECKING:
     from dns.resolver import Answer
+
     from smartdns.models.context import Request
 
 

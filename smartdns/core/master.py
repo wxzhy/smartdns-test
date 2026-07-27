@@ -8,13 +8,15 @@ from typing import TYPE_CHECKING
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from dns.rcode import Rcode
 from loguru import logger
+
 from smartdns.core.cache import TTLCache
+
 from .worker import Worker
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
 
-    from dns.message import Message
+    from dns.resolver import Answer
 
     from smartdns.models.config import Config
     from smartdns.models.context import Request
@@ -50,11 +52,11 @@ class Master:
             # self.listener_manager = ListenerManager(config=self.config.listeners)
             # await self.listener_manager.start_all(handler=self.dispatch)
 
-    async def dispatch(self, request: Request) -> Message:
+    async def dispatch(self, request: Request) -> Answer:
         """分发请求到Worker并返回响应Message"""
         logger.info(f"Master接收到请求: {request}")
         # 读取缓存
-        cached_response = self._cache.get(request) if self._cache else None
+        cached_response = self._cache.cache_get(request) if self._cache else None
         if cached_response is not None:
             logger.debug(f"从缓存中获取响应: {cached_response}")
             return cached_response
@@ -70,7 +72,7 @@ class Master:
             logger.info(f"Worker {worker_id}处理完成请求: {request}, 响应: {result}")
             # 将响应缓存起来
             if self._cache:
-                self._cache.set(request, result)
+                self._cache.cache_set(request, result)
             return result
         except Exception as e:
             logger.error(f"分发请求到Worker {worker_id}时发生错误: {e}")

@@ -10,7 +10,9 @@ from pydantic_settings import (
 )
 
 if TYPE_CHECKING:
-    from .listener import ListenerConfig
+    from smartdns.models.listener import (
+        ListenerConfig,
+    )
 
 
 class Config(BaseSettings):
