@@ -22,10 +22,17 @@ class UDPNameserver(BaseNameserver):
         self._repeat = config.repeat
         self._use_tricks = config.use_tricks
 
+    def kind(self) -> str:
+        return "udp"
+
     async def start(self):
         """启动UDP解析器"""
         # 此时不创建socket
         logger.info(f"UDP解析器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
+
+    async def stop(self):
+        """停止UDP解析器"""
+        logger.info(f"UDP解析器 {self.name} 已停止")
 
     async def async_query(
         self,

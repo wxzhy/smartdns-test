@@ -1,7 +1,9 @@
+import dns.asyncquery
 import dns.message
 from anyio import connect_tcp
 from loguru import logger
 
+from smartdns.nameservers._socket import AnyioStreamSocket
 from smartdns.nameservers.base import BaseNameserver
 
 
@@ -12,9 +14,9 @@ class TCPNameserver(BaseNameserver):
         super().__init__(config)
         self._pool_size = config.pool_size
         self._pool = None
-        self._sock = None
         self.host = config.host
         self.port = config.port
+        self._use_tricks = config.use_tricks
 
     def kind(self) -> str:
         return "tcp"
@@ -23,8 +25,6 @@ class TCPNameserver(BaseNameserver):
         """启动TCP解析器"""
         if self._pool_size:
             self._pool = await self._create_pool()
-        else:
-            self._sock = await self._connect()
         logger.info(f"TCP解析器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
 
     async def _connect(self):
@@ -45,4 +45,17 @@ class TCPNameserver(BaseNameserver):
         one_rr_per_rrset: bool = False,
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
-        raise NotImplementedError
+        try:
+            raw_sock = await connect_tcp(self.host, self.port)
+            sock = AnyioStreamSocket(raw_sock, use_tricks=self._use_tricks)
+            return await dns.asyncquery.tcp(
+                request,
+                where=self.address,
+                timeout=self.timeout,
+                port=self.port,
+                sock=sock,
+                ignore_trailing=True,
+            )
+        except Exception as e:
+            logger.error(f"TCP解析器 {self.name} 查询失败: {e}")
+            raise

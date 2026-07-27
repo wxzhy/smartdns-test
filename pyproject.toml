@@ -7,6 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "anyio>=4.14.2",
     "dnspython[doh,idna]>=2.8.0",
+    "generic-connection-pool>=0.8.1",
     "loguru>=0.7.3",
     "pydantic-settings[yaml]>=2.14.2",
     "typer>=0.27.0",

@@ -187,6 +187,15 @@ wheels = [
 ]
 
 [[package]]
+name = "generic-connection-pool"
+version = "0.8.1"
+source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
+sdist = { url = "https://mirror.nju.edu.cn/pypi/web/packages/ec/77/aa9fd15445d1020db9af2f2bfa21e13b10eb5fe4c822ef4ab970d5045229/generic_connection_pool-0.8.1.tar.gz", hash = "sha256:563d5e519cd8906e2c0c5b9517b079c65d6eea6acf0ceaab0a80e30027deaeef" }
+wheels = [
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/c4/2a/dcef57bcdb0d64bb0480bb1ef91dd223610b9784d1d10d3adc1dbc3891e5/generic_connection_pool-0.8.1-py3-none-any.whl", hash = "sha256:20917bb52600e409167f0a9a5284303582e7c105eba98efdb50be0513f435906" },
+]
+
+[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
@@ -789,6 +798,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "anyio" },
     { name = "dnspython", extra = ["doh", "idna"] },
+    { name = "generic-connection-pool" },
     { name = "loguru" },
     { name = "pydantic-settings", extra = ["yaml"] },
     { name = "typer" },
@@ -808,6 +818,7 @@ dev = [
 requires-dist = [
     { name = "anyio", specifier = ">=4.14.2" },
     { name = "dnspython", extras = ["doh", "idna"], specifier = ">=2.8.0" },
+    { name = "generic-connection-pool", specifier = ">=0.8.1" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "pydantic-settings", extras = ["yaml"], specifier = ">=2.14.2" },
     { name = "typer", specifier = ">=0.27.0" },
