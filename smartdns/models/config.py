@@ -26,6 +26,7 @@ class Config(BaseSettings):
     nameservers: list[NameserverConfig] = Field(
         default=[], description="上游DNS服务器配置列表"
     )
+    actions: list[ActionConfig] = Field(default=[], description="动作配置列表")
 
     @classmethod
     def set_config_file(cls, config_file: str) -> None:
