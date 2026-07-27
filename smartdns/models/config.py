@@ -1,5 +1,5 @@
 from os import cpu_count
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from pydantic import Field
 from pydantic_settings import (
@@ -9,10 +9,9 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-if TYPE_CHECKING:
-    from smartdns.models.listener import (
-        ListenerConfig,
-    )
+from smartdns.models.listener import (
+    ListenerConfig,
+)
 
 
 class Config(BaseSettings):

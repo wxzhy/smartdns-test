@@ -1,0 +1,10 @@
+listeners:
+  - name: TCP
+    type: tcp
+    port: 5335
+    timeout: 5
+  - name: UDP
+    type: udp
+    host: "::"
+    port: 5335
+    timeout: 5

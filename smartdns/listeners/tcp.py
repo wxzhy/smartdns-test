@@ -11,8 +11,7 @@ from smartdns.models.context import Request
 
 if TYPE_CHECKING:
     from anyio.abc import SocketStream
-
-    from smartdns.models.listener import Do53Listener
+    from dns.message import Message
 
 
 class TCPListener(BaseListener):
@@ -55,8 +54,13 @@ class TCPListener(BaseListener):
                 request = Request.from_message(
                     msg=data, listener=self.name, remote_address=client_address
                 )
-                response = await self.handler(request)
-                await send_tcp(anyio_stream, response, expiration=time() + self.timeout)
+                response: Message | None = await self.handler(request)
+                if response is not None:
+                    await send_tcp(
+                        anyio_stream,
+                        response.to_wire(),
+                        expiration=time() + self.timeout,
+                    )
         except Exception as e:
             logger.error(f"处理连接时发生错误: {e}")
         finally:

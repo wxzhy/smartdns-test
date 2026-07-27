@@ -1,9 +1,7 @@
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-if TYPE_CHECKING:
-    from pydantic.networks import IPvAnyAddress
+from pydantic.networks import IPvAnyAddress
 
 
 class BaseListenerConfig(BaseModel):
@@ -18,9 +16,10 @@ class Do53ListenerConfig(BaseListenerConfig):
     """UDP listener 配置。"""
 
     type: Literal["udp"] | Literal["tcp"]
-    host: IPvAnyAddress
-    port: int = Field(ge=1, le=65535)
-    reuse_port: bool = False
+    host: IPvAnyAddress | None = Field(description="监听地址", default=None)
+    port: int = Field(ge=1, le=65535, description="监听端口")
+    reuse_port: bool = Field(default=False, description="是否启用端口复用")
+    timeout: float = Field(default=5.0, ge=0.1, description="请求超时时间（秒）")
 
 
 class HTTPListenerConfig(BaseListenerConfig):

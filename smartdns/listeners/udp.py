@@ -30,7 +30,8 @@ if platform != "win32":
 class UDPListener(BaseListener):
     def __init__(self, config: Do53Listener):
         super().__init__(config)
-        self.host = config.host
+        self.host = str(config.host) if config.host is not None else "::"
+        logger.debug(f"UDP监听器 {self.name} 使用的监听地址: {self.host}")
         self.port = config.port
         self.reuse_port = config.reuse_port
         self.timeout = config.timeout
@@ -39,14 +40,14 @@ class UDPListener(BaseListener):
         self._sock = socket(self._family, SOCK_DGRAM)
         # 允许同时接收IPv4和IPv6数据包
         self._sock.setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, 0)
-        # 允许地址重用
-        self._sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         # 设置为非阻塞模式
         self._sock.setblocking(False)
         # 在Windows上使用SO_EXCLUSIVEADDRUSE来确保端口独占
         if platform == "win32":
             self._sock.setsockopt(SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
         else:
+            # 允许地址重用
+            self._sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
             if self.reuse_port:
                 self._sock.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
         self._sock.bind((self.host, self.port))

@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from dns.message import Message, make_response
+from dns.name import Name
 from dns.rcode import Rcode
+from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
+from dns.resolver import Answer
 from loguru import logger
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
-
-if TYPE_CHECKING:
-    from dns.name import Name
-    from dns.rdataclass import RdataClass
-    from dns.resolver import Answer
-    from pydantic.networks import IPvAnyAddress
+from pydantic.networks import IPvAnyAddress
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -146,8 +142,12 @@ class Response:
 class Context:
     """worker 处理期间贯穿所有 hook 的全局上下文。"""
 
+    worker_id: int
     request: Request
-    responses: list[Response] | None = None
+    # 当前处理的响应对象
+    response: Response | None = None
+    # 结果列表
+    candidates: list[Response] | None = None
     stop: bool = False
     is_subquery: bool = False
     subquery: Context | None = None

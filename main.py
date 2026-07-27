@@ -1,6 +1,4 @@
-def main():
-    print("Hello from smartdns!")
-
+from smartdns.main import app
 
 if __name__ == "__main__":
-    main()
+    app()
