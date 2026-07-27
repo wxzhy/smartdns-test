@@ -56,10 +56,11 @@ class Master:
         """分发请求到Worker并返回响应Message"""
         logger.info(f"Master接收到请求: {request}")
         # 读取缓存
-        cached_response = self._cache.cache_get(request) if self._cache else None
-        if cached_response is not None:
-            logger.debug(f"从缓存中获取响应: {cached_response}")
-            return cached_response.response
+        if self._cache is not None:
+            cached_response = self._cache.cache_get(request)
+            if cached_response is not None:
+                logger.debug(f"从缓存中获取响应: {cached_response}")
+                return cached_response.response
         # 随机选择一个worker处理
         worker_id = randint(0, self.worker_count - 1)
         portal = self.portals[worker_id]

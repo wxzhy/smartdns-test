@@ -25,7 +25,6 @@ class Worker:
             return ctx.response
         return Response.from_rcode(Rcode.SERVFAIL, upstream="")
 
-    async def process(self, context: Context) -> bool:
+    async def process(self, context: Context):
         """处理请求上下文"""
         logger.info(f"Worker {self.worker_id} 处理请求上下文: {context}")
-        return True

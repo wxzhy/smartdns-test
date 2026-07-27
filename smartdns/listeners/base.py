@@ -8,6 +8,7 @@ class BaseListener:
     def __init__(self, config: ListenerConfig):
         self.config = config
         self.name = config.name
+        self.timeout = config.timeout
 
     async def start(self, handler):
         raise NotImplementedError("start method must be implemented by subclasses")

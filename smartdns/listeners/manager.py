@@ -22,10 +22,10 @@ class ListenerManager:
             for listener_config in self.config:
                 match listener_config.type:
                     case "tcp":
-                        listener = TCPListener(config=listener_config)
                         logger.info(
                             f"创建TCP监听器: {listener_config.name}，地址: {listener_config.host}:{listener_config.port}"
                         )
+                        listener = TCPListener(config=listener_config)
                     case "udp":
                         logger.info(
                             f"创建UDP监听器: {listener_config.name}，地址: {listener_config.host}:{listener_config.port}"

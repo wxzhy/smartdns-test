@@ -64,7 +64,7 @@ class AnyioStreamSocket(StreamSocket):
     async def sendall(self, what, timeout):  # noqa: ASYNC109
         try:
             with fail_after(timeout):
-                await self._stream.send(what)
+                return await self._stream.send(what)
         except TimeoutError as err:
             logger.error(f"发送数据超时，timeout: {timeout}")
             raise Timeout(timeout=timeout) from err

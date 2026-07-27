@@ -22,13 +22,13 @@ from smartdns.listeners.base import BaseListener
 from smartdns.models.context import Request
 
 if TYPE_CHECKING:
-    from smartdns.models.listener import Do53Listener
+    from smartdns.models.listener import Do53ListenerConfig
 if platform != "win32":
     from socket import SO_REUSEPORT
 
 
 class UDPListener(BaseListener):
-    def __init__(self, config: Do53Listener):
+    def __init__(self, config: Do53ListenerConfig):
         super().__init__(config)
         self.host = str(config.host) if config.host is not None else "::"
         logger.debug(f"UDP监听器 {self.name} 使用的监听地址: {self.host}")
@@ -83,3 +83,9 @@ class UDPListener(BaseListener):
             logger.error(f"处理UDP数据时发生错误: {e}")
         finally:
             await self._listener.aclose()
+
+    async def stop(self):
+        """停止UDP监听器"""
+        if self._listener is not None:
+            await self._listener.aclose()
+            logger.info(f"UDP监听器 {self.name} 已停止")

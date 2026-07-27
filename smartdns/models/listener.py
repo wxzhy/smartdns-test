@@ -10,6 +10,7 @@ class BaseListenerConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str
+    timeout: float = Field(default=5.0, ge=0.1, description="请求超时时间（秒）")
 
 
 class Do53ListenerConfig(BaseListenerConfig):
@@ -19,7 +20,6 @@ class Do53ListenerConfig(BaseListenerConfig):
     host: IPvAnyAddress | None = Field(description="监听地址", default=None)
     port: int = Field(ge=1, le=65535, description="监听端口")
     reuse_port: bool = Field(default=False, description="是否启用端口复用")
-    timeout: float = Field(default=5.0, ge=0.1, description="请求超时时间（秒）")
 
 
 class HTTPListenerConfig(BaseListenerConfig):

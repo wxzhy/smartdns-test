@@ -13,16 +13,17 @@ if TYPE_CHECKING:
     from anyio.abc import SocketStream
     from dns.message import Message
 
+    from smartdns.models.listener import Do53ListenerConfig
+
 
 class TCPListener(BaseListener):
     """TCP监听器类"""
 
-    def __init__(self, config: Do53Listener):
+    def __init__(self, config: Do53ListenerConfig):
         super().__init__(config)
         self.host = config.host
         self.port = config.port
         self.reuse_port = config.reuse_port
-        self.timeout = config.timeout
         self._listener = None
 
     async def start(self, handler):
@@ -34,6 +35,12 @@ class TCPListener(BaseListener):
         logger.info(f"TCP监听器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
         async with self._listener:
             await self._listener.serve(self.handle_connection)
+
+    async def stop(self):
+        """停止TCP监听器"""
+        if self._listener is not None:
+            await self._listener.aclose()
+            logger.info(f"TCP监听器 {self.name} 已停止")
 
     async def handle_connection(self, stream: SocketStream):
         """处理传入的TCP连接"""
