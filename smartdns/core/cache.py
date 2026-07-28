@@ -1,7 +1,7 @@
 from time import time
 from typing import TYPE_CHECKING
 
-from dns.resolver import LRUCache
+from dns.resolver import LRUCache, CacheKey
 
 if TYPE_CHECKING:
     from dns.resolver import Answer
@@ -15,9 +15,8 @@ class TTLCache(LRUCache):
     def __init__(self, maxsize: int = 128):
         super().__init__(maxsize)
 
-    def cache_get(self, request: Request) -> Answer | None:
-        """根据请求获取缓存的Answer对象"""
-        key = (request.qname, request.rdtype, request.rdclass)
+    def get(self, key: CacheKey) -> Answer | None:
+        """重写get方法，获取缓存时自动更新TTL"""
         answer = super().get(key)
         if answer is not None:
             # 更新TTL
@@ -30,7 +29,18 @@ class TTLCache(LRUCache):
                 rrset.update_ttl(ttl)
         return answer
 
+    def cache_get(self, request: Request) -> Answer | None:
+        """根据请求获取缓存的Answer对象"""
+        key = (request.qname, request.rdtype, request.rdclass)
+        return self.get(key)
+
     def cache_set(self, request: Request, answer: Answer) -> None:
         """根据请求设置缓存的Answer对象"""
         key = (request.qname, request.rdtype, request.rdclass)
         super().put(key, answer)
+
+
+# class CacheManager:
+#     # 按照resolver名称的缓存
+#     caches: dict[str, TTLCache] = {}
+#     def __init__(self,config:ResolverConfig)

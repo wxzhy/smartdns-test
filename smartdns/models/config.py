@@ -9,8 +9,10 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
+from smartdns.models.action import ActionConfig
 from smartdns.models.listener import ListenerConfig
 from smartdns.models.nameserver import NameserverConfig
+from smartdns.models.resolver import ResolverConfig
 
 
 class Config(BaseSettings):
@@ -21,10 +23,13 @@ class Config(BaseSettings):
 
     model_config = SettingsConfigDict(yaml_file="config.yaml")
     worker_count: int = Field(default=cpu_count() or 1, ge=1, description="工作线程数")
-    cache_size: int = Field(default=1024, ge=1, description="缓存大小")
+    cache_size: int = Field(default=1024, ge=0, description="缓存大小")
     listeners: list[ListenerConfig] = Field(default=[], description="监听器配置列表")
     nameservers: list[NameserverConfig] = Field(
         default=[], description="上游DNS服务器配置列表"
+    )
+    resolvers: list[ResolverConfig] = Field(
+        default=[], description="上游DNS解析器配置列表"
     )
     actions: list[ActionConfig] = Field(default=[], description="动作配置列表")
 

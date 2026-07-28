@@ -8,3 +8,13 @@ listeners:
     host: "::"
     port: 5335
     timeout: 5
+nameservers:
+  - name: test
+    type: udp
+    address: 114.114.114.114
+    port: 53
+resolvers:
+  - name: test
+    type: plain
+    nameservers:
+      - test

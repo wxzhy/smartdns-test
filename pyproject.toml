@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "aiodns>=4.0.4",
     "anyio>=4.14.2",
     "dnspython[doh,idna]>=2.8.0",
     "generic-connection-pool>=0.8.1",

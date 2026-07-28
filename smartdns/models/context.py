@@ -9,7 +9,7 @@ from dns.resolver import Answer
 from loguru import logger
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
-from pydantic.networks import IPvAnyAddress
+from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -54,16 +54,20 @@ class Request:
     rdclass: RdataClass
     name_info: NameInfo
     ip_info: IPInfo | None
-    ecs: str | None = None
+    ecs: IPvAnyNetwork | None = None
     ecs_info: IPInfo | None = None
-    srclen: int | None = None
 
     def __str__(self):
         return f"Request from {self.remote_address}\n{self.msg}"
 
-    def make_answer(self) -> Message:
+    def make_answer(self, ans: Answer) -> Message:
         """创建响应对象"""
-        return make_response(self.msg, True, our_payload=1232, pad=0)
+        answer = make_response(self.msg, True, our_payload=1232, pad=0)
+        answer.set_rcode(Rcode.NOERROR)
+        answer.answer = ans.response.answer
+        answer.authority = ans.response.authority
+        answer.additional = ans.response.additional
+        return answer
 
     def make_error(self, rcode: Rcode) -> Message:
         """创建错误响应对象"""

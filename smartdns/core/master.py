@@ -60,7 +60,7 @@ class Master:
             cached_response = self._cache.cache_get(request)
             if cached_response is not None:
                 logger.debug(f"从缓存中获取响应: {cached_response}")
-                return cached_response.response
+                return request.make_answer(cached_response)
         # 随机选择一个worker处理
         worker_id = randint(0, self.worker_count - 1)
         portal = self.portals[worker_id]
@@ -80,7 +80,8 @@ class Master:
                 # 将响应缓存起来
                 if self._cache:
                     self._cache.cache_set(request, result.ans)
-                return result.ans.response
+                logger.debug(f"返回响应: {result.ans.response}")
+                return request.make_answer(result.ans)
             return None
         except Exception as e:
             logger.error(f"分发请求到Worker {worker_id}时发生错误: {e}")

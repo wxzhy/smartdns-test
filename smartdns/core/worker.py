@@ -5,26 +5,44 @@ from loguru import logger
 
 from smartdns.models.config import Config
 from smartdns.models.context import Context, Request, Response
+from smartdns.nameservers.manager import NameserverManager
+from smartdns.resolvers.manager import ResolverManager
 
 
 class Worker:
     def __init__(self, worker_id: int, config: Config):
         self.worker_id = worker_id
         self.config = config
+        self._nameservers: NameserverManager | None = None
+        # ResolverManager实例，稍后初始化
+        self._resolvers: ResolverManager | None = None
 
     async def start(self) -> None:
         """启动 Worker 服务"""
         logger.info(f"Worker {self.worker_id} 启动")
+        self._nameservers = NameserverManager(config=self.config.nameservers)
+        await self._nameservers.start_all()
+        self._resolvers = ResolverManager(config=self.config.resolvers)
+        await self._resolvers.start_all(nameservers=self._nameservers)
 
     async def handle(self, request: Request) -> Response:
         """处理请求"""
-        logger.info(f"Worker {self.worker_id} 处理请求: {request}")
+        logger.debug(f"Worker {self.worker_id} 处理请求: {request}")
         ctx = Context(worker_id=self.worker_id, request=request)
         await self.process(ctx)
         if ctx.response:
+            logger.debug(
+                f"Worker {self.worker_id} 处理请求完成: {request}, 响应: {ctx.response}"
+            )
             return ctx.response
+        logger.debug(f"Worker {self.worker_id} 无法处理请求: {request}")
         return Response.from_rcode(Rcode.SERVFAIL, upstream="")
 
     async def process(self, context: Context):
         """处理请求上下文"""
         logger.info(f"Worker {self.worker_id} 处理请求上下文: {context}")
+        if self._resolvers is not None:
+            resolver = self._resolvers.get("test")
+
+            if resolver:
+                context.response = await resolver.query(context.request)

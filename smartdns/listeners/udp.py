@@ -76,8 +76,12 @@ class UDPListener(BaseListener):
                     msg=data, listener=self.name, remote_address=client_address
                 )
                 response = await self.handler(request)
+                logger.debug(f"为请求 {request} 生成响应: {response}")
                 await send_udp(
-                    anyio_socket, response, client, expiration=time() + self.timeout
+                    anyio_socket,
+                    response.to_wire(),
+                    client,
+                    expiration=time() + self.timeout,
                 )
         except Exception as e:
             logger.error(f"处理UDP数据时发生错误: {e}")

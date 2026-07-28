@@ -20,6 +20,7 @@ class AnyioDatagramSocket(DatagramSocket):
         )
         self._repeat = repeat
         self._use_tricks = use_tricks
+        self._addr = sock.extra(SocketAttribute.remote_address, None)
         logger.debug(
             f"创建AnyioDatagramSocket对象，sock: {sock}, repeat: {repeat}, use_tricks: {use_tricks}"
         )
@@ -33,7 +34,9 @@ class AnyioDatagramSocket(DatagramSocket):
                         await self._sock.send(what)
                 else:
                     for _ in range(self._repeat + 1):
-                        await self._sock.sendto(what, destination[0], destination[1])
+                        # UDP socket已经连接，不需要sendto
+                        # await self._sock.sendto(what, destination[0], destination[1])
+                        await self._sock.send(what)
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err
         return len(what)
@@ -44,13 +47,18 @@ class AnyioDatagramSocket(DatagramSocket):
                 # 多次接收，忽略伪造包
                 if self._use_tricks:
                     for _ in range(self._repeat + 1):
-                        data, addr = await self._sock.receive()
+                        # UDP socket已经连接，receive即可，不需要recvfrom
+                        data = await self._sock.receive()
+                        # data, addr = await self._sock.receive()
                         if len(data) > 32 and data[10:12] == b"\x00\x01":
-                            return data[:size], addr
+                            # return data[:size], addr
+                            return data[:size], self._addr
                     # 如果没有收到有效数据，则返回最后一次接收到的数据
                     raise TimeoutError("未收到有效数据包")
-                data, addr = await self._sock.receive()
-                return data[:size], addr
+                data = await self._sock.receive()
+                return data[:size], self._addr
+                # data,addr = await self._sock.receive()
+                # return data[:size], addr
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err
 

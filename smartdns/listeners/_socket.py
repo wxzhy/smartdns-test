@@ -20,6 +20,9 @@ class AnyioDatagramSocket(DatagramSocket):
         )
 
     async def sendto(self, what, destination, timeout):  # noqa: ASYNC109
+        logger.debug(
+            f"发送数据，长度: {len(what)}，超时: {timeout}, destination: {destination}"
+        )
         try:
             with fail_after(timeout):
                 if destination is None:
@@ -62,6 +65,7 @@ class AnyioStreamSocket(StreamSocket):
         )
 
     async def sendall(self, what, timeout):  # noqa: ASYNC109
+        logger.debug(f"发送数据，长度: {len(what)}，超时: {timeout}")
         try:
             with fail_after(timeout):
                 return await self._stream.send(what)
