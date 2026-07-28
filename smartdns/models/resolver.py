@@ -36,7 +36,8 @@ class AioDNSResolverConfig(BaseResolverConfig):
     cache_size: int = Field(default=10000, description="缓存大小")
     rotate: bool = Field(default=True, description="是否轮询上游nameserver")
     edns: bool = Field(default=True, description="是否启用EDNS")
-    lifetime: float = Field(default=5.0, ge=0.1, description="请求生存时间（秒）")
+    tcp: bool = Field(default=False, description="是否启用TCP")
+    tries: int = Field(default=5, ge=1, description="请求尝试次数")
 
 
 class ConcurrentResolverConfig(BaseResolverConfig):

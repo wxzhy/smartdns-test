@@ -1,4 +1,6 @@
 from dns.asyncresolver import Resolver
+from dns.rcode import Rcode
+from dns.resolver import NXDOMAIN
 from loguru import logger
 
 from smartdns.models.context import Request, Response
@@ -13,17 +15,18 @@ class PlainResolver(BaseResolver, Resolver):
         super().__init__(config)
         super(BaseResolver, self).__init__(configure=False)
         self.config: PlainResolverConfig = config
-        self.cache_size = self.config.cache_size
-        self.rotate = self.config.rotate
-        self.edns = self.config.edns
-        self.ecs = self.config.ecs
-        self.lifetime = self.config.lifetime
+        self.cache_size = config.cache_size
+        self.rotate = config.rotate
+        self.edns = config.edns
+        self.ecs = config.ecs
+        self.lifetime = config.lifetime
+        self._upstreams = config.nameservers
         self._manager: NameserverManager = nameservers
 
     async def start(self):
         """启动解析器"""
         nameservers: list[BaseNameserver] = []
-        for name in self.config.nameservers:
+        for name in self._upstreams:
             ns = self._manager.get(name)
             if ns is not None:
                 nameservers.append(ns)
@@ -41,6 +44,16 @@ class PlainResolver(BaseResolver, Resolver):
 
     async def query(self, request: Request) -> Response:
         """解析域名"""
-        answer = await self.resolve(request.qname, request.rdtype, request.rdclass)
-        response = Response.from_answer(answer, upstream=self.config.name)
-        return response
+        try:
+            answer = await self.resolve(request.qname, request.rdtype, request.rdclass)
+            response = Response.from_answer(answer, upstream=self.config.name)
+            return response
+        except NXDOMAIN:
+            response = Response.from_rcode(Rcode.NXDOMAIN, upstream=self.config.name)
+            return response
+        except Exception as e:
+            logger.error(
+                f"PlainResolver {self.config.name} 解析请求 {request} 时发生错误: {e}"
+            )
+            response = Response.from_rcode(Rcode.SERVFAIL, upstream=self.config.name)
+            return response

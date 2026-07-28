@@ -1,7 +1,7 @@
 from time import time
 from typing import TYPE_CHECKING
 
-from dns.resolver import LRUCache, CacheKey
+from dns.resolver import CacheKey, LRUCache
 
 if TYPE_CHECKING:
     from dns.resolver import Answer

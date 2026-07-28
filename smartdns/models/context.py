@@ -117,12 +117,12 @@ class Response:
         return cls(rcode=rcode, upstream=upstream, invalid=True)
 
     @classmethod
-    def from_answer(cls, answer: Answer, upstream: str) -> Response | None:
+    def from_answer(cls, answer: Answer, upstream: str) -> Response:
         """从dns.resolver.Answer对象创建Response对象"""
         rcode = answer.response.rcode()
         if rcode != Rcode.NOERROR:
             logger.info(f"上游返回错误码: {rcode}")
-            return None
+            return cls.from_rcode(rcode, upstream)
         response = cls(rcode, answer, upstream)
         response.name_list, response.name_infos = [], []
         # 处理CNAME链
