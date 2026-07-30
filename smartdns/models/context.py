@@ -12,7 +12,7 @@ from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
 
-from smartdns.routing.manager import GeoManager
+from smartdns.routing.manager import get_geo_manager
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -28,7 +28,10 @@ class IPInfo:
     @classmethod
     def from_ip(cls, ip: IPvAnyAddress) -> IPInfo:
         """从IP地址创建IPInfo对象"""
-        country, asn = GeoManager.lookup_ip(str(ip))
+        geo_manager = get_geo_manager()
+        if not geo_manager:
+            return cls(ip=ip)
+        country, asn = geo_manager.lookup_ip(str(ip))
         return cls(ip=ip, country=country, asn=asn)
 
 
@@ -42,7 +45,10 @@ class NameInfo:
     @classmethod
     def from_name(cls, name: Name) -> NameInfo:
         """从域名创建NameInfo对象"""
-        country = GeoManager.lookup_domain(name)
+        geo_manager = get_geo_manager()
+        if not geo_manager:
+            return cls(name=name)
+        country = geo_manager.lookup_domain(name)
         return cls(name=name, country=country)
 
 

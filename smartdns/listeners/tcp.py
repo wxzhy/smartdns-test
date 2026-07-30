@@ -69,7 +69,7 @@ class TCPListener(BaseListener):
                         expiration=time() + self.timeout,
                     )
         except Exception as e:
-            logger.error(f"处理连接时发生错误: {e}")
+            logger.exception(f"处理连接时发生错误: {e}")
         finally:
             await stream.aclose()
             logger.info(f"关闭来自 {client_address} 的TCP连接")

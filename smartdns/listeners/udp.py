@@ -84,7 +84,7 @@ class UDPListener(BaseListener):
                     expiration=time() + self.timeout,
                 )
         except Exception as e:
-            logger.error(f"处理UDP数据时发生错误: {e}")
+            logger.exception(f"处理UDP数据时发生错误: {e}")
         finally:
             await self._listener.aclose()
 

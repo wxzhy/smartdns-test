@@ -1,6 +1,4 @@
-
 from dns.name import Name
-from loguru import logger
 
 from smartdns.models.geodata import GeoDataConfig
 from smartdns.routing.geoip import GeoIP
@@ -9,44 +7,51 @@ from smartdns.routing.ipset import IPSet
 
 
 class GeoManager:
-    geoip: GeoIP | None
-    geosite: GeoSite | None
-    ipset: IPSet | None
-
-    def __init__(self):
-        logger.debug("初始化GeoManager")
-
-    @classmethod
-    def create(
-        cls,
+    def __init__(
+        self,
         config: GeoDataConfig,
     ):
         """创建GeoManager实例"""
+        self.geoip: GeoIP | None = None
+        self.geosite: GeoSite | None = None
+        self.ipset: IPSet | None = None
         if config.geoip is not None or config.asn is not None:
-            cls.geoip = GeoIP()
-            cls.geoip.load(config.geoip, config.asn)
+            self.geoip = GeoIP()
+            self.geoip.load(config.geoip, config.asn)
         if config.geosite is not None:
-            cls.geosite = GeoSite()
-            cls.geosite.load(config.geosite)
+            self.geosite = GeoSite()
+            self.geosite.load(config.geosite)
         if config.ipset is not None:
-            cls.ipset = IPSet()
-            cls.ipset.load(config.ipset)
+            self.ipset = IPSet()
+            self.ipset.load(config.ipset)
 
-    @classmethod
-    def lookup_ip(cls, ip: str) -> tuple[set[str], int | None]:
+    def lookup_ip(self, ip: str) -> tuple[set[str], int | None]:
         """查找IP对应的国家和ASN"""
         tags = set()
         asn = None
-        if cls.geoip is not None:
-            tags, asn = cls.geoip.lookup(ip)
-        if cls.ipset is not None:
-            tags.update(cls.ipset.lookup(ip))
+        if self.geoip is not None:
+            tags, asn = self.geoip.lookup(ip)
+        if self.ipset is not None:
+            tags.update(self.ipset.lookup(ip))
         return tags, asn
 
-    @classmethod
-    def lookup_domain(cls, domain: str | Name) -> set[str]:
+    def lookup_domain(self, domain: str | Name) -> set[str]:
         """查找域名对应的标签"""
         tags = set()
-        if cls.geosite is not None:
-            tags = cls.geosite.lookup(domain)
+        if self.geosite is not None:
+            tags = self.geosite.lookup(domain)
         return tags
+
+
+_geo_manager: GeoManager | None = None
+
+
+def init_geo_manager(config: GeoDataConfig):
+    """初始化GeoManager实例"""
+    global _geo_manager
+    _geo_manager = GeoManager(config)
+
+
+def get_geo_manager() -> GeoManager | None:
+    """获取GeoManager实例"""
+    return _geo_manager

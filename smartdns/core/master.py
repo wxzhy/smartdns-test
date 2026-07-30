@@ -10,7 +10,7 @@ from loguru import logger
 
 from smartdns.core.cache import TTLCache
 from smartdns.listeners.manager import ListenerManager
-from smartdns.routing.manager import GeoManager
+from smartdns.routing.manager import init_geo_manager
 
 from .worker import Worker
 
@@ -41,7 +41,7 @@ class Master:
         logger.info("启动 Master 服务")
         # 初始化Geo数据
         if self.config.geodata:
-            GeoManager.create(self.config.geodata)
+            init_geo_manager(self.config.geodata)
         with ExitStack() as stack:
             # 批量启动子线程
             for i in range(self.worker_count):
