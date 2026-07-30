@@ -9,9 +9,13 @@ listeners:
     port: 5335
     timeout: 5
 nameservers:
-  - name: test
+  - name: test-tcp
+    type: tcp
+    address: 8.8.8.8
+    port: 53
+  - name: test-udp
     type: udp
-    address: 114.114.114.114
+    address: 8.8.8.8
     port: 53
 resolvers:
   - name: test

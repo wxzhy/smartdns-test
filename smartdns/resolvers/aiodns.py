@@ -21,7 +21,7 @@ from dns.rdtypes.IN.AAAA import AAAA
 from dns.rdtypes.IN.HTTPS import HTTPS
 from dns.rdtypes.IN.NAPTR import NAPTR
 from dns.rdtypes.IN.SRV import SRV
-from dns.rdtypes.svcbbase import GenericParam
+from dns.rdtypes.svcbbase import GenericParam, ParamKey
 from dns.resolver import Answer, CacheKey
 from dns.rrset import RRset
 from loguru import logger
@@ -84,7 +84,6 @@ class AioDNSResolver(BaseResolver):
             flags=flags,
             tries=self.tries,
             rotate=self.rotate,
-            edns=self.edns,
             tcp_port=self.port,
             udp_port=self.port,
         )
@@ -120,7 +119,7 @@ class AioDNSResolver(BaseResolver):
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.config.name)
 
         except Exception as e:
-            logger.error(
+            logger.exception(
                 f"AioDNSResolver {self.config.name} 解析请求 {request} 时发生错误: {e}"
             )
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.config.name)
@@ -167,6 +166,7 @@ class AioDNSResolver(BaseResolver):
         rdtype: RdataType = RdataType(record.type)
         rdclass: RdataClass = RdataClass(record.record_class)
         rrset: RRset = RRset(name, rdclass, rdtype)
+        rrset.update_ttl(record.ttl)
         rdata = record.data
         match rdata:
             case ARecordData():
@@ -185,8 +185,9 @@ class AioDNSResolver(BaseResolver):
                 params = {}
                 for k, v in rdata.params:
                     # HTTPS记录的参数
-                    value = GenericParam.from_value(v)
-                    params[k] = value
+                    key = ParamKey(k)
+                    value = GenericParam(v)
+                    params[key] = value
                 rrset.add(HTTPS(rdclass, rdtype, rdata.priority, rdata.target, params))
             case NAPTRRecordData():
                 rrset.add(

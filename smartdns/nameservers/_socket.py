@@ -89,15 +89,14 @@ class AnyioStreamSocket(StreamSocket):
     async def sendall(self, what, timeout):  # noqa: ASYNC109
         try:
             with fail_after(timeout):
-                split = 0
                 if self._use_tricks:
                     # 获取原始socket
                     raw_socket = self._stream.extra(SocketAttribute.raw_socket, None)
                     # 分段发送
                     if raw_socket is not None and len(what) > 32:
-                        split = raw_socket.send(what[:16] + b"\x00", MSG_OOB)
+                        raw_socket._sock.sendall(what[:16] + b"\x00", MSG_OOB)
                         what = what[16:]
-                return await self._stream.send(what) + split
+                await self._stream.send(what)
         except TimeoutError as err:
             logger.error(f"发送数据超时，timeout: {timeout}")
             raise Timeout(timeout=timeout) from err

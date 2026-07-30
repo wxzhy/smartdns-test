@@ -29,7 +29,7 @@ class TCPNameserverConfig(BaseNameserverConfig):
     type: Literal["tcp"]
     address: IPvAnyAddress | str = Field(description="目标地址")
     port: int = Field(ge=1, le=65535, description="目标端口")
-    pool_size: int = Field(default=10, ge=1, description="连接池大小")
+    pool_size: int = Field(default=0, ge=0, description="连接池大小")
     use_tricks: bool = Field(default=False, description="是否使用发送技巧")
 
 

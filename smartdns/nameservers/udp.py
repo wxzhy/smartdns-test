@@ -6,13 +6,13 @@ from anyio import create_connected_udp_socket
 from loguru import logger
 
 from smartdns.nameservers._socket import AnyioDatagramSocket
-from smartdns.nameservers.base import BaseNameserver
+from smartdns.nameservers.base import BaseAddressNameserver
 
 if TYPE_CHECKING:
     from smartdns.models.nameserver import UDPNameserverConfig
 
 
-class UDPNameserver(BaseNameserver):
+class UDPNameserver(BaseAddressNameserver):
     """UDP解析器类"""
 
     def __init__(self, config: UDPNameserverConfig):

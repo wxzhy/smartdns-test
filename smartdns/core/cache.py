@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class TTLCache(LRUCache):
     """自动更新TTL的缓存类，继承自dns.resolver.LRUCache"""
 
-    def __init__(self, maxsize: int = 128):
+    def __init__(self, maxsize: int = 10000):
         super().__init__(maxsize)
 
     def get(self, key: CacheKey) -> Answer | None:

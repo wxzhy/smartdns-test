@@ -24,7 +24,7 @@ class Config(BaseSettings):
 
     model_config = SettingsConfigDict(yaml_file="config.yaml")
     worker_count: int = Field(default=cpu_count() or 1, ge=1, description="工作线程数")
-    cache_size: int = Field(default=1024, ge=0, description="缓存大小")
+    cache_size: int = Field(default=10000, ge=0, description="缓存大小")
     geodata: GeoDataConfig = Field(default=GeoDataConfig(), description="Geo数据配置")
     listeners: list[ListenerConfig] = Field(default=[], description="监听器配置列表")
     nameservers: list[NameserverConfig] = Field(

@@ -4,17 +4,17 @@ from anyio import connect_tcp
 from loguru import logger
 
 from smartdns.nameservers._socket import AnyioStreamSocket
-from smartdns.nameservers.base import BaseNameserver
+from smartdns.nameservers.base import BaseAddressNameserver
 
 
-class TCPNameserver(BaseNameserver):
+class TCPNameserver(BaseAddressNameserver):
     """TCP解析器类"""
 
     def __init__(self, config):
         super().__init__(config)
         self._pool_size = config.pool_size
         self._pool = None
-        self.host = config.host
+        self.host = config.address
         self.port = config.port
         self._use_tricks = config.use_tricks
 
@@ -57,5 +57,5 @@ class TCPNameserver(BaseNameserver):
                 ignore_trailing=True,
             )
         except Exception as e:
-            logger.error(f"TCP解析器 {self.name} 查询失败: {e}")
+            logger.exception(f"TCP解析器 {self.name} 查询失败: {e}")
             raise

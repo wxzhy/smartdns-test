@@ -3,8 +3,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from smartdns.models.resolver import ResolverConfig
-
-# from smartdns.resolvers.aiodns import AioDNSResolver
+from smartdns.resolvers.aiodns import AioDNSResolver
 from smartdns.resolvers.plain import PlainResolver
 
 if TYPE_CHECKING:
