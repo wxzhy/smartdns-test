@@ -5,11 +5,14 @@ from dns.name import Name
 from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
+from dns.rdtypes.svcbbase import IPv4HintParam, IPv6HintParam
 from dns.resolver import Answer
 from loguru import logger
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
+
+from smartdns.routing.manager import GeoManager
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -25,7 +28,8 @@ class IPInfo:
     @classmethod
     def from_ip(cls, ip: IPvAnyAddress) -> IPInfo:
         """从IP地址创建IPInfo对象"""
-        return cls(ip=ip)
+        country, asn = GeoManager.lookup_ip(str(ip))
+        return cls(ip=ip, country=country, asn=asn)
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -38,7 +42,8 @@ class NameInfo:
     @classmethod
     def from_name(cls, name: Name) -> NameInfo:
         """从域名创建NameInfo对象"""
-        return cls(name=name)
+        country = GeoManager.lookup_domain(name)
+        return cls(name=name, country=country)
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -136,6 +141,15 @@ class Response:
             for rr in answer.rrset:
                 response.ip_list.append(rr.address)
                 response.ip_infos.append(IPInfo.from_ip(rr.address))
+        elif answer.rdtype == RdataType.HTTPS and answer.rrset is not None:
+            response.ip_list, response.ip_infos = [], []
+            for rr in answer.rrset:
+                for param in rr.params.values():
+                    # HTTPS记录的ipv4hint/ipv6hint参数包含了IP地址列表
+                    if isinstance(param, (IPv4HintParam, IPv6HintParam)):
+                        for ip in param.addresses:
+                            response.ip_list.append(ip)
+                            response.ip_infos.append(IPInfo.from_ip(ip))
         return response
 
     def __str__(self):

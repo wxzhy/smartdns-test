@@ -6,10 +6,14 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "aiodns>=4.0.4",
+    "aiofastnet>=0.22.0",
     "anyio>=4.14.2",
     "dnspython[doh,idna]>=2.8.0",
     "generic-connection-pool>=0.8.1",
     "loguru>=0.7.3",
+    "marisa-trie>=1.4.1",
+    "maxminddb-rust>=0.7.0",
+    "py-radix>=1.1.0",
     "pydantic-settings[yaml]>=2.14.2",
     "typer>=0.27.0",
     "winuvloop>=0.2.4",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from aiofastnet import patch_loop
 from dns.rcode import Rcode
 from loguru import logger
 
@@ -19,6 +20,7 @@ class Worker:
 
     async def start(self) -> None:
         """启动 Worker 服务"""
+        patch_loop()
         logger.info(f"Worker {self.worker_id} 启动")
         self._nameservers = NameserverManager(config=self.config.nameservers)
         await self._nameservers.start_all()

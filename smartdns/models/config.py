@@ -10,6 +10,7 @@ from pydantic_settings import (
 )
 
 from smartdns.models.action import ActionConfig
+from smartdns.models.geodata import GeoDataConfig
 from smartdns.models.listener import ListenerConfig
 from smartdns.models.nameserver import NameserverConfig
 from smartdns.models.resolver import ResolverConfig
@@ -24,6 +25,7 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(yaml_file="config.yaml")
     worker_count: int = Field(default=cpu_count() or 1, ge=1, description="工作线程数")
     cache_size: int = Field(default=1024, ge=0, description="缓存大小")
+    geodata: GeoDataConfig = Field(default=GeoDataConfig(), description="Geo数据配置")
     listeners: list[ListenerConfig] = Field(default=[], description="监听器配置列表")
     nameservers: list[NameserverConfig] = Field(
         default=[], description="上游DNS服务器配置列表"

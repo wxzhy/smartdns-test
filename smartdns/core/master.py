@@ -3,12 +3,14 @@ from contextlib import ExitStack
 from random import randint
 from typing import TYPE_CHECKING
 
+from aiofastnet import patch_loop
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from dns.rcode import Rcode
 from loguru import logger
 
 from smartdns.core.cache import TTLCache
 from smartdns.listeners.manager import ListenerManager
+from smartdns.routing.manager import GeoManager
 
 from .worker import Worker
 
@@ -35,7 +37,11 @@ class Master:
 
     async def start(self) -> None:
         """启动 Master 服务"""
+        patch_loop()
         logger.info("启动 Master 服务")
+        # 初始化Geo数据
+        if self.config.geodata:
+            GeoManager.create(self.config.geodata)
         with ExitStack() as stack:
             # 批量启动子线程
             for i in range(self.worker_count):
@@ -48,7 +54,7 @@ class Master:
                 await wrap_future(future)
                 logger.info(f"创建Worker {i}")
             # 启动所有listener
-            # logger.info("启动所有监听器")
+            logger.info("启动所有监听器")
             self.listener_manager = ListenerManager(config=self.config.listeners)
             await self.listener_manager.start_all(handler=self.dispatch)
 

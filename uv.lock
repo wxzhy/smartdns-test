@@ -15,6 +15,32 @@ wheels = [
 ]
 
 [[package]]
+name = "aiofastnet"
+version = "0.22.0"
+source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
+sdist = { url = "https://mirror.nju.edu.cn/pypi/web/packages/a2/7f/63c0dfe6fa454083d43c152ce4097a0def6f8fec736b29acc2f5c9c3c6f3/aiofastnet-0.22.0.tar.gz", hash = "sha256:ff772c37677d89f2298bf057ba27db31bb27eb5a28fb1c8b0511b5303b937342" }
+wheels = [
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/93/20/83fd835bf37770b1b7ee11a82a4a104d2f8a4d28fac941be5c6d01ac6325/aiofastnet-0.22.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:5f539e74e1c1bf4e5a962ecd8b28995adb32b1a5dbd597c90098151a5b8fc72d" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/0c/ca/2e71a3e6b7012821d3414ee0020373946484d6a445bc048228db85e248a3/aiofastnet-0.22.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:40e9818a89b8694ad6d9ee190f5a4647fdc0a60e132ed7d0b164b4d455d93446" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/9c/e3/16f5534b6f1854548d58a250df0c326006dbff72fb92fbf446ab86892f0a/aiofastnet-0.22.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:850d071947c89d884c595857f05fa745bcce51c9821955f0bcb8a99135d8831b" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/d4/4b/5d902b6f5f84304423ef88696bd61a3e51ae5597ef0cf8a88bf2a4a3f54d/aiofastnet-0.22.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:489a87a23a308f009f0cf6107a254df92eaf52564dfffce47952a6e111d6f830" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/04/68/52e08f050d8d97517688a614101a08c782f03320032da475c9cf6d5e61c8/aiofastnet-0.22.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:63a32f4f0413d2cec75853124de94aa67bb861dabca35d16ca15e97fd8756809" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/8e/4f/d99346f4664e1b4f2d9fcc8f25c23df568e7a9144b1a92fb2fc281a1c47a/aiofastnet-0.22.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:1523a9543a941b0d0a00ef938a1ddbf67fa3ec66fd15b8e5d3a4fa80cf6f0d06" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/79/c9/487b18d6f16226d661ebdd7a1808ee00013b5d2926a33537510672a28ac7/aiofastnet-0.22.0-cp314-cp314-win32.whl", hash = "sha256:cee4a42a3667619c1009ef45232d1aef55ff29d75031dc00e4c6056f5ae23b77" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/33/ab/1105263b79bae5df41517ef628cd0e1b43a4c6d354da01bbb2f9f89aabc7/aiofastnet-0.22.0-cp314-cp314-win_amd64.whl", hash = "sha256:280e60d7f962a32ffb4dc10645203e706d3c20050113937c461b692d43edf7f5" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/00/5a/9955cdda34560130641aa2631697181f6dfc1126c8f33adcbbb5c205071c/aiofastnet-0.22.0-cp314-cp314-win_arm64.whl", hash = "sha256:f967105e13ee60b62c33961becd0fe68f601abfa83c6198c37c844cb76f17d08" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/28/2f/4fd5867abb134e08eee9a42e9b08feecee6be523d73bc8da867519ba3e56/aiofastnet-0.22.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:fba0bda190a8564e5887d96b35b959fe717da615c5ef46dc025e096da1480d25" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/79/7f/5a7a96fe354897c56f86a96a4ad68a77dbc77b3afb1c93af4d7b928bbac7/aiofastnet-0.22.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:ea487a8da45ffdbbe25e11e8228f021059842d71ed75b673e2a59d661626b50e" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/a9/c9/c1ce04df0cf8090366ebfd6247c751ae49dd361952de1af3d6aaa4d1279f/aiofastnet-0.22.0-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e883e768867882886dc1c4a3ee369a0cfa055db47ad8376d54a3c64e3a19ebf3" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/ac/41/4e36a4f8b22da606798def8b863c39df8d9c0d6f7274be98bfd6fdd4f87a/aiofastnet-0.22.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fd5c11c8ccd9847c73acee94d0e54a6aa09a8c2c4279882f8486ef457a491471" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/88/30/ed98dbdd267a82c6dafaad5784749ba20d29183c0ae15cbba052d60f2e55/aiofastnet-0.22.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:1f7ebb8c568e0de5de38cbfdafabff4cebf4a695c0eeb6e7b7f41e4f0ab45daf" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/eb/21/0d4795335b4cbfc81a710ee12ab2fe4cb3032ffe7bd7730f239ace21d6e4/aiofastnet-0.22.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:ec5dda26c49a3a6907b410f9b8d3e2326a2f75455b36c86125a813a6f8e3b36f" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/a1/b0/fc091dd313db20623635f180e16d2b10481d911f58e70d1eb5bc2f1b0575/aiofastnet-0.22.0-cp314-cp314t-win32.whl", hash = "sha256:0cb534a6e3698585b0fa589179514293d774162e45423a000b39e70b0c6eb824" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/42/74/fc9268cf3be7a45c7348d2d0456023501de73a2a7ac9f399082a13212f28/aiofastnet-0.22.0-cp314-cp314t-win_amd64.whl", hash = "sha256:e1ae022f62d19d0cc9325833eedaa068e09a49b47800bfc84f5ed7b74e6c1bc7" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/02/f7/41f284e4f25926ccc99e4e9f1520391bd501b927ee75fc38f65e1de5edc3/aiofastnet-0.22.0-cp314-cp314t-win_arm64.whl", hash = "sha256:61d8a396ab0cf0437e260a89162f7a1d2058a5aa214c884cb982ec5739ae817b" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
@@ -407,6 +433,32 @@ wheels = [
 ]
 
 [[package]]
+name = "marisa-trie"
+version = "1.4.1"
+source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
+sdist = { url = "https://mirror.nju.edu.cn/pypi/web/packages/77/5d/e235921b5b74818cb65b557fa05cc6201c2c1612d4866ff75c835bcf808d/marisa_trie-1.4.1.tar.gz", hash = "sha256:44ce3bdbeb7c950d463e460184fc3e18702df9ef0edb826bac672fd789fb1d20" }
+wheels = [
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/af/94/83532d3ddb47db51571f6005bf227676abb9f0b490e56faefeaa74303ad1/marisa_trie-1.4.1-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:4d8f3b6f7e93922d1a71c67cf285ddb5f7bc551407db2e12ba76a5f5df326449" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/52/0b/2a670dd3c163836e516181469e34d9abdd9fee7e88183bfd66dd3cdc0ecc/marisa_trie-1.4.1-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:638fb84afc3219038648ea4814e4923914790d7e4491679ef14023459e4a8148" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/33/60/fddeebbc819873e3f23a09d01226e12911ee5d23252473bdf038aaf1c928/marisa_trie-1.4.1-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f5a6215df91c16ce4e2f674ee92a3352d4a0be30b0635ec60f4c2ef55cc7f0e2" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/66/61/a4f1e474809cbb08df715d63f7680568d457c2b543a53964b969d94be7b0/marisa_trie-1.4.1-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0b99c8e692cec4e172a8362832d0b1149dc126591e49643dc0c128505ea7a1cd" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/51/34/1fbe625a8644ee49a6829dc2a2a22d6be6ad2d26b8b06ffe22f8aa50b6eb/marisa_trie-1.4.1-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:880606b64b776c0bbd85f89cbeabf294a33dd3820971618d28bcd12fe4d1406b" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/72/ec/edf909d5770c75aef4c94bae7dbaba56e9877b822ef6fa82b07958dd45bb/marisa_trie-1.4.1-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:554308b2b5b034a703c64a0c146383d9aec98538a834c4d985114cbaa987a013" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/be/ea/e79d0471e32a0681d6f9f59560f5dd9748202e1b415340cf8bba338fe123/marisa_trie-1.4.1-cp314-cp314-win32.whl", hash = "sha256:c6fbfa7f7c2f59c48be942bba848f2e378c69286abf93ecbe0b068feb1c22fbc" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/13/7f/acb58830aed8dac2509a06ef476f6e59767eca09f08e23f3c8eaf7cfc323/marisa_trie-1.4.1-cp314-cp314-win_amd64.whl", hash = "sha256:e2c8bc2e6ede8f0ea697b050017bb65d43542507c71b32af6e6f1e14a613f9cc" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/3d/ac/6a9415c619b3b6fc3bc5a2cc93b3e5e8d61804c95604f20379468ee2214a/marisa_trie-1.4.1-cp314-cp314-win_arm64.whl", hash = "sha256:4bc5d9f65d4a126dc14e32656dbc57a817ac619de731c4a64653285bf3b5e2c2" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/30/f1/3e9f3be8ccfd97ddde488a4eb9c7b7a603f1f7ee73d13814483146238c16/marisa_trie-1.4.1-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:faffeed161b22e343915afb2765a1f6d3cf49faa032a0725abbc69a3b22e0fba" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/6c/c3/a11da7513a7eb99e9dcbe46eee97e53c9cb66f4ed253caed46f5d2492f0a/marisa_trie-1.4.1-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:1d52339b0e879f60c8d3f52affc4a4f9acf27692c0bde63d1bd0f9f59b55dc8b" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/54/a6/ec11c67e5914873aa5e464c0a83f8b31b3bc6961a71d72a8cafe3591dbcb/marisa_trie-1.4.1-cp314-cp314t-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:05dd3921622063b82d0c7fc51e79ba509d69a5ee72a6a2c24ee68782e5152c46" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/b3/57/14c5a667663797add840a755bef63b82eca1a07e64fc046875e294af5af0/marisa_trie-1.4.1-cp314-cp314t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:faa9ec37e2393e86ca3cb2e568447730654dc3292097232cec1c646f257deac5" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/05/d6/b4d74f2575df3be12cbbab084dbf1db70ca6c9934ca3946d79fc45a8e83b/marisa_trie-1.4.1-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:fe64ef107dfad7caeb1f3b49be4893572833f6c3b52312c33b40b80aaa3e9fb8" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/ec/27/e923abac9c578dd6b8726e03c433af6847538fb4db252befd68b9f5a0550/marisa_trie-1.4.1-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:7f38aad7e083d2dff8916571f31cb46a761b2d424a0b40d35881b8f108646574" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/53/9d/b553a2a3b1809f376a5ecf03b1e3f267e3c95c39fd0448d275b1b5399452/marisa_trie-1.4.1-cp314-cp314t-win32.whl", hash = "sha256:5154262cc60f88950f6390218e2358b4894cfcb5f22d366dfe9f2f5a7baa4b54" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/61/32/dcff70d08a146ca94a2934ca9e3ff641bf1f0e5a7785714874ac5f085c57/marisa_trie-1.4.1-cp314-cp314t-win_amd64.whl", hash = "sha256:4d04ddd3b1e909fed542cba20cc0c2ed4534b479ed2e8809a5182417b8165e29" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/ba/ab/693f98813cc0484c99da4fe9b73ca65b7dd15ab8eb4f23d9a6a77c8852f9/marisa_trie-1.4.1-cp314-cp314t-win_arm64.whl", hash = "sha256:41b789fca01625288260a1db113dfb958866ae0d02887610950fd8b0c9e5dcfd" },
+]
+
+[[package]]
 name = "markdown-it-py"
 version = "4.2.0"
 source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
@@ -428,6 +480,26 @@ dependencies = [
 sdist = { url = "https://mirror.nju.edu.cn/pypi/web/packages/bd/c0/9f7c9a46090390368a4d7bcb76bb87a4a36c421e4c0792cdb53486ffac7a/matplotlib_inline-0.2.2.tar.gz", hash = "sha256:72f3fe8fce36b70d4a5b612f899090cd0401deddc4ea90e1572b9f4bfb058c79" }
 wheels = [
     { url = "https://mirror.nju.edu.cn/pypi/web/packages/41/09/5b161152e2d90f7b87f781c2e1267494aef9c32498df793f73ad0a0a494a/matplotlib_inline-0.2.2-py3-none-any.whl", hash = "sha256:3c821cf1c209f59fb2d2d64abbf5b23b67bcb2210d663f9918dd851c6da1fcf6" },
+]
+
+[[package]]
+name = "maxminddb-rust"
+version = "0.7.0"
+source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
+sdist = { url = "https://mirror.nju.edu.cn/pypi/web/packages/fc/2d/c7e49657e6aba61082dc2c9028fe6a4368d352ddf5f830af94712c536823/maxminddb_rust-0.7.0.tar.gz", hash = "sha256:17de1b1d6ffce9db8e4ada79a79c8fca646991ff4416210dc5552fd919074e4c" }
+wheels = [
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/df/e1/d2611f13531f4af6645e459903a213d968e3d371e1e2b51c119726cc5368/maxminddb_rust-0.7.0-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:6eb77658c4ee9c0a1629bca1226cd9e8127276c3a560ede3f71d9ff1bfeb1636" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/bd/eb/7943e99f1df586fa6b2bb344f4590a39988c04fae15ef2a118efedc6c983/maxminddb_rust-0.7.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:528c41e8c94f07fb6b3529d9d9483693756e432f1937cb24915fa7d1a66f5f24" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/8d/2c/4f999fb1158db64547e234561c355ccc320bee341626174d792587ef67f9/maxminddb_rust-0.7.0-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a5bcfd94a97559c5fc4f6773f8fb28849c7408abcca0a20ab3c6045c54e1c0f8" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/b0/da/6718dd8b237216beaa64ff58aad01d4ab8ed64b44fe4a46efcddc7697b33/maxminddb_rust-0.7.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:23465a920751cd0eef88ed2b16c1349f58684ffce2455999daa11ce6b767fc5b" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/cc/cc/fe67a678ea0c8af7dc44662b6cc9dc2392bcd1a83681406ca8d4e2cc6370/maxminddb_rust-0.7.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl", hash = "sha256:e4eb63602d1cffeff3d748ac389ec956726f2255fc490036aa54e150e662df28" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/22/8d/b5a852b33901e809237091f9746949d40c4147868e79008909aca9eab0f8/maxminddb_rust-0.7.0-cp314-cp314-win_amd64.whl", hash = "sha256:e6d8cef55d6debaa6fc9d4f2cd625207768256be654d660dc91bb65cd112676f" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/88/50/2a481bbf26dc25175d7aa0279212f8897ba1b17928fba5c8f0fa17d326f1/maxminddb_rust-0.7.0-cp314-cp314-win_arm64.whl", hash = "sha256:2c6d4f00c42d21f1d8174a75efdd23693da85102b80b3460dd1c9697609d07b1" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/65/46/93682ffb26d3175637258fe56b534d4f1ef57b9067cb895e5b9015a2854c/maxminddb_rust-0.7.0-cp314-cp314t-macosx_10_12_x86_64.whl", hash = "sha256:c639e9ae42bdedc5e5afe7085b827605e8378404879b019a69f325f9e6535e48" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/db/92/441e0711e043bf76bb47613c4c927ae799fed8c51112c5bf1c28dc04acc2/maxminddb_rust-0.7.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:741e05f1616d4f9a6ed7ce312be2ad39698755825df533ada72c515e9c33b70d" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/c7/35/7f7d63f8586c9bdca2f7a28863da685c1296606300a9127da639940729e9/maxminddb_rust-0.7.0-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:69d09f110bca2bb8353806e3b26f8b1c183fa2b2cd2c20975e3dce5515beaf23" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/63/9e/434aad2352ef44a922651be09fe74c109918d8035a2994864e1e46dcf5da/maxminddb_rust-0.7.0-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7cb61217fba7f2ab5b3874876d5d3a660b8b56fe474c2698ebcda3a27a9ebfbb" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/61/d5/d30471fce07063f55a5d0b519ae27f669d7a9bcffd6eb02ba9f2b1637233/maxminddb_rust-0.7.0-cp314-cp314t-win_amd64.whl", hash = "sha256:cb397778769dc73e605a87534f4bafde4537590535d18591b16c1ab6e59d7841" },
 ]
 
 [[package]]
@@ -546,6 +618,32 @@ source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
 sdist = { url = "https://mirror.nju.edu.cn/pypi/web/packages/cd/05/0a34433a064256a578f1783a10da6df098ceaa4a57bbeaa96a6c0352786b/pure_eval-0.2.3.tar.gz", hash = "sha256:5f4e983f40564c576c7c8635ae88db5956bb2229d7e9237d03b3c0b0190eaf42" }
 wheels = [
     { url = "https://mirror.nju.edu.cn/pypi/web/packages/8e/37/efad0257dc6e593a18957422533ff0f87ede7c9c6ea010a2177d738fb82f/pure_eval-0.2.3-py3-none-any.whl", hash = "sha256:1db8e35b67b3d218d818ae653e27f06c3aa420901fa7b081ca98cbedc874e0d0" },
+]
+
+[[package]]
+name = "py-radix"
+version = "1.1.0"
+source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
+sdist = { url = "https://mirror.nju.edu.cn/pypi/web/packages/2a/27/b32febece1ce72018b25955b606ee35fe6e8884b633ace7a1fa98b90277c/py_radix-1.1.0.tar.gz", hash = "sha256:4abdb4e4969aaeef40eeb186bada2911462183788a6f445b971d18aa5d1af9be" }
+wheels = [
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/5c/07/2588fe3a109dac27ef3d9d98dbd4adfb91a979f57e2b03776087bd532308/py_radix-1.1.0-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:87dbb4e1aabc014418b35a8b80872059e011a78ce41306db97b07f3582b95081" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/8a/25/528da092f66c8cb82cc66e49ddf5816cb7d8c08637e273fef0b69218b399/py_radix-1.1.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:94b85334b4e5d4ca9368dd74e3d3759bd389e186a63fe85a4f6c9393a41fc93b" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/f2/5f/20b6ddeb625ab0c45840b33ec1cd46b6b7828e1ae6c18a66f9afb8eeb719/py_radix-1.1.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:94fb9595fba0eace7df4d8756d015a7327058180356dc64c3356b3a36aa140b3" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/34/f8/2b54102ff504f77e59552df5185afa750ce074a0c72e80e76fc7580cbd5c/py_radix-1.1.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:134ff75a354d0dd0ff650f70d5f4511d981eaf06f4f958cf4a62959ddafce34d" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/43/52/2b27d7d9f651c5d0299309d21309d98bdfb969e6ac09db87639f02d02237/py_radix-1.1.0-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:d03bef08134def5cd23a662141dbe8091f551401c8ad5c2370a558d8ff868dbb" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/e2/80/846e650ab5a68cdc69519bbe17c0a5c6340412efdffbd8a31ec492bc096d/py_radix-1.1.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:0e538d8deee5cf2ee9033fc27fbfa9a9702d5fd95e99a8530e9630b0dcce7c3b" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/5e/3c/6b8d3a10b8bcd429cd785153357ae3314d44347c154052d891c26e986241/py_radix-1.1.0-cp314-cp314-win32.whl", hash = "sha256:05a03d3513101ffd7ff81313fb87b81825adaedea7d5baceb7ad04dd2eb05c28" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/e6/7a/28a4f8e627933a32e08c9e49cd919ebbf040a297738eaa570488ce721967/py_radix-1.1.0-cp314-cp314-win_amd64.whl", hash = "sha256:70b3bcb3b077747184e91f3aca32735d8c0f4eba875c218f43f338caf802f205" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/34/4c/02e6224e16c29b1d8c775c5c54db19e095566606ad4ebacb5f5d1dbbf396/py_radix-1.1.0-cp314-cp314-win_arm64.whl", hash = "sha256:3a484ab205a5002487fb62498d6881e8033e39d5ecc9abc0893878421cdfc68a" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/0f/49/f87f061f595a6e0d739673460d9ca039e2e58f18a25e94c058cf9d000472/py_radix-1.1.0-cp314-cp314t-macosx_10_15_x86_64.whl", hash = "sha256:eb3699ef63f5ccd2d820f242b900ace8e402af409b7613ed2822c9514e0a25c8" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/39/2c/84950ebda47b46b313ad76eb5071fc809490fa38314b8aa612977cdb8c0a/py_radix-1.1.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:45124628f68d14aee80e0468334a88560be9f6ef5dc2121a21b5a4e4787bb7dd" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/ec/fd/8c812e517092cafef237d0cdadd6d5bca85fed6be0802256224f1a244601/py_radix-1.1.0-cp314-cp314t-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:473d7d9182ecea2c5d78e4a78423654ff77f9a4ee5a6a4c754338c262022ec20" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/0e/48/4c9c693a47940ca301871cc1a04022b648af63af60ea7b213ee48269930a/py_radix-1.1.0-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:fd8002c2779c8aadc973e08ec24e7452a3bd8cda310248ae2ff570dff407e5d3" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/f1/34/8b02d42d843d6b63860d69877e63610ca821d67e0d22ab20b5105452e33c/py_radix-1.1.0-cp314-cp314t-musllinux_1_2_aarch64.whl", hash = "sha256:ba22cf1897e5d18ded797ab7bb7403f9707b3c2e96f0f28a43d71daf6fe974d7" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/a5/8c/23a5a75d26981726c2dba8a9e607d0c57723f7381466a1393f5b176db63c/py_radix-1.1.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:43b956232a7cafaaa5f0c24534295b6a4056829578ed2fbf1e3d7ac4b27a4e4a" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/61/1f/33234db400ef4644971b57c08d7c018ebabf97abe74d3a4e3d726bb8778b/py_radix-1.1.0-cp314-cp314t-win32.whl", hash = "sha256:d2391a9c113bd2fdccf7acea4becfebf68160e8d61b220be6c8e0a5c71fe37e8" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/f6/71/2031d7d883b6d0617228276e2d5fad19cfaae86fd450e4c269f475136fdd/py_radix-1.1.0-cp314-cp314t-win_amd64.whl", hash = "sha256:2cfa00c8c5397437153893bfe2f2b9c2e6fbcfe45f0b6e6a85870ba0aa38515d" },
+    { url = "https://mirror.nju.edu.cn/pypi/web/packages/1c/4b/de5508fadfc46af4951fc8b969b9c606e0a4a322aebeb4749aca52a76ce2/py_radix-1.1.0-cp314-cp314t-win_arm64.whl", hash = "sha256:d2dbf7ed1e6e52ce7d9209dcb87dcc902058f1635dccb8f6ed0e52cf04817daa" },
 ]
 
 [[package]]
@@ -844,10 +942,14 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiodns" },
+    { name = "aiofastnet" },
     { name = "anyio" },
     { name = "dnspython", extra = ["doh", "idna"] },
     { name = "generic-connection-pool" },
     { name = "loguru" },
+    { name = "marisa-trie" },
+    { name = "maxminddb-rust" },
+    { name = "py-radix" },
     { name = "pydantic-settings", extra = ["yaml"] },
     { name = "typer" },
     { name = "winuvloop" },
@@ -865,10 +967,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiodns", specifier = ">=4.0.4" },
+    { name = "aiofastnet", specifier = ">=0.22.0" },
     { name = "anyio", specifier = ">=4.14.2" },
     { name = "dnspython", extras = ["doh", "idna"], specifier = ">=2.8.0" },
     { name = "generic-connection-pool", specifier = ">=0.8.1" },
     { name = "loguru", specifier = ">=0.7.3" },
+    { name = "marisa-trie", specifier = ">=1.4.1" },
+    { name = "maxminddb-rust", specifier = ">=0.7.0" },
+    { name = "py-radix", specifier = ">=1.1.0" },
     { name = "pydantic-settings", extras = ["yaml"], specifier = ">=2.14.2" },
     { name = "typer", specifier = ">=0.27.0" },
     { name = "winuvloop", specifier = ">=0.2.4" },
