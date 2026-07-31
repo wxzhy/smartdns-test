@@ -44,32 +44,32 @@ class TCPListener(BaseListener):
 
     async def handle_connection(self, stream: SocketStream):
         """处理传入的TCP连接"""
-
-        # 转换为AnyioStreamSocket对象
-        anyio_stream = AnyioStreamSocket(stream)
-        client_address, client_port = await anyio_stream.getpeername()
-        logger.debug(f"接收到来自 {client_address}:{client_port} 的TCP连接")
-        # 在这里实现对传入连接的处理逻辑
-        # 例如读取数据、解析请求、发送响应等
-        try:
-            while True:
-                data, receive_time = await receive_tcp(
-                    anyio_stream, ignore_trailing=True
-                )
-                logger.debug(f"在 {receive_time} 接收到数据: {data}")
-                # 处理数据并发送响应
-                request = Request.from_message(
-                    msg=data, listener=self.name, remote_address=client_address
-                )
-                response: Message | None = await self.handler(request)
-                if response is not None:
-                    await send_tcp(
-                        anyio_stream,
-                        response.to_wire(),
-                        expiration=time() + self.timeout,
+        async with stream:
+            # 转换为AnyioStreamSocket对象
+            anyio_stream = AnyioStreamSocket(stream)
+            client_address, client_port = await anyio_stream.getpeername()
+            logger.debug(f"接收到来自 {client_address}:{client_port} 的TCP连接")
+            # 在这里实现对传入连接的处理逻辑
+            # 例如读取数据、解析请求、发送响应等
+            try:
+                while True:
+                    data, receive_time = await receive_tcp(
+                        anyio_stream, ignore_trailing=True
                     )
-        except Exception as e:
-            logger.exception(f"处理连接时发生错误: {e}")
-        finally:
-            await stream.aclose()
-            logger.info(f"关闭来自 {client_address} 的TCP连接")
+                    logger.debug(f"在 {receive_time} 接收到数据: {data}")
+                    # 处理数据并发送响应
+                    request = Request.from_message(
+                        msg=data, listener=self.name, remote_address=client_address
+                    )
+                    response: Message | None = await self.handler(request)
+                    if response is not None:
+                        await send_tcp(
+                            anyio_stream,
+                            response.to_wire(),
+                            expiration=time() + self.timeout,
+                        )
+            except Exception as e:
+                logger.exception(f"处理连接时发生错误: {e}")
+            finally:
+                await stream.aclose()
+                logger.info(f"关闭来自 {client_address} 的TCP连接")

@@ -61,31 +61,31 @@ class UDPListener(BaseListener):
         self._listener = await UDPSocket.from_socket(self._sock)
         logger.info(f"UDP监听器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
         self.handler = handler
-        anyio_socket = AnyioDatagramSocket(self._listener)
-        try:
+        async with self._listener:
+            anyio_socket = AnyioDatagramSocket(self._listener)
             while True:
-                data, receive_time, client = await receive_udp(
-                    anyio_socket, ignore_trailing=True
-                )
-                client_address, client_port = client
-                logger.debug(
-                    f"在{receive_time} 收到来自 {client_address}:{client_port} 的UDP数据: {data}"
-                )
-                # 转换为Request对象
-                request = Request.from_message(
-                    msg=data, listener=self.name, remote_address=client_address
-                )
-                response = await self.handler(request)
-                logger.debug(f"为请求 {request} 生成响应: {response}")
-                await send_udp(
-                    anyio_socket,
-                    response.to_wire(),
-                    client,
-                    expiration=time() + self.timeout,
-                )
-        except Exception as e:
-            logger.exception(f"处理UDP数据时发生错误: {e}")
-        finally:
+                try:
+                    data, receive_time, client = await receive_udp(
+                        anyio_socket, ignore_trailing=True
+                    )
+                    client_address, client_port = client
+                    logger.debug(
+                        f"在{receive_time} 收到来自 {client_address}:{client_port} 的UDP数据: {data}"
+                    )
+                    # 转换为Request对象
+                    request = Request.from_message(
+                        msg=data, listener=self.name, remote_address=client_address
+                    )
+                    response = await self.handler(request)
+                    logger.debug(f"为请求 {request} 生成响应: {response}")
+                    await send_udp(
+                        anyio_socket,
+                        response.to_wire(),
+                        client,
+                        expiration=time() + self.timeout,
+                    )
+                except Exception as e:
+                    logger.exception(f"处理UDP数据时发生错误: {e}")
             await self._listener.aclose()
 
     async def stop(self):

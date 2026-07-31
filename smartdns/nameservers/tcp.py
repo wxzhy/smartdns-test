@@ -46,16 +46,16 @@ class TCPNameserver(BaseAddressNameserver):
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
         try:
-            raw_sock = await connect_tcp(self.host, self.port)
-            sock = AnyioStreamSocket(raw_sock, use_tricks=self._use_tricks)
-            return await dns.asyncquery.tcp(
-                request,
-                where=self.address,
-                timeout=timeout or self.timeout,
-                port=self.port,
-                sock=sock,
-                ignore_trailing=True,
-            )
+            async with await connect_tcp(self.host, self.port) as raw_sock:
+                sock = AnyioStreamSocket(raw_sock, use_tricks=self._use_tricks)
+                return await dns.asyncquery.tcp(
+                    request,
+                    where=self.address,
+                    timeout=timeout or self.timeout,
+                    port=self.port,
+                    sock=sock,
+                    ignore_trailing=True,
+                )
         except Exception as e:
             logger.exception(f"TCP解析器 {self.name} 查询失败: {e}")
             raise

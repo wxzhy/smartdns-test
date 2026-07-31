@@ -46,19 +46,21 @@ class UDPNameserver(BaseAddressNameserver):
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
         try:
-            raw_sock = await create_connected_udp_socket(self.host, self.port)
-            sock = AnyioDatagramSocket(
-                raw_sock, repeat=self._repeat, use_tricks=self._use_tricks
-            )
-            return await dns.asyncquery.udp(
-                request,
-                where=self.address,
-                timeout=timeout or self.timeout,
-                port=self.port,
-                sock=sock,
-                ignore_unexpected=True,
-                ignore_trailing=True,
-            )
+            async with await create_connected_udp_socket(
+                self.host, self.port
+            ) as raw_sock:
+                sock = AnyioDatagramSocket(
+                    raw_sock, repeat=self._repeat, use_tricks=self._use_tricks
+                )
+                return await dns.asyncquery.udp(
+                    request,
+                    where=self.address,
+                    timeout=timeout or self.timeout,
+                    port=self.port,
+                    sock=sock,
+                    ignore_unexpected=True,
+                    ignore_trailing=True,
+                )
         except Exception as e:
             logger.exception(f"UDP解析器 {self.name} 查询失败: {e}")
             raise
