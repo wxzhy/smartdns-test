@@ -51,7 +51,7 @@ class TCPNameserver(BaseAddressNameserver):
             return await dns.asyncquery.tcp(
                 request,
                 where=self.address,
-                timeout=self.timeout,
+                timeout=timeout or self.timeout,
                 port=self.port,
                 sock=sock,
                 ignore_trailing=True,

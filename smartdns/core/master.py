@@ -81,7 +81,7 @@ class Master:
                 logger.warning(
                     f"Worker {worker_id}处理请求 {request} 返回错误码: {result.rcode}"
                 )
-                return request.make_error(Rcode.SERVFAIL)
+                return request.make_error(result.rcode)
             if result.ans is not None:
                 # 将响应缓存起来
                 if self._cache:

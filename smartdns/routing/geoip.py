@@ -24,10 +24,12 @@ class GeoIP:
         asn = None
         if self._geoip is not None:
             country_info = self._geoip.get(ip)
-            if country_info is not None:
-                country.update([country_info.country.iso_code])
+            if isinstance(country_info, str):
+                country.add(country_info)
+            elif isinstance(country_info, list):
+                country.update(country_info)
         if self._asn is not None:
             asn_info = self._asn.get(ip)
             if asn_info is not None:
-                asn = asn_info.autonomous_system_number
+                asn = asn_info.get("autonomous_system_number", None)
         return country, asn

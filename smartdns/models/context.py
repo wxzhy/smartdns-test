@@ -26,13 +26,13 @@ class IPInfo:
     resolver: str | None = None
 
     @classmethod
-    def from_ip(cls, ip: IPvAnyAddress) -> IPInfo:
+    def from_ip(cls, ip: IPvAnyAddress, resolver=None) -> IPInfo:
         """从IP地址创建IPInfo对象"""
         geo_manager = get_geo_manager()
         if not geo_manager:
             return cls(ip=ip)
         country, asn = geo_manager.lookup_ip(str(ip))
-        return cls(ip=ip, country=country, asn=asn)
+        return cls(ip=ip, country=country, asn=asn, resolver=resolver)
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -69,7 +69,7 @@ class Request:
     ecs_info: IPInfo | None = None
 
     def __str__(self):
-        return f"Request from {self.remote_address}\n{self.msg}"
+        return f"Request from {self.remote_address}\n{self.msg}\nIP: {self.ip_info}\nName: {self.name_info}\nECS: {self.ecs_info}"
 
     def make_answer(self, ans: Answer) -> Message:
         """创建响应对象"""
@@ -146,7 +146,7 @@ class Response:
             response.ip_list, response.ip_infos = [], []
             for rr in answer.rrset:
                 response.ip_list.append(rr.address)
-                response.ip_infos.append(IPInfo.from_ip(rr.address))
+                response.ip_infos.append(IPInfo.from_ip(rr.address, resolver=upstream))
         elif answer.rdtype == RdataType.HTTPS and answer.rrset is not None:
             response.ip_list, response.ip_infos = [], []
             for rr in answer.rrset:
@@ -155,11 +155,14 @@ class Response:
                     if isinstance(param, (IPv4HintParam, IPv6HintParam)):
                         for ip in param.addresses:
                             response.ip_list.append(ip)
-                            response.ip_infos.append(IPInfo.from_ip(ip))
+                            response.ip_infos.append(
+                                IPInfo.from_ip(ip, resolver=upstream)
+                            )
+        logger.debug(response)
         return response
 
     def __str__(self):
-        return f"Received rcode {self.rcode} answer {self.ans.response if self.ans else None} from upstream={self.upstream}"
+        return f"Received rcode {self.rcode} answer {self.ans.response if self.ans else None} from upstream={self.upstream}\nIPs: {self.ip_infos}\nNames: {self.name_infos}"
 
 
 @dataclass

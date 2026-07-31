@@ -20,6 +20,7 @@ class PlainResolver(BaseResolver, Resolver):
         self.edns = config.edns
         self.ecs = config.ecs
         self.lifetime = config.lifetime
+        self.raise_on_no_answer = False
         self._upstreams = config.nameservers
         self._manager: NameserverManager = nameservers
 
@@ -45,14 +46,20 @@ class PlainResolver(BaseResolver, Resolver):
     async def query(self, request: Request) -> Response:
         """解析域名"""
         try:
-            answer = await self.resolve(request.qname, request.rdtype, request.rdclass)
+            answer = await self.resolve(
+                request.qname,
+                request.rdtype,
+                request.rdclass,
+                raise_on_no_answer=False,
+                lifetime=self.lifetime,
+            )
             response = Response.from_answer(answer, upstream=self.config.name)
             return response
         except NXDOMAIN:
             response = Response.from_rcode(Rcode.NXDOMAIN, upstream=self.config.name)
             return response
         except Exception as e:
-            logger.error(
+            logger.exception(
                 f"PlainResolver {self.config.name} 解析请求 {request} 时发生错误: {e}"
             )
             response = Response.from_rcode(Rcode.SERVFAIL, upstream=self.config.name)

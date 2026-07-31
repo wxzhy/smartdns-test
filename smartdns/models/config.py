@@ -1,3 +1,4 @@
+from pathlib import Path
 from os import cpu_count
 from typing import ClassVar
 
@@ -36,7 +37,7 @@ class Config(BaseSettings):
     actions: list[ActionConfig] = Field(default=[], description="动作配置列表")
 
     @classmethod
-    def set_config_file(cls, config_file: str) -> None:
+    def set_config_file(cls, config_file: Path) -> None:
         """设置配置文件路径"""
         cls.config_file = config_file
 

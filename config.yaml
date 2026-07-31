@@ -8,6 +8,10 @@ listeners:
     host: "::"
     port: 5335
     timeout: 5
+geodata:
+  geoip: tags/output/geoip.metadb
+  geosite: tags/output/geosite.trie
+  asn: tags/output/asn.mmdb
 nameservers:
   - name: test-tcp
     type: tcp
@@ -21,4 +25,5 @@ resolvers:
   - name: test
     type: plain
     nameservers:
-      - test
+      - test-tcp
+      - test-udp

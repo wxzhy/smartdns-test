@@ -53,7 +53,7 @@ class UDPNameserver(BaseAddressNameserver):
             return await dns.asyncquery.udp(
                 request,
                 where=self.address,
-                timeout=self.timeout,
+                timeout=timeout or self.timeout,
                 port=self.port,
                 sock=sock,
                 ignore_unexpected=True,

@@ -1,9 +1,10 @@
+from pydantic import FilePath
 from anyio import run
 from loguru import logger
 from typer import Typer
-
-from .core.master import Master
-from .models.config import Config
+from pathlib import Path
+from smartdns.core.master import Master
+from smartdns.models.config import Config
 
 
 async def main():
@@ -23,7 +24,7 @@ app = Typer(name="SmartDNS", help="SmartDNS CLI 工具")
 
 
 @app.command()
-def start(config: str = "config.yaml"):
+def start(config: FilePath = Path("config.yaml")):
     """启动 SmartDNS 服务"""
     logger.info("启动 SmartDNS 服务")
     Config.set_config_file(config)
