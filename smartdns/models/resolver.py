@@ -18,7 +18,7 @@ class PlainResolverConfig(BaseResolverConfig):
 
     type: Literal["plain"]
     nameservers: list[str] = Field(description="上游nameserver名称列表")
-    cache_size: int = Field(default=10000, description="缓存大小")
+    cache_size: int = Field(default=10000, ge=0, description="缓存大小")
     rotate: bool = Field(default=True, description="是否轮询上游nameserver")
     edns: bool = Field(default=True, description="是否启用EDNS")
     ecs: IPvAnyNetwork | None = Field(
@@ -33,7 +33,7 @@ class AioDNSResolverConfig(BaseResolverConfig):
     type: Literal["aiodns"]
     nameservers: list[str] = Field(description="上游nameserver名称列表")
     port: int = Field(default=53, ge=1, le=65535, description="上游nameserver端口")
-    cache_size: int = Field(default=10000, description="缓存大小")
+    cache_size: int = Field(default=0, ge=0, description="缓存大小")
     rotate: bool = Field(default=True, description="是否轮询上游nameserver")
     edns: bool = Field(default=True, description="是否启用EDNS")
     tcp: bool = Field(default=False, description="是否启用TCP")

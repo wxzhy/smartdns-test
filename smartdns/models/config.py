@@ -15,6 +15,7 @@ from smartdns.models.geodata import GeoDataConfig
 from smartdns.models.listener import ListenerConfig
 from smartdns.models.nameserver import NameserverConfig
 from smartdns.models.resolver import ResolverConfig
+from smartdns.models.rule import Rule
 
 
 class Config(BaseSettings):
@@ -35,6 +36,7 @@ class Config(BaseSettings):
         default=[], description="上游DNS解析器配置列表"
     )
     actions: list[ActionConfig] = Field(default=[], description="动作配置列表")
+    routing: list[Rule] = Field(default=[], description="路由配置列表")
 
     @classmethod
     def set_config_file(cls, config_file: Path) -> None:

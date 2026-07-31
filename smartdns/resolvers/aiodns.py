@@ -5,6 +5,8 @@ from aiodns.error import ARES_ENODATA, DNSError
 from dns.message import Message, QueryMessage, make_query, make_response
 from dns.name import Name, from_text
 from dns.rcode import Rcode
+import dns.rdatatype
+import dns.rdataclass
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.rdtypes.ANY.CAA import CAA
@@ -100,8 +102,8 @@ class AioDNSResolver(BaseResolver):
         try:
             result = await self._resolver.query_dns(
                 request.qname.to_text(),
-                request.rdtype.to_text(request.rdtype),
-                request.rdclass.to_text(request.rdclass),
+                dns.rdatatype.to_text(request.rdtype),
+                dns.rdataclass.to_text(request.rdclass),
             )
             message = self.make_response(message, result)
             answer = self.make_answer(key, message)

@@ -8,6 +8,8 @@ from smartdns.models.config import Config
 from smartdns.models.context import Context, Request, Response
 from smartdns.nameservers.manager import NameserverManager
 from smartdns.resolvers.manager import ResolverManager
+from smartdns.models.rule import Rule
+from smartdns.routing.router import Router
 
 
 class Worker:
@@ -17,6 +19,8 @@ class Worker:
         self._nameservers: NameserverManager | None = None
         # ResolverManager实例，稍后初始化
         self._resolvers: ResolverManager | None = None
+        # 规则列表，稍后初始化
+        self._rules: list[Router] = []
 
     async def start(self) -> None:
         """启动 Worker 服务"""
@@ -26,6 +30,9 @@ class Worker:
         await self._nameservers.start_all()
         self._resolvers = ResolverManager(config=self.config.resolvers)
         await self._resolvers.start_all(nameservers=self._nameservers)
+        for rule in self.config.routing:
+            logger.debug(f"Worker {self.worker_id} 添加路由: {rule}")
+            self._rules.append(Router(rule, self._resolvers))
 
     async def handle(self, request: Request) -> Response:
         """处理请求"""
@@ -43,8 +50,10 @@ class Worker:
     async def process(self, context: Context):
         """处理请求上下文"""
         logger.info(f"Worker {self.worker_id} 处理请求上下文: {context}")
-        if self._resolvers is not None:
-            resolver = self._resolvers.get("test3")
-
-            if resolver:
-                context.response = await resolver.query(context.request)
+        for rule in self._rules:
+            if await rule.query(context):
+                logger.info(
+                    f"Worker {self.worker_id} 请求 {context.request} 匹配路由 {rule.config.name}"
+                )
+                return
+        context.response = Response.from_rcode(Rcode.SERVFAIL, upstream="")

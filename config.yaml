@@ -19,31 +19,91 @@ nameservers:
     port: 53
     use_tricks: true
     timeout: 5
-  - name: test-udp
+  - name: google-1
     type: udp
     address: 8.8.8.8
     port: 53
-    repeat: 1
+    repeat: 0
     use_tricks: true
-    timeout: 5
+    timeout: 3
+  - name: google-2
+    type: udp
+    address: 8.8.4.4
+    port: 53
+    repeat: 0
+    use_tricks: true
+    timeout: 3
+  - name: google-3
+    type: udp
+    address: 216.239.34.34
+    port: 53
+    repeat: 0
+    use_tricks: true
+    timeout: 3
+  - name: google-4
+    type: udp
+    address: 216.239.36.36
+    port: 53
+    repeat: 0
+    use_tricks: true
+    timeout: 3
 resolvers:
-  - name: test1
+  - name: 114dns
+    type: aiodns
+    nameservers:
+      - 114.114.114.114
+      - 114.114.115.115
+      # - test-udp
+    timeout: 1
+    tries: 4
+  - name: dnspod
+    type: aiodns
+    nameservers:
+      - 119.29.29.29
+      - 119.28.28.28
+      # - test-udp
+    timeout: 1
+    tries: 4
+  - name: trafficroute
+    type: aiodns
+    nameservers:
+      - 180.184.1.1
+      - 180.184.2.2
+      # - test-udp
+    timeout: 1
+    tries: 4
+  - name: google-1
     type: plain
     nameservers:
-      - test-tcp
-      # - test-udp
-    timeout: 5
-    lifetime: 10
-  - name: test2
+      - google-1
+      - google-2
+    timeout: 3
+    lifetime: 5
+  - name: google-2
     type: plain
     nameservers:
-      - test-udp
-      # - test-udp
-    timeout: 5
-    lifetime: 10
-  - name: test3
+      - google-3
+      - google-4
+    timeout: 3
+    lifetime: 5
+  - name: google
     type: concurrent
     resolvers:
-      - test1
-      - test2
+      - google-1
+      - google-2
     timeout: 5
+  - name: cn
+    type: concurrent
+    resolvers:
+      - trafficroute
+      - dnspod
+      - 114dns
+    timeout: 2
+routing:
+  - name: rule1
+    resolver: cn
+    domain_include:
+      - cn
+      - google-cn
+  - name: rule2
+    resolver: google
