@@ -44,7 +44,7 @@ class Worker:
         """处理请求上下文"""
         logger.info(f"Worker {self.worker_id} 处理请求上下文: {context}")
         if self._resolvers is not None:
-            resolver = self._resolvers.get("test")
+            resolver = self._resolvers.get("test3")
 
             if resolver:
                 context.response = await resolver.query(context.request)

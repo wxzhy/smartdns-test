@@ -12,8 +12,8 @@ from smartdns.resolvers.base import BaseResolver
 
 class PlainResolver(BaseResolver, Resolver):
     def __init__(self, config: PlainResolverConfig, nameservers: NameserverManager):
-        super().__init__(config)
         super(BaseResolver, self).__init__(configure=False)
+        super().__init__(config)
         self.config: PlainResolverConfig = config
         self.cache_size = config.cache_size
         self.rotate = config.rotate
@@ -46,6 +46,7 @@ class PlainResolver(BaseResolver, Resolver):
     async def query(self, request: Request) -> Response:
         """解析域名"""
         try:
+            logger.warning(f"rinfo:{self.timeout},{self.lifetime}")
             answer = await self.resolve(
                 request.qname,
                 request.rdtype,

@@ -1,5 +1,5 @@
-from pathlib import Path
 from os import cpu_count
+from pathlib import Path
 from typing import ClassVar
 
 from pydantic import Field

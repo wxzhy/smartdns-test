@@ -1,8 +1,10 @@
-from pydantic import FilePath
+from pathlib import Path
+
 from anyio import run
 from loguru import logger
+from pydantic import FilePath
 from typer import Typer
-from pathlib import Path
+
 from smartdns.core.master import Master
 from smartdns.models.config import Config
 

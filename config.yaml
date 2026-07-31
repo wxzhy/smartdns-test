@@ -17,13 +17,33 @@ nameservers:
     type: tcp
     address: 8.8.8.8
     port: 53
+    use_tricks: true
+    timeout: 5
   - name: test-udp
     type: udp
     address: 8.8.8.8
     port: 53
+    repeat: 1
+    use_tricks: true
+    timeout: 5
 resolvers:
-  - name: test
+  - name: test1
     type: plain
     nameservers:
       - test-tcp
+      # - test-udp
+    timeout: 5
+    lifetime: 10
+  - name: test2
+    type: plain
+    nameservers:
       - test-udp
+      # - test-udp
+    timeout: 5
+    lifetime: 10
+  - name: test3
+    type: concurrent
+    resolvers:
+      - test1
+      - test2
+    timeout: 5

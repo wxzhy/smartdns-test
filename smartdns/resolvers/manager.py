@@ -4,6 +4,7 @@ from loguru import logger
 
 from smartdns.models.resolver import ResolverConfig
 from smartdns.resolvers.aiodns import AioDNSResolver
+from smartdns.resolvers.concurrent import ConcurrentResolver
 from smartdns.resolvers.plain import PlainResolver
 
 if TYPE_CHECKING:
@@ -30,6 +31,13 @@ class ResolverManager:
                         f"创建AioDNS解析器: {resolver_config.name}，地址: {resolver_config.nameservers}:{resolver_config.port}"
                     )
                     resolver = AioDNSResolver(config=resolver_config)
+                case "concurrent":
+                    logger.info(
+                        f"创建Concurrent解析器: {resolver_config.name}，上游解析器: {resolver_config.resolvers}"
+                    )
+                    resolver = ConcurrentResolver(
+                        config=resolver_config, resolvers=self
+                    )
                 case _:
                     raise ValueError(f"不支持的解析器类型: {resolver_config.type}")
             await resolver.start()

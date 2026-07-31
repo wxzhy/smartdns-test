@@ -46,7 +46,7 @@ class AnyioDatagramSocket(DatagramSocket):
             with fail_after(timeout):
                 # 多次接收，忽略伪造包
                 if self._use_tricks:
-                    for _ in range(self._repeat + 1):
+                    for _ in range(5):
                         # UDP socket已经连接，receive即可，不需要recvfrom
                         data = await self._sock.receive()
                         # data, addr = await self._sock.receive()
@@ -94,7 +94,10 @@ class AnyioStreamSocket(StreamSocket):
                     raw_socket = self._stream.extra(SocketAttribute.raw_socket, None)
                     # 分段发送
                     if raw_socket is not None and len(what) > 32:
+                        # 此时不分片
+                        raw_socket._sock.setblocking(True)
                         raw_socket._sock.sendall(what[:16] + b"\x00", MSG_OOB)
+                        raw_socket._sock.setblocking(False)
                         what = what[16:]
                 await self._stream.send(what)
         except TimeoutError as err:
@@ -103,6 +106,7 @@ class AnyioStreamSocket(StreamSocket):
 
     async def recv(self, size, timeout):  # noqa: ASYNC109
         try:
+            logger.debug(f"准备接收数据，size: {size}, timeout: {timeout}")
             with fail_after(timeout):
                 return await self._stream.receive(size)
         except TimeoutError as err:

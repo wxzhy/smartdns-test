@@ -1,16 +1,16 @@
-from itertools import repeat, chain
-from collections import defaultdict
-from utils.mihomo.component.geodata.router import GeoSiteList, DomainType
-from typer import Typer
-from pydantic import FilePath, DirectoryPath
-from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
-from pathlib import Path
-from dns.name import from_text
-import ujson
 import pickle
-from radix import Radix
+from collections import defaultdict
+from itertools import chain, repeat
+from pathlib import Path
+
+from dns.name import from_text
 from marisa_trie import BytesTrie
-from loguru import logger
+from pydantic import DirectoryPath, FilePath
+from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
+from radix import Radix
+from typer import Typer
+
+from utils.mihomo.component.geodata.router import DomainType, GeoSiteList
 
 app = Typer()
 
@@ -75,7 +75,7 @@ def main(
                             node = radix.add(packed=ip.packed)
                         node.data[tag_name.lower()] = True
     if output_path.exists():
-        print(sites)
+        # print(sites)
         # ujson.dump(sites, (output_path / "geosite.json").open("w", encoding="utf-8"))
         tags, domains = [], []
         for k, v in sites.items():
@@ -88,6 +88,7 @@ def main(
         pickle.dump(radix, (output_path / "geoip.radix").open("wb"))
     if not output_path.exists():
         output_path.mkdir(parents=True, exist_ok=True)
+    print(f"转换完成，输出路径: {output_path}")
 
 
 if __name__ == "__main__":
