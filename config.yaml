@@ -99,11 +99,22 @@ resolvers:
       - dnspod
       - 114dns
     timeout: 2
+actions:
+  - name: block
+    type: static
 routing:
+  - name: ads
+    before:
+      - block
+    resolver: cn
+    matcher:
+      domain_include:
+        - category-ads-all
   - name: rule1
     resolver: cn
-    domain_include:
-      - cn
-      - google-cn
+    matcher:
+      domain_include:
+        - cn
+        - google-cn
   - name: rule2
     resolver: google

@@ -1,12 +1,12 @@
 from typing import cast
 
+import dns.rdataclass
+import dns.rdatatype
 from aiodns import DNSResolver, query_type_map
 from aiodns.error import ARES_ENODATA, DNSError
 from dns.message import Message, QueryMessage, make_query, make_response
 from dns.name import Name, from_text
 from dns.rcode import Rcode
-import dns.rdatatype
-import dns.rdataclass
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.rdtypes.ANY.CAA import CAA

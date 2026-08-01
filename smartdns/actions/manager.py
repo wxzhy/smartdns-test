@@ -4,6 +4,7 @@ from loguru import logger
 
 from smartdns.actions.log import LogAction
 from smartdns.models.action import ActionConfig
+from smartdns.actions.static import StaticAction
 
 if TYPE_CHECKING:
     from smartdns.actions.base import BaseAction
@@ -23,8 +24,14 @@ class ActionManager:
                         f"创建Log Action: {action_config.name}，日志文本: {action_config.text}"
                     )
                     action = LogAction(config=action_config)
+                case "static":
+                    logger.info(
+                        f"创建Static Action: {action_config.name}，静态响应数据: {action_config}"
+                    )
+
+                    action = StaticAction(config=action_config)
                 case _:
-                    raise ValueError(f"不支持的监听器类型: {action_config.type}")
+                    raise ValueError(f"不支持的操作类型: {action_config.type}")
             await action.start()
             self.actions[action.name] = action
 

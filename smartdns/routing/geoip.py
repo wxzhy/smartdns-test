@@ -1,8 +1,7 @@
-from typing import cast
 from pathlib import Path
 
-from maxminddb import MODE_MMAP_EXT, open_database, Reader
-from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
+from maxminddb import MODE_MMAP_EXT, Reader, open_database
+from pydantic.networks import IPvAnyAddress
 
 
 class GeoIP:

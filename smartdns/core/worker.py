@@ -4,11 +4,11 @@ from aiofastnet import patch_loop
 from dns.rcode import Rcode
 from loguru import logger
 
+from smartdns.actions.manager import ActionManager
 from smartdns.models.config import Config
 from smartdns.models.context import Context, Request, Response
 from smartdns.nameservers.manager import NameserverManager
 from smartdns.resolvers.manager import ResolverManager
-from smartdns.models.rule import Rule
 from smartdns.routing.router import Router
 
 
@@ -30,9 +30,11 @@ class Worker:
         await self._nameservers.start_all()
         self._resolvers = ResolverManager(config=self.config.resolvers)
         await self._resolvers.start_all(nameservers=self._nameservers)
+        self._actions = ActionManager(config=self.config.actions)
+        await self._actions.start_all()
         for rule in self.config.routing:
             logger.debug(f"Worker {self.worker_id} 添加路由: {rule}")
-            self._rules.append(Router(rule, self._resolvers))
+            self._rules.append(Router(rule, self._resolvers, self._actions))
 
     async def handle(self, request: Request) -> Response:
         """处理请求"""

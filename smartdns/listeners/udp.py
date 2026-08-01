@@ -2,7 +2,6 @@ from socket import (
     AF_INET6,
     IPPROTO_IPV6,
     IPV6_V6ONLY,
-    SO_EXCLUSIVEADDRUSE,
     SO_REUSEADDR,
     SOCK_DGRAM,
     SOL_SOCKET,
@@ -23,7 +22,9 @@ from smartdns.models.context import Request
 
 if TYPE_CHECKING:
     from smartdns.models.listener import Do53ListenerConfig
-if platform != "win32":
+if platform == "win32":
+    from socket import SO_EXCLUSIVEADDRUSE
+else:
     from socket import SO_REUSEPORT
 
 

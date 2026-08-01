@@ -22,7 +22,7 @@ class Config(BaseSettings):
     """配置文件"""
 
     # 配置文件路径，可通过 set_config_file 在实例化前修改
-    config_file: ClassVar[str] = "config.yaml"
+    config_file: ClassVar[Path] = Path("config.yaml")
 
     model_config = SettingsConfigDict(yaml_file="config.yaml")
     worker_count: int = Field(default=cpu_count() or 1, ge=1, description="工作线程数")
