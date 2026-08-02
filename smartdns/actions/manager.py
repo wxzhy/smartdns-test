@@ -5,6 +5,7 @@ from loguru import logger
 from smartdns.actions.log import LogAction
 from smartdns.models.action import ActionConfig
 from smartdns.actions.static import StaticAction
+from smartdns.actions.replace import ReplaceAction
 
 if TYPE_CHECKING:
     from smartdns.actions.base import BaseAction
@@ -30,6 +31,12 @@ class ActionManager:
                     )
 
                     action = StaticAction(config=action_config)
+                case "replace":
+                    logger.info(
+                        f"创建Replace Action: {action_config.name}，替换映射: {action_config.replace_map}"
+                    )
+
+                    action = ReplaceAction(config=action_config)
                 case _:
                     raise ValueError(f"不支持的操作类型: {action_config.type}")
             await action.start()

@@ -102,6 +102,19 @@ resolvers:
 actions:
   - name: block
     type: static
+  - name: replace
+    type: replace
+    replace_map:
+      - tag: cloudflare
+        ipv4:
+          - 162.159.38.0
+          - 162.159.39.0
+          - 162.159.44.0
+          - 162.159.45.0
+        ipv6:
+          - "2606:4700:52::"
+          - "2606:4700:57::"
+          - "2606:4700:5a::"
 routing:
   - name: ads
     before:
@@ -117,4 +130,6 @@ routing:
         - cn
         - google-cn
   - name: rule2
+    after:
+      - replace
     resolver: google
