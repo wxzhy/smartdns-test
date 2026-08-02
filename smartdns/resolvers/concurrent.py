@@ -57,6 +57,8 @@ class ConcurrentResolver(BaseResolver):
                     if not response.invalid:
                         if response.rcode == Rcode.NOERROR:
                             logger.debug(f"解析器 {self.name} 成功解析请求: {request}")
+                            # 清理其他未完成的任务
+                            tg.cancel()
                             return response
                         # 如果响应码不是NOERROR，继续等待其他解析器的响应
                         results.append(response)

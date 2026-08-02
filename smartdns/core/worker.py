@@ -26,7 +26,9 @@ class Worker:
         """启动 Worker 服务"""
         patch_loop()
         logger.info(f"Worker {self.worker_id} 启动")
-        self._nameservers = NameserverManager(config=self.config.nameservers)
+        self._nameservers = NameserverManager(
+            config=self.config.nameservers, client=self.config.client
+        )
         await self._nameservers.start_all()
         self._resolvers = ResolverManager(config=self.config.resolvers)
         await self._resolvers.start_all(nameservers=self._nameservers)

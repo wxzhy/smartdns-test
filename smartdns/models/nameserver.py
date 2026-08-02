@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic.networks import IPvAnyAddress
+from pydantic.networks import HttpUrl, IPvAnyAddress
 
 
 class BaseNameserverConfig(BaseModel):
@@ -33,7 +33,20 @@ class TCPNameserverConfig(BaseNameserverConfig):
     use_tricks: bool = Field(default=False, description="是否使用发送技巧")
 
 
+class CurlNameserverConfig(BaseNameserverConfig):
+    """Curl Nameserver 配置。"""
+
+    type: Literal["curl"]
+    url: HttpUrl = Field(description="目标url地址")
+    host: str | None = Field(default=None, description="请求Host头")
+    want_get: bool = Field(default=False, description="是否使用GET请求")
+    verify: bool = Field(default=True, description="是否验证SSL证书")
+    ech: bool | str = Field(
+        default=True, description="是否使用ECH请求，或指定ECH密钥的域名"
+    )
+
+
 NameserverConfig = Annotated[
-    UDPNameserverConfig | TCPNameserverConfig,
+    UDPNameserverConfig | TCPNameserverConfig | CurlNameserverConfig,
     Field(discriminator="type"),
 ]

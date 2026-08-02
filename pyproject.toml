@@ -9,6 +9,7 @@ dependencies = [
     "aiofastnet>=0.22.0",
     "anyio>=4.14.2",
     "betterproto2>=0.10.0",
+    "cachetools-async>=0.0.5",
     "curl-cffi>=0.15.0",
     "dnspython[doh,idna]>=2.8.0",
     "generic-connection-pool>=0.8.1",

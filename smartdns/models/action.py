@@ -1,4 +1,4 @@
-from ipaddress import IPv4Address, IPv6Address, IPv4Network, IPv6Network
+from ipaddress import IPv4Address, IPv6Address
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field

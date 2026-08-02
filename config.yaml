@@ -12,6 +12,19 @@ geodata:
   geoip: tags/output/geoip.metadb
   geosite: tags/output/geosite.trie
   asn: tags/output/asn.mmdb
+client:
+  dns_cache_ttl: 300
+  shuffle: true
+  resolver:
+    name: 114dns
+    type: aiodns
+    nameservers:
+      - 114.114.114.114
+      - 114.114.115.115
+      # - test-udp
+    timeout: 1
+    tries: 4
+
 nameservers:
   - name: test-tcp
     type: tcp
@@ -47,6 +60,13 @@ nameservers:
     repeat: 0
     use_tricks: true
     timeout: 3
+  - name: curl-doh
+    type: curl
+    url: https://dns.cloudflare.com/dns-query
+    host: dns.cloudflare.com
+    want_get: true
+    verify: true
+    ech: crypto.cloudflare.com
 resolvers:
   - name: 114dns
     type: aiodns
@@ -86,6 +106,12 @@ resolvers:
       - google-4
     timeout: 3
     lifetime: 5
+  - name: doh-test
+    type: plain
+    nameservers:
+      - curl-doh
+    timeout: 3
+    lifetime: 5
   - name: google
     type: concurrent
     resolvers:
@@ -99,6 +125,7 @@ resolvers:
       - dnspod
       - 114dns
     timeout: 2
+
 actions:
   - name: block
     type: static
@@ -132,4 +159,4 @@ routing:
   - name: rule2
     after:
       - replace
-    resolver: google
+    resolver: doh-test

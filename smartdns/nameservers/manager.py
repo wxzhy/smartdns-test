@@ -2,7 +2,10 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from smartdns.models.http import HTTPClientConfig
 from smartdns.models.nameserver import NameserverConfig
+from smartdns.nameservers.client import HTTPClient
+from smartdns.nameservers.curl import CurlNameserver
 from smartdns.nameservers.tcp import TCPNameserver
 from smartdns.nameservers.udp import UDPNameserver
 
@@ -11,12 +14,16 @@ if TYPE_CHECKING:
 
 
 class NameserverManager:
-    def __init__(self, config: list[NameserverConfig]):
+    def __init__(self, config: list[NameserverConfig], client: HTTPClientConfig):
         self.config = config
+        self.http_client_config = client
         logger.debug(self.config)
         self.nameservers: dict[str, BaseNameserver] = {}
+        self._client = HTTPClient(config=client)
 
     async def start_all(self):
+        # 初始化http client
+        await self._client.start()
         for nameserver_config in self.config:
             match nameserver_config.type:
                 case "tcp":
@@ -29,6 +36,13 @@ class NameserverManager:
                         f"创建UDP监听器: {nameserver_config.name}，地址: {nameserver_config.address}:{nameserver_config.port}"
                     )
                     nameserver = UDPNameserver(config=nameserver_config)
+                case "curl":
+                    logger.info(
+                        f"创建Curl监听器: {nameserver_config.name}，地址: {nameserver_config.url}"
+                    )
+                    nameserver = CurlNameserver(
+                        config=nameserver_config, client=self._client
+                    )
                 case _:
                     raise ValueError(f"不支持的监听器类型: {nameserver_config.type}")
             await nameserver.start()

@@ -1,11 +1,12 @@
 from dns.rcode import Rcode
 from dns.rdatatype import RdataType
-from loguru import logger
-from smartdns.actions.base import BaseAction
-from smartdns.models.action import ReplaceActionConfig, ReplaceActionMap
-from smartdns.models.context import Context, Request, Response
 from dns.rdtypes.IN.A import A
 from dns.rdtypes.IN.AAAA import AAAA
+from loguru import logger
+
+from smartdns.actions.base import BaseAction
+from smartdns.models.action import ReplaceActionConfig, ReplaceActionMap
+from smartdns.models.context import Context
 
 
 class ReplaceAction(BaseAction):

@@ -3,9 +3,9 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from smartdns.actions.log import LogAction
-from smartdns.models.action import ActionConfig
-from smartdns.actions.static import StaticAction
 from smartdns.actions.replace import ReplaceAction
+from smartdns.actions.static import StaticAction
+from smartdns.models.action import ActionConfig
 
 if TYPE_CHECKING:
     from smartdns.actions.base import BaseAction

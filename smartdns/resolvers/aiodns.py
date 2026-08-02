@@ -95,41 +95,50 @@ class AioDNSResolver(BaseResolver):
         self._resolver = None
 
     async def query(self, request: Request) -> Response:
-        if self._resolver is None:
-            raise RuntimeError("解析器未启动")
-        key = (request.qname, request.rdtype, request.rdclass)
-        message = self.make_query(key)
+        """处理查询"""
         try:
-            result = await self._resolver.query_dns(
-                request.qname.to_text(),
-                dns.rdatatype.to_text(request.rdtype),
-                dns.rdataclass.to_text(request.rdclass),
-            )
-            message = self.make_response(message, result)
-            answer = self.make_answer(key, message)
+            answer = await self.resolve(request.qname, request.rdtype, request.rdclass)
             return Response.from_answer(answer, upstream=self.config.name)
-        except DNSError as e:
-            code = e.args[0]
-            if code == ARES_ENODATA:
-                # 响应为空时正常处理，默认行为
-                message = self.make_response(message)
-                answer = self.make_answer(key, message)
-                return Response.from_answer(answer, upstream=self.config.name)
-            logger.error(
-                f"AioDNSResolver {self.config.name} 解析请求 {request} 时发生错误: {e}"
-            )
-            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.config.name)
-
         except Exception as e:
             logger.exception(
                 f"AioDNSResolver {self.config.name} 解析请求 {request} 时发生错误: {e}"
             )
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.config.name)
 
+    async def resolve(
+        self,
+        qname: Name,
+        rdtype: RdataType = RdataType.A,
+        rdclass: RdataClass = RdataClass.IN,
+    ) -> Answer:
+        """解析域名"""
+        if self._resolver is None:
+            raise RuntimeError("解析器未启动")
+        key: CacheKey = (qname, rdtype, rdclass)
+        message = self.make_query(key)
+        try:
+            result = await self._resolver.query_dns(
+                qname.to_text(),
+                dns.rdatatype.to_text(rdtype),
+                dns.rdataclass.to_text(rdclass),
+            )
+            message = self.make_response(message, result)
+
+            return self.make_answer(key, message)
+        except DNSError as e:
+            code = e.args[0]
+            if code == ARES_ENODATA:
+                # 响应为空时正常处理，默认行为
+                message = self.make_response(message)
+                return self.make_answer(key, message)
+            logger.error(
+                f"AioDNSResolver {self.config.name} 解析请求 {key} 时发生错误: {e}"
+            )
+            raise e
+
     def make_query(self, key: CacheKey) -> Message:
         """将pycares的DNSResult对象转换为dns.resolver.Answer对象"""
-        query = make_query(key[0], key[1], key[2], use_edns=self.edns, payload=1232)
-        return query
+        return make_query(key[0], key[1], key[2], use_edns=self.edns, payload=1232)
 
     @staticmethod
     def make_response(message: Message, result: DNSResult | None = None) -> Message:

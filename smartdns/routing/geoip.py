@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from maxminddb import MODE_MMAP_EXT, Reader, open_database
+from maxminddb import MODE_MEMORY, Reader, open_database
 from pydantic.networks import IPvAnyAddress
 
 
@@ -14,9 +14,9 @@ class GeoIP:
     def load(self, geoip_path: Path | None, asn_path: Path | None):
         """加载GeoIP数据库"""
         if geoip_path is not None and geoip_path.exists():
-            self._geoip = open_database(database=geoip_path, mode=MODE_MMAP_EXT)
+            self._geoip = open_database(database=geoip_path, mode=MODE_MEMORY)
         if asn_path is not None and asn_path.exists():
-            self._asn = open_database(database=asn_path, mode=MODE_MMAP_EXT)
+            self._asn = open_database(database=asn_path, mode=MODE_MEMORY)
 
     def lookup(self, ip: str | IPvAnyAddress) -> tuple[set[str], int | None]:
         """查找IP对应的国家和ASN"""

@@ -14,6 +14,13 @@ class BaseNameserver(Nameserver):
     def kind(self) -> str:
         raise NotImplementedError
 
+    def is_always_max_size(self) -> bool:
+        return True
+
+    def __str__(self):
+        ns_kind = self.kind()
+        return f"{ns_kind}:{self.config.name}"
+
     async def start(self) -> None:
         """启动Nameserver服务"""
         raise NotImplementedError
