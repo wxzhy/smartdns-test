@@ -7,6 +7,7 @@ from aiodns.error import ARES_ENODATA, DNSError
 from dns.message import Message, QueryMessage, make_query, make_response
 from dns.name import Name, from_text
 from dns.rcode import Rcode
+from dns.rdata import from_wire
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.rdtypes.ANY.CAA import CAA
@@ -157,6 +158,8 @@ class AioDNSResolver(BaseResolver):
         for record in result.additional:
             rrset = AioDNSResolver.convert_record(record)
             answer.additional.append(rrset)
+        # 关闭索引
+        answer.index = None
         return answer
 
     def make_answer(self, key: CacheKey, message: Message):
@@ -199,7 +202,16 @@ class AioDNSResolver(BaseResolver):
                     key = ParamKey(k)
                     value = GenericParam(v)
                     params[key] = value
-                rrset.add(HTTPS(rdclass, rdtype, rdata.priority, rdata.target, params))
+                rdata = HTTPS(rdclass, rdtype, rdata.priority, rdata.target, params)
+                rdata_raw = rdata.to_wire()
+                logger.debug(f"HTTPS记录的rdata原始数据: {rdata_raw}")
+                if not rdata_raw:
+                    raise ValueError("HTTPS记录的rdata为空")
+                new_rdata = from_wire(
+                    rdclass, rdtype, rdata_raw, current=0, rdlen=len(rdata_raw)
+                )
+                logger.debug(f"HTTPS记录的rdata转换后的对象: {new_rdata}")
+                rrset.add(new_rdata)
             case NAPTRRecordData():
                 rrset.add(
                     NAPTR(

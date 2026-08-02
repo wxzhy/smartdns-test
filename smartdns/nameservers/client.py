@@ -5,7 +5,7 @@ from cachetools import TTLCache
 from cachetools_async import cached
 from curl_cffi import AsyncSession, CurlHttpVersion, CurlOpt
 from dns.rdatatype import RdataType
-from dns.rdtypes.svcbbase import ParamKey
+from dns.rdtypes.svcbbase import ParamKey, GenericParam
 from loguru import logger
 
 from smartdns.models.config import HTTPClientConfig
@@ -38,11 +38,12 @@ class HTTPClient:
             )
         if self.config.hosts is not None:
             resolve = []
-            for host, ip in self.config.hosts:
-                if isinstance(ip, IPv6Address):
-                    resolve.append(f"{host}:443:[{ip}]")
-                else:
-                    resolve.append(f"{host}:443:{ip}")
+            for host, ips in self.config.hosts.items():
+                for ip in ips:
+                    if isinstance(ip, IPv6Address):
+                        resolve.append(f"{host}:443:[{ip}]")
+                    else:
+                        resolve.append(f"{host}:443:{ip}")
             opt[CurlOpt.RESOLVE] = resolve
         opt[CurlOpt.DNS_CACHE_TIMEOUT] = self.config.dns_cache_ttl
         opt[CurlOpt.DNS_SHUFFLE_ADDRESSES] = 1 if self.config.shuffle else 0
@@ -62,11 +63,13 @@ class HTTPClient:
             raise ValueError("HTTP客户端未配置上游DNS解析器")
         try:
             ans = await self.resolver.resolve(domain, RdataType.HTTPS)
+            logger.debug(f"获取ECH密钥响应: {ans.rrset}，域名: {domain}")
             if ans.rrset is not None:
                 for rr in ans.rrset:
                     ecl = rr.params.get(ParamKey.ECH)
+                    logger.debug(f"获取ECH密钥: {ecl}，域名: {domain}")
                     if ecl is not None:
-                        return ecl
+                        return ecl.to_text()
         except Exception as e:
             logger.exception(f"获取ECH密钥时发生错误: {e}")
         return None

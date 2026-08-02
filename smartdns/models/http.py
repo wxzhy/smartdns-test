@@ -17,7 +17,7 @@ class HTTPClientConfig(BaseModel):
         default=None, description="HTTP客户端使用的上游DNS解析器配置"
     )
     max_clients: int = Field(default=65536, ge=0, description="HTTP客户端的最大连接数")
-    hosts: list[tuple[str, IPvAnyAddress]] | None = Field(
+    hosts: dict[str, set[IPvAnyAddress]] | None = Field(
         default=None, description="自定义hosts映射列表"
     )
     dns_cache_ttl: int = Field(default=300, ge=0, description="DNS缓存的TTL，单位为秒")

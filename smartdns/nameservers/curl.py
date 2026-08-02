@@ -59,8 +59,14 @@ class CurlNameserver(BaseNameserver):
             if isinstance(self.ech, str):
                 # 读取echconfiglist
                 ech_key = await self._client.get_ech_key(from_text(self.ech))
-                logger.debug(f"Curl解析器 {self.name} 获取ECH密钥: {ech_key}")
-                self._curl.curl_options[CurlOpt.ECH] = f"ecl:{ech_key}"
+                if ech_key is not None:
+                    logger.debug(f"Curl解析器 {self.name} 获取ECH密钥: {ech_key}")
+                    self._curl.curl_options[CurlOpt.ECH] = f"ecl:{ech_key.strip(r'"')}"
+                    logger.debug(f"当前curl选项: {self._curl.curl_options}")
+                else:
+                    logger.warning(
+                        f"Curl解析器 {self.name} 未能获取ECH密钥，继续使用默认设置"
+                    )
             if self.want_get:
                 result = await self._curl.get(
                     self.url,

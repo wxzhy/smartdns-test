@@ -24,6 +24,15 @@ client:
       # - test-udp
     timeout: 1
     tries: 4
+  hosts:
+    dns.cloudflare.com:
+      - 162.159.38.0
+      - 162.159.39.0
+      - 162.159.44.0
+      - 162.159.45.0
+      - "2606:4700:52::"
+      - "2606:4700:57::"
+      - "2606:4700:5a::"
 
 nameservers:
   - name: test-tcp
