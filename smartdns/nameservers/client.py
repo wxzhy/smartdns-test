@@ -24,14 +24,19 @@ class HTTPClient:
             if config.resolver is not None
             else None
         )
-        self.curl: AsyncSession | None = None
 
     async def start(self):
-        """启动HTTP客户端"""
+        """启动HTTP客户端。
+
+        curl 会话不再在此集中创建；每个 CurlNameserver 通过 create_session()
+        独立持有一个会话，避免共享可变状态（逐请求修改 ECH 选项）导致的竞态。
+        """
         logger.info("启动HTTP客户端")
         if self.resolver is not None:
             await self.resolver.start()
-            logger.debug(f"HTTP客户端使用的上游DNS解析器: {self.resolver.name}")
+
+    def _base_curl_options(self) -> dict[CurlOpt, object]:
+        """根据客户端配置构建基础 curl 选项（DOH / 静态 hosts / DNS 缓存 / ECH）。"""
         opt: dict[CurlOpt, object] = {}
         if self.config.doh is not None:
             opt[CurlOpt.DOH_URL] = str(self.config.doh)
@@ -50,7 +55,20 @@ class HTTPClient:
         opt[CurlOpt.DNS_CACHE_TIMEOUT] = self.config.dns_cache_ttl
         opt[CurlOpt.DNS_SHUFFLE_ADDRESSES] = 1 if self.config.shuffle else 0
         opt[CurlOpt.ECH] = "true"
-        self.curl = AsyncSession(
+        return opt
+
+    def create_session(
+        self, extra_options: dict[CurlOpt, object] | None = None
+    ) -> AsyncSession:
+        """创建一个独立的 AsyncSession。
+
+        每个 CurlNameserver 各持一个，避免共享会话被逐请求修改 curl_options[ECH]
+        导致的并发竞态与跨上游污染。
+        """
+        opt = self._base_curl_options()
+        if extra_options:
+            opt.update(extra_options)
+        return AsyncSession(
             headers={"Accept": "application/dns-message"},
             max_clients=self.config.max_clients,
             http_version=CurlHttpVersion.V2TLS,
@@ -59,7 +77,7 @@ class HTTPClient:
             curl_options=opt,
         )
 
-    @cached(cache, key=lambda self, domain: domain, lock=Lock())
+    @cached(cache, key=lambda self, domain: (id(self), str(domain)), lock=Lock())
     async def get_ech_key(self, domain: str | Name) -> str | None:
         if self.resolver is None:
             raise ValueError("HTTP客户端未配置上游DNS解析器")
@@ -67,18 +85,11 @@ class HTTPClient:
             domain = from_text(domain)
         try:
             ans = await self.resolver.resolve(domain, RdataType.HTTPS)
-            logger.debug(f"获取ECH密钥响应: {ans.rrset}，域名: {domain}")
             if ans.rrset is not None:
                 for rr in ans.rrset:
                     ecl = rr.params.get(ParamKey.ECH)
-                    logger.debug(f"获取ECH密钥: {ecl}，域名: {domain}")
                     if ecl is not None:
                         return ecl.to_text()
-        except Exception as e:
-            logger.exception(f"获取ECH密钥时发生错误: {e}")
+        except Exception:
+            logger.exception("获取ECH密钥失败，域名: {}", domain)
         return None
-
-    def get_curl(self) -> AsyncSession:
-        if self.curl is None:
-            raise ValueError("HTTP客户端未启动")
-        return self.curl
