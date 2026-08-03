@@ -6,16 +6,12 @@ from smartdns.models.nameserver import NameserverConfig
 
 class BaseNameserver(Nameserver):
     def __init__(self, config: NameserverConfig):
-        # super().__init__(str(config.address), config.port)
         self.config = config
         self.name = config.name
         self.timeout = config.timeout
 
     def kind(self) -> str:
         raise NotImplementedError
-
-    def is_always_max_size(self) -> bool:
-        return True
 
     def __str__(self):
         ns_kind = self.kind()
@@ -26,8 +22,7 @@ class BaseNameserver(Nameserver):
         raise NotImplementedError
 
     async def stop(self) -> None:
-        """停止Nameserver服务"""
-        raise NotImplementedError
+        """停止Nameserver服务；默认无操作，持有资源的子类覆写以释放资源。"""
 
     async def async_query(
         self,
@@ -45,5 +40,7 @@ class BaseNameserver(Nameserver):
 
 class BaseAddressNameserver(BaseNameserver, AddressAndPortNameserver):
     def __init__(self, config: NameserverConfig):
-        super().__init__(config)
-        super(BaseNameserver, self).__init__(str(config.address), config.port)
+        # 两个基类的 __init__ 签名不同，需分别显式初始化：
+        # BaseNameserver 存 config/name/timeout；后者存 address/port。
+        BaseNameserver.__init__(self, config)
+        AddressAndPortNameserver.__init__(self, str(config.address), config.port)

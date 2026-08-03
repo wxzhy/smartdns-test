@@ -33,10 +33,15 @@ class CurlNameserver(BaseNameserver):
     def kind(self):
         return "curl"
 
+    def is_always_max_size(self) -> bool:
+        return True
+
     def answer_nameserver(self) -> str:
+        assert self.host is not None
         return self.host
 
     def answer_port(self) -> int:
+        assert self.port is not None
         return self.port
 
     async def async_query(

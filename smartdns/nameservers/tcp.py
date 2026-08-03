@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 import dns.asyncquery
 import dns.message
 from anyio import connect_tcp
@@ -6,11 +8,14 @@ from loguru import logger
 from smartdns.nameservers._socket import AnyioStreamSocket
 from smartdns.nameservers.base import BaseAddressNameserver
 
+if TYPE_CHECKING:
+    from smartdns.models.nameserver import TCPNameserverConfig
+
 
 class TCPNameserver(BaseAddressNameserver):
     """TCP解析器类"""
 
-    def __init__(self, config):
+    def __init__(self, config: TCPNameserverConfig):
         super().__init__(config)
         self._pool_size = config.pool_size
         self._pool = None
