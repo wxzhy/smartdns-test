@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from anyio.abc import SocketStream
     from dns.message import Message
 
+    from smartdns.listeners.base import Handler
     from smartdns.models.listener import Do53ListenerConfig
 
 
@@ -26,7 +27,7 @@ class TCPListener(BaseListener):
         self.reuse_port = config.reuse_port
         self._listener = None
 
-    async def start(self, handler):
+    async def start(self, handler: Handler):
         """启动TCP监听器"""
         self._listener = await create_tcp_listener(
             local_host=self.host, local_port=self.port, reuse_port=self.reuse_port
@@ -44,32 +45,29 @@ class TCPListener(BaseListener):
 
     async def handle_connection(self, stream: SocketStream):
         """处理传入的TCP连接"""
+        handler = self.handler
+        if handler is None:
+            return
         async with stream:
-            # 转换为AnyioStreamSocket对象
             anyio_stream = AnyioStreamSocket(stream)
-            client_address, client_port = await anyio_stream.getpeername()
-            logger.debug(f"接收到来自 {client_address}:{client_port} 的TCP连接")
-            # 在这里实现对传入连接的处理逻辑
-            # 例如读取数据、解析请求、发送响应等
+            peer = await anyio_stream.getpeername()
+            client_address = peer[0] if peer is not None else None
+            logger.debug(f"接收到来自 {client_address} 的TCP连接")
             try:
                 while True:
-                    data, receive_time = await receive_tcp(
-                        anyio_stream, ignore_trailing=True
-                    )
-                    logger.debug(f"在 {receive_time} 接收到数据: {data}")
-                    # 处理数据并发送响应
+                    data, _ = await receive_tcp(anyio_stream, ignore_trailing=True)
                     request = Request.from_message(
                         msg=data, listener=self.name, remote_address=client_address
                     )
-                    response: Message | None = await self.handler(request)
+                    response: Message | None = await handler(request)
                     if response is not None:
                         await send_tcp(
                             anyio_stream,
                             response.to_wire(),
                             expiration=time() + self.timeout,
                         )
-            except Exception as e:
-                logger.exception(f"处理连接时发生错误: {e}")
-            finally:
-                await stream.aclose()
-                logger.info(f"关闭来自 {client_address} 的TCP连接")
+            except EOFError:
+                # 客户端正常关闭连接（读到 EOF），非错误路径。
+                pass
+            except Exception:
+                logger.warning(f"TCP监听器 {self.name} 处理连接失败")

@@ -11,6 +11,7 @@ from sys import platform
 from time import time
 from typing import TYPE_CHECKING
 
+from anyio import ClosedResourceError
 from anyio.abc import UDPSocket
 from dns.asyncquery import receive_udp, send_udp
 from dns.inet import af_for_address
@@ -21,7 +22,9 @@ from smartdns.listeners.base import BaseListener
 from smartdns.models.context import Request
 
 if TYPE_CHECKING:
+    from smartdns.listeners.base import Handler
     from smartdns.models.listener import Do53ListenerConfig
+
 if platform == "win32":
     from socket import SO_EXCLUSIVEADDRUSE
 else:
@@ -32,65 +35,66 @@ class UDPListener(BaseListener):
     def __init__(self, config: Do53ListenerConfig):
         super().__init__(config)
         self.host = str(config.host) if config.host is not None else "::"
-        logger.debug(f"UDP监听器 {self.name} 使用的监听地址: {self.host}")
         self.port = config.port
         self.reuse_port = config.reuse_port
-        self.timeout = config.timeout
-        self._listener = None
-        self._family = af_for_address(self.host) if self.host else AF_INET6
-        self._sock = socket(self._family, SOCK_DGRAM)
-        # 允许同时接收IPv4和IPv6数据包
-        self._sock.setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, 0)
-        # 设置为非阻塞模式
-        self._sock.setblocking(False)
-        # 在Windows上使用SO_EXCLUSIVEADDRUSE来确保端口独占
-        if platform == "win32":
-            self._sock.setsockopt(SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
-        else:
-            # 允许地址重用
-            self._sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-            if self.reuse_port:
-                self._sock.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
-        self._sock.bind((self.host, self.port))
+        self._family = af_for_address(self.host)
+        self._listener: UDPSocket | None = None
+        self._sock: socket | None = None
 
-    async def start(self, handler):
-        """启动UDP监听器"""
-        # self._listener = await create_udp_socket(
-        #     local_host=self.host, local_port=self.port, reuse_port=self.reuse_port
-        # )
-        # Anyio的create_udp_socket在某些平台上可能不支持同时启用ipv4/ipv6，因此使用低级API创建UDP套接字
+    def _create_socket(self) -> socket:
+        """创建并绑定 UDP 套接字。仅 IPv6 设置双栈 V6ONLY=0，避免 IPv4 下崩溃。"""
+        sock = socket(self._family, SOCK_DGRAM)
+        if self._family == AF_INET6:
+            sock.setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, 0)
+        sock.setblocking(False)
+        if platform == "win32":
+            sock.setsockopt(SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
+            if self.reuse_port:
+                logger.warning(f"UDP监听器 {self.name}: Windows 忽略 reuse_port")
+        else:
+            sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+            if self.reuse_port:
+                sock.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
+        sock.bind((self.host, self.port))
+        return sock
+
+    async def start(self, handler: Handler):
+        """启动UDP监听器并进入接收循环。"""
+        self.handler = handler
+        # 套接字在 start 时创建/绑定（而非 __init__），避免构造副作用与泄漏。
+        self._sock = self._create_socket()
         self._listener = await UDPSocket.from_socket(self._sock)
         logger.info(f"UDP监听器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
-        self.handler = handler
         async with self._listener:
             anyio_socket = AnyioDatagramSocket(self._listener)
             while True:
                 try:
-                    data, receive_time, client = await receive_udp(
+                    msg, _, client = await receive_udp(
                         anyio_socket, ignore_trailing=True
                     )
-                    client_address, client_port = client
-                    logger.debug(
-                        f"在{receive_time} 收到来自 {client_address}:{client_port} 的UDP数据: {data}"
-                    )
-                    # 转换为Request对象
                     request = Request.from_message(
-                        msg=data, listener=self.name, remote_address=client_address
+                        msg=msg, listener=self.name, remote_address=client[0]
                     )
-                    response = await self.handler(request)
-                    logger.debug(f"为请求 {request} 生成响应: {response}")
-                    await send_udp(
-                        anyio_socket,
-                        response.to_wire(),
-                        client,
-                        expiration=time() + self.timeout,
-                    )
-                except Exception as e:
-                    logger.exception(f"处理UDP数据时发生错误: {e}")
-            await self._listener.aclose()
+                    response = await handler(request)
+                    if response is not None:
+                        await send_udp(
+                            anyio_socket,
+                            response.to_wire(),
+                            client,
+                            expiration=time() + self.timeout,
+                        )
+                except ClosedResourceError:
+                    break  # 监听器已关闭（stop/取消），正常退出循环
+                except Exception:
+                    # 单个请求失败（畸形包 / 处理器错误等），记录后继续服务。
+                    logger.warning(f"UDP监听器 {self.name} 处理请求失败")
 
     async def stop(self):
-        """停止UDP监听器"""
+        """停止UDP监听器并释放套接字。"""
         if self._listener is not None:
             await self._listener.aclose()
-            logger.info(f"UDP监听器 {self.name} 已停止")
+            self._listener = None
+        if self._sock is not None:
+            self._sock.close()
+            self._sock = None
+        logger.info(f"UDP监听器 {self.name} 已停止")
