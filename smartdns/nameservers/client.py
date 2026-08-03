@@ -4,7 +4,7 @@ from typing import ClassVar
 
 from cachetools import TTLCache
 from curl_cffi import AsyncSession, CurlHttpVersion, CurlOpt
-from dns.name import from_text
+from dns.name import Name, from_text
 from dns.rdatatype import RdataType
 from dns.rdtypes.svcbbase import ParamKey
 from loguru import logger

@@ -51,6 +51,11 @@ select = [
 ]
 ignore = ["RUF001", "RUF002", "RUF003", "COM812"]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+
 [dependency-groups]
 dev = [
     "betterproto2-compiler>=0.10.1",
