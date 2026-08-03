@@ -90,5 +90,5 @@ class Master:
                 return request.make_answer(result.ans)
             return None
         except Exception as e:
-            logger.error(f"分发请求到Worker {worker_id}时发生错误: {e}")
+            logger.exception(f"分发请求到Worker {worker_id}时发生错误: {e}")
             return request.make_error(Rcode.SERVFAIL)

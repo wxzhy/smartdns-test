@@ -7,6 +7,7 @@ from loguru import logger
 from smartdns.actions.manager import ActionManager
 from smartdns.models.config import Config
 from smartdns.models.context import Context, Request, Response
+from smartdns.nameservers.client import HTTPClient
 from smartdns.nameservers.manager import NameserverManager
 from smartdns.resolvers.manager import ResolverManager
 from smartdns.routing.router import Router
@@ -21,18 +22,22 @@ class Worker:
         self._resolvers: ResolverManager | None = None
         # 规则列表，稍后初始化
         self._rules: list[Router] = []
+        self._client: HTTPClient | None = None
 
     async def start(self) -> None:
         """启动 Worker 服务"""
         patch_loop()
         logger.info(f"Worker {self.worker_id} 启动")
+        # 初始化HTTP客户端
+        self._client = HTTPClient(config=self.config.client)
+        await self._client.start()
         self._nameservers = NameserverManager(
-            config=self.config.nameservers, client=self.config.client
+            config=self.config.nameservers, client=self._client
         )
         await self._nameservers.start_all()
         self._resolvers = ResolverManager(config=self.config.resolvers)
         await self._resolvers.start_all(nameservers=self._nameservers)
-        self._actions = ActionManager(config=self.config.actions)
+        self._actions = ActionManager(config=self.config.actions, client=self._client)
         await self._actions.start_all()
         for rule in self.config.routing:
             logger.debug(f"Worker {self.worker_id} 添加路由: {rule}")
@@ -54,10 +59,14 @@ class Worker:
     async def process(self, context: Context):
         """处理请求上下文"""
         logger.info(f"Worker {self.worker_id} 处理请求上下文: {context}")
-        for rule in self._rules:
-            if await rule.query(context):
-                logger.info(
-                    f"Worker {self.worker_id} 请求 {context.request} 匹配路由 {rule.config.name}"
-                )
-                return
-        context.response = Response.from_rcode(Rcode.SERVFAIL, upstream="")
+        try:
+            for rule in self._rules:
+                if await rule.query(context):
+                    logger.info(
+                        f"Worker {self.worker_id} 请求 {context.request} 匹配路由 {rule.config.name}"
+                    )
+                    return
+            context.response = Response.from_rcode(Rcode.SERVFAIL, upstream="")
+        except Exception as e:
+            logger.exception(f"Worker {self.worker_id} 处理请求上下文时发生错误: {e}")
+            context.response = Response.from_rcode(Rcode.SERVFAIL, upstream="")

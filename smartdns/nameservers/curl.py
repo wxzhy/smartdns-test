@@ -2,7 +2,6 @@ from base64 import urlsafe_b64encode
 
 import dns.message
 from curl_cffi import AsyncSession, CurlOpt
-from dns.name import from_text
 from loguru import logger
 
 from smartdns.models.nameserver import CurlNameserverConfig
@@ -58,7 +57,7 @@ class CurlNameserver(BaseNameserver):
         try:
             if isinstance(self.ech, str):
                 # 读取echconfiglist
-                ech_key = await self._client.get_ech_key(from_text(self.ech))
+                ech_key = await self._client.get_ech_key(self.ech)
                 if ech_key is not None:
                     logger.debug(f"Curl解析器 {self.name} 获取ECH密钥: {ech_key}")
                     self._curl.curl_options[CurlOpt.ECH] = f"ecl:{ech_key.strip(r'"')}"
@@ -88,6 +87,8 @@ class CurlNameserver(BaseNameserver):
                     f"Curl解析器 {self.name} 返回非200状态码: {result.status_code}"
                 )
             response = dns.message.from_wire(result.content)
+            # 关闭索引
+            response.index = None
             return response
         except Exception as e:
             logger.exception(f"Curl解析器 {self.name} 查询失败: {e}")

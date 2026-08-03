@@ -41,7 +41,7 @@ class StaticActionConfig(BaseActionConfig):
 class ReplaceActionMap(BaseModel):
     """替换映射配置。"""
 
-    tag: str = Field(description="替换映射的标签")
+    tag: set[str] = Field(description="替换映射的标签")
     ipv4_prefixlen: int = Field(
         default=32, ge=0, le=32, description="替换映射的 IPv4 前缀长度，默认为 32"
     )
@@ -60,7 +60,30 @@ class ReplaceActionConfig(BaseActionConfig):
     replace_map: list[ReplaceActionMap] = Field(default=[], description="替换映射列表")
 
 
+class HTTPSActionConfig(BaseActionConfig):
+    """HTTPS Action 配置。"""
+
+    type: Literal["https"]
+    remove_hint: bool = Field(
+        default=True, description="是否移除 HTTPS 中的 ipv4/ipv6 hint 参数"
+    )
+    remove_h3: bool = Field(
+        default=True, description="是否移除 HTTPS ALPN 中的 h3 参数"
+    )
+    add_ech: bool = Field(default=True, description="是否添加 HTTPS 中的 ech 参数")
+    exclude: set[str] | None = Field(default=None, description="不进行添加的域名列表")
+    tag: set[str] = Field(description="匹配的标签")
+    ech_domain: str = Field(
+        default="crypto.cloudflare.com",
+        description="ECH 域名，表示使用请求的域名",
+    )
+
+
 ActionConfig = Annotated[
-    LogActionConfig | PrintActionConfig | StaticActionConfig | ReplaceActionConfig,
+    LogActionConfig
+    | PrintActionConfig
+    | StaticActionConfig
+    | ReplaceActionConfig
+    | HTTPSActionConfig,
     Field(discriminator="type"),
 ]

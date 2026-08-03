@@ -141,7 +141,8 @@ actions:
   - name: replace
     type: replace
     replace_map:
-      - tag: cloudflare
+      - tag:
+          - cloudflare
         ipv4:
           - 162.159.38.0
           - 162.159.39.0
@@ -151,6 +152,11 @@ actions:
           - "2606:4700:52::"
           - "2606:4700:57::"
           - "2606:4700:5a::"
+  - name: https
+    type: https
+    tag:
+      - cloudflare
+    ech: crypto.cloudflare.com
 routing:
   - name: ads
     before:
@@ -167,5 +173,6 @@ routing:
         - google-cn
   - name: rule2
     after:
-      - replace
+      # - replace
+      - https
     resolver: doh-test

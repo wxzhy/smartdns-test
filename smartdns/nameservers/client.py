@@ -1,8 +1,10 @@
 from ipaddress import IPv6Address
+from threading import Lock
 from typing import ClassVar
 
 from cachetools import TTLCache
 from curl_cffi import AsyncSession, CurlHttpVersion, CurlOpt
+from dns.name import from_text
 from dns.rdatatype import RdataType
 from dns.rdtypes.svcbbase import ParamKey
 from loguru import logger
@@ -57,10 +59,12 @@ class HTTPClient:
             curl_options=opt,
         )
 
-    @cached(cache, key=lambda self, domain: domain)
-    async def get_ech_key(self, domain):
+    @cached(cache, key=lambda self, domain: domain, lock=Lock())
+    async def get_ech_key(self, domain: str | Name) -> str | None:
         if self.resolver is None:
             raise ValueError("HTTP客户端未配置上游DNS解析器")
+        if isinstance(domain, str):
+            domain = from_text(domain)
         try:
             ans = await self.resolver.resolve(domain, RdataType.HTTPS)
             logger.debug(f"获取ECH密钥响应: {ans.rrset}，域名: {domain}")

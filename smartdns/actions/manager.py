@@ -2,20 +2,23 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from smartdns.actions.https import HTTPSAction
 from smartdns.actions.log import LogAction
 from smartdns.actions.replace import ReplaceAction
 from smartdns.actions.static import StaticAction
 from smartdns.models.action import ActionConfig
+from smartdns.nameservers.client import HTTPClient
 
 if TYPE_CHECKING:
     from smartdns.actions.base import BaseAction
 
 
 class ActionManager:
-    def __init__(self, config: list[ActionConfig]):
+    def __init__(self, config: list[ActionConfig], client: HTTPClient):
         self.config = config
         logger.debug(self.config)
         self.actions: dict[str, BaseAction] = {}
+        self._client = client
 
     async def start_all(self):
         for action_config in self.config:
@@ -37,6 +40,11 @@ class ActionManager:
                     )
 
                     action = ReplaceAction(config=action_config)
+                case "https":
+                    logger.info(
+                        f"创建HTTPS Action: {action_config.name}，添加ECH: {action_config.add_ech}，移除H3: {action_config.remove_h3}，移除Hint: {action_config.remove_hint}"
+                    )
+                    action = HTTPSAction(config=action_config, client=self._client)
                 case _:
                     raise ValueError(f"不支持的操作类型: {action_config.type}")
             await action.start()

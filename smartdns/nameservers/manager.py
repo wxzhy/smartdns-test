@@ -2,7 +2,6 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from smartdns.models.http import HTTPClientConfig
 from smartdns.models.nameserver import NameserverConfig
 from smartdns.nameservers.client import HTTPClient
 from smartdns.nameservers.curl import CurlNameserver
@@ -14,16 +13,14 @@ if TYPE_CHECKING:
 
 
 class NameserverManager:
-    def __init__(self, config: list[NameserverConfig], client: HTTPClientConfig):
+    def __init__(self, config: list[NameserverConfig], client: HTTPClient):
         self.config = config
         self.http_client_config = client
         logger.debug(self.config)
         self.nameservers: dict[str, BaseNameserver] = {}
-        self._client = HTTPClient(config=client)
+        self._client = client
 
     async def start_all(self):
-        # 初始化http client
-        await self._client.start()
         for nameserver_config in self.config:
             match nameserver_config.type:
                 case "tcp":

@@ -62,7 +62,7 @@ class ReplaceAction(BaseAction):
         if response.ip_infos is not None:
             for ip_info in response.ip_infos:
                 for replace in self.replace_map:
-                    if ip_info.country is not None and replace.tag in ip_info.country:
+                    if ip_info.country is not None and replace.tag & ip_info.country:
                         if request.rdtype == RdataType.A:
                             offset = int(ip_info.ip) & (
                                 (1 << (32 - replace.ipv4_prefixlen)) - 1
