@@ -1,24 +1,29 @@
 from typing import TYPE_CHECKING
 
+import dns.asyncbackend
 import dns.asyncquery
 import dns.message
 from anyio import connect_tcp
+from generic_connection_pool.asyncio import ConnectionPool
 from loguru import logger
 
+from smartdns.nameservers._pool import TcpEndpoint, TCPStreamConnectionManager
 from smartdns.nameservers._socket import AnyioStreamSocket
 from smartdns.nameservers.base import BaseAddressNameserver
 
 if TYPE_CHECKING:
+    from anyio.abc import SocketStream
+
     from smartdns.models.nameserver import TCPNameserverConfig
 
 
 class TCPNameserver(BaseAddressNameserver):
-    """TCP解析器类"""
+    """TCP 上游解析器（DNS over TCP）。"""
 
     def __init__(self, config: TCPNameserverConfig):
         super().__init__(config)
         self._pool_size = config.pool_size
-        self._pool = None
+        self._pool: ConnectionPool[TcpEndpoint, SocketStream] | None = None
         self.host = config.address
         self.port = config.port
         self._use_tricks = config.use_tricks
@@ -27,17 +32,40 @@ class TCPNameserver(BaseAddressNameserver):
         return "tcp"
 
     async def start(self):
-        """启动TCP解析器"""
+        """启动 TCP 上游；pool_size>0 时创建连接池以复用连接。"""
         if self._pool_size:
-            self._pool = await self._create_pool()
-        logger.info(f"TCP解析器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
+            self._pool = ConnectionPool(
+                TCPStreamConnectionManager(connect_timeout=self.timeout),
+                min_idle=1,
+                max_size=self._pool_size,
+                total_max_size=self._pool_size,
+            )
+        logger.info(f"TCP 上游 {self.name} 已启动，目标: {self.host}:{self.port}")
 
-    async def _connect(self):
-        try:
-            self._sock = await connect_tcp(self.host, self.port)
-        except Exception as e:
-            logger.error(f"连接到TCP解析器 {self.name} 失败: {e}")
-            raise
+    async def stop(self):
+        """停止 TCP 上游，关闭连接池。"""
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+    async def _query_on_stream(
+        self,
+        raw_sock: SocketStream,
+        request: dns.message.QueryMessage,
+        timeout: float,
+        one_rr_per_rrset: bool,
+        ignore_trailing: bool,
+    ) -> dns.message.Message:
+        sock = AnyioStreamSocket(raw_sock, use_tricks=self._use_tricks)
+        return await dns.asyncquery.tcp(
+            request,
+            where=self.address,
+            timeout=timeout,
+            port=self.port,
+            sock=sock,
+            one_rr_per_rrset=one_rr_per_rrset,
+            ignore_trailing=ignore_trailing,
+        )
 
     async def async_query(
         self,
@@ -50,17 +78,28 @@ class TCPNameserver(BaseAddressNameserver):
         one_rr_per_rrset: bool = False,
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
+        effective_timeout = timeout or self.timeout
+        endpoint: TcpEndpoint = (self.address, self.port)
         try:
+            if self._pool is not None:
+                async with self._pool.connection(
+                    endpoint, timeout=effective_timeout
+                ) as raw_sock:
+                    return await self._query_on_stream(
+                        raw_sock,
+                        request,
+                        effective_timeout,
+                        one_rr_per_rrset,
+                        ignore_trailing,
+                    )
             async with await connect_tcp(self.host, self.port) as raw_sock:
-                sock = AnyioStreamSocket(raw_sock, use_tricks=self._use_tricks)
-                return await dns.asyncquery.tcp(
+                return await self._query_on_stream(
+                    raw_sock,
                     request,
-                    where=self.address,
-                    timeout=timeout or self.timeout,
-                    port=self.port,
-                    sock=sock,
-                    ignore_trailing=True,
+                    effective_timeout,
+                    one_rr_per_rrset,
+                    ignore_trailing,
                 )
-        except Exception as e:
-            logger.exception(f"TCP解析器 {self.name} 查询失败: {e}")
+        except Exception:
+            logger.exception(f"TCP 上游 {self.name} 查询失败")
             raise
