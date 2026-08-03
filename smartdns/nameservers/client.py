@@ -2,14 +2,14 @@ from ipaddress import IPv6Address
 from typing import ClassVar
 
 from cachetools import TTLCache
-from cachetools_async import cached
 from curl_cffi import AsyncSession, CurlHttpVersion, CurlOpt
 from dns.rdatatype import RdataType
-from dns.rdtypes.svcbbase import ParamKey, GenericParam
+from dns.rdtypes.svcbbase import ParamKey
 from loguru import logger
 
 from smartdns.models.config import HTTPClientConfig
 from smartdns.resolvers.aiodns import AioDNSResolver
+from smartdns.utils.cache_async import cached
 
 
 class HTTPClient:

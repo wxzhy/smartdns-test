@@ -16,8 +16,8 @@ class GeoSite:
         """从缓存文件加载域名列表"""
         if path.exists():
             self._trie = BytesTrie()
-            # self._trie.mmap(str(path))
-            self._trie.load(str(path))
+            self._trie.mmap(str(path))
+            # self._trie.load(str(path))
             logger.info(f"从{path}加载域名列表成功，条目数: {len(self._trie)}")
 
     def save(self, path: Path):
