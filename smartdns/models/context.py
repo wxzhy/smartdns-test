@@ -68,7 +68,10 @@ class Request:
     ecs_info: IPInfo | None = None
 
     def __str__(self):
-        return f"Request from {self.remote_address}\n{self.msg}\nIP: {self.ip_info}\nName: {self.name_info}\nECS: {self.ecs_info}"
+        return (
+            f"Request from {self.remote_address}\n{self.msg}\n"
+            f"IP: {self.ip_info}\nName: {self.name_info}\nECS: {self.ecs_info}"
+        )
 
     def make_answer(self, ans: Answer) -> Message:
         """创建响应对象"""
@@ -159,7 +162,12 @@ class Response:
         return response
 
     def __str__(self):
-        return f"Received rcode {self.rcode} answer {self.ans.response if self.ans else None} from upstream={self.upstream}\nIPs: {self.ip_infos}\nNames: {self.name_infos}"
+        answer = self.ans.response if self.ans else None
+        return (
+            f"Received rcode {self.rcode} answer {answer} "
+            f"from upstream={self.upstream}\n"
+            f"IPs: {self.ip_infos}\nNames: {self.name_infos}"
+        )
 
 
 @dataclass

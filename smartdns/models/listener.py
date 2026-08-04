@@ -1,22 +1,20 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 from pydantic.networks import IPvAnyAddress
 
 
 class BaseListenerConfig(BaseModel):
     """Listener 配置基类。"""
 
-    model_config = ConfigDict(populate_by_name=True)
-
     name: str
     timeout: float = Field(default=5.0, ge=0.1, description="请求超时时间（秒）")
 
 
 class Do53ListenerConfig(BaseListenerConfig):
-    """UDP listener 配置。"""
+    """Do53（UDP/TCP）listener 配置。"""
 
-    type: Literal["udp"] | Literal["tcp"]
+    type: Literal["udp", "tcp"]
     host: IPvAnyAddress | None = Field(description="监听地址", default=None)
     port: int = Field(ge=1, le=65535, description="监听端口")
     reuse_port: bool = Field(default=False, description="是否启用端口复用")

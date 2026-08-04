@@ -10,7 +10,7 @@ class HTTPClientConfig(BaseModel):
     resolver: AioDNSResolverConfig | None = Field(
         default=None, description="HTTP客户端使用的上游DNS解析器配置"
     )
-    max_clients: int = Field(default=65536, ge=0, description="HTTP客户端的最大连接数")
+    max_clients: int = Field(default=65536, ge=1, description="HTTP客户端的最大连接数")
     hosts: dict[str, set[IPvAnyAddress]] | None = Field(
         default=None, description="自定义hosts映射列表"
     )

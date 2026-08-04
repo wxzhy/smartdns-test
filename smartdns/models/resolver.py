@@ -1,13 +1,11 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 from pydantic.networks import IPvAnyNetwork
 
 
 class BaseResolverConfig(BaseModel):
     """Resolver 配置基类。"""
-
-    model_config = ConfigDict(populate_by_name=True)
 
     name: str
     timeout: float = Field(default=5.0, ge=0.1, description="请求超时时间（秒）")

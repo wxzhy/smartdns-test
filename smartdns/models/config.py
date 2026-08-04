@@ -28,19 +28,25 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(yaml_file="config.yaml")
     worker_count: int = Field(default=cpu_count() or 1, ge=1, description="工作线程数")
     cache_size: int = Field(default=10000, ge=0, description="缓存大小")
-    geodata: GeoDataConfig = Field(default=GeoDataConfig(), description="Geo数据配置")
-    client: HTTPClientConfig = Field(
-        default=HTTPClientConfig(), description="HTTP客户端配置"
+    geodata: GeoDataConfig = Field(
+        default_factory=GeoDataConfig, description="Geo数据配置"
     )
-    listeners: list[ListenerConfig] = Field(default=[], description="监听器配置列表")
+    client: HTTPClientConfig = Field(
+        default_factory=HTTPClientConfig, description="HTTP客户端配置"
+    )
+    listeners: list[ListenerConfig] = Field(
+        default_factory=list, description="监听器配置列表"
+    )
     nameservers: list[NameserverConfig] = Field(
-        default=[], description="上游DNS服务器配置列表"
+        default_factory=list, description="上游DNS服务器配置列表"
     )
     resolvers: list[ResolverConfig] = Field(
-        default=[], description="上游DNS解析器配置列表"
+        default_factory=list, description="上游DNS解析器配置列表"
     )
-    actions: list[ActionConfig] = Field(default=[], description="动作配置列表")
-    routing: list[Rule] = Field(default=[], description="路由配置列表")
+    actions: list[ActionConfig] = Field(
+        default_factory=list, description="动作配置列表"
+    )
+    routing: list[Rule] = Field(default_factory=list, description="路由配置列表")
 
     @classmethod
     def set_config_file(cls, config_file: Path) -> None:
