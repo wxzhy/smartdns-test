@@ -1,8 +1,12 @@
-from pathlib import Path
+
+from typing import TYPE_CHECKING
 
 from dns.name import Name, from_text
 from loguru import logger
-from marisa_trie import BytesTrie
+from marisa_trie import BytesTrie  # ty: ignore[unresolved-import]  C 扩展无类型 stub
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class GeoSite:

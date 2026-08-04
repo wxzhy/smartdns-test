@@ -8,13 +8,13 @@ from smartdns.models.nameserver import (
     TCPNameserverConfig,
     UDPNameserverConfig,
 )
-from smartdns.nameservers.client import HTTPClient
 from smartdns.nameservers.curl import CurlNameserver
 from smartdns.nameservers.tcp import TCPNameserver
 from smartdns.nameservers.udp import UDPNameserver
 
 if TYPE_CHECKING:
     from smartdns.nameservers.base import BaseNameserver
+    from smartdns.nameservers.client import HTTPClient
 
 
 class NameserverManager:

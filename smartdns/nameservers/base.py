@@ -1,11 +1,19 @@
-import dns.message
+from typing import TYPE_CHECKING
+
 from dns.nameserver import AddressAndPortNameserver, Nameserver
 
-from smartdns.models.nameserver import NameserverConfig
+if TYPE_CHECKING:
+    import dns.asyncbackend
+    import dns.message
+
+    from smartdns.models.nameserver import (
+        AddressNameserverConfig,
+        BaseNameserverConfig,
+    )
 
 
 class BaseNameserver(Nameserver):
-    def __init__(self, config: NameserverConfig):
+    def __init__(self, config: BaseNameserverConfig):
         self.config = config
         self.name = config.name
         self.timeout = config.timeout
@@ -39,7 +47,7 @@ class BaseNameserver(Nameserver):
 
 
 class BaseAddressNameserver(BaseNameserver, AddressAndPortNameserver):
-    def __init__(self, config: NameserverConfig):
+    def __init__(self, config: AddressNameserverConfig):
         # 两个基类的 __init__ 签名不同，需分别显式初始化：
         # BaseNameserver 存 config/name/timeout；后者存 address/port。
         BaseNameserver.__init__(self, config)

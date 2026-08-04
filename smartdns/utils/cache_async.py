@@ -1,19 +1,18 @@
 from asyncio import Future, Task, get_running_loop, shield
-from collections.abc import Awaitable, Callable, MutableMapping
-from contextlib import AbstractContextManager
 from functools import update_wrapper
 from inspect import iscoroutinefunction
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol
 
 from cachetools.keys import hashkey
 from loguru import logger
 
-_KT = TypeVar("_KT")
-_T = TypeVar("_T")
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, MutableMapping
+    from contextlib import AbstractContextManager
 
 
-class IdentityFunction(Protocol):
-    def __call__(self, x: _T, /) -> _T: ...
+class IdentityFunction[T](Protocol):
+    def __call__(self, x: T, /) -> T: ...
 
 
 def apply_task_result_to_future(task: Task[Any], future: Future[Any]) -> None:
@@ -27,9 +26,9 @@ def apply_task_result_to_future(task: Task[Any], future: Future[Any]) -> None:
     future.set_result(task.result())
 
 
-def cached(
-    cache: MutableMapping[_KT, Future[Any]] | None,
-    key: Callable[..., _KT] = hashkey,
+def cached[KT](
+    cache: MutableMapping[KT, Future[Any]] | None,
+    key: Callable[..., KT] = hashkey,  # ty: ignore[invalid-parameter-default]
     lock: AbstractContextManager[Any] | None = None,
     info: bool = False,
 ) -> IdentityFunction:

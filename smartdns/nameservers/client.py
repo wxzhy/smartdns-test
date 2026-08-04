@@ -1,6 +1,6 @@
 from ipaddress import IPv6Address
 from threading import Lock
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from cachetools import TTLCache
 from curl_cffi import AsyncSession, CurlHttpVersion, CurlOpt
@@ -9,9 +9,11 @@ from dns.rdatatype import RdataType
 from dns.rdtypes.svcbbase import ParamKey
 from loguru import logger
 
-from smartdns.models.config import HTTPClientConfig
 from smartdns.resolvers.aiodns import AioDNSResolver
 from smartdns.utils.cache_async import cached
+
+if TYPE_CHECKING:
+    from smartdns.models.config import HTTPClientConfig
 
 
 class HTTPClient:

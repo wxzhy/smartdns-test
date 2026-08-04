@@ -1,8 +1,12 @@
-from pathlib import Path
 from pickle import load
+from typing import TYPE_CHECKING
 
 from loguru import logger
-from pydantic import IPvAnyAddress, IPvAnyNetwork
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from pydantic import IPvAnyAddress, IPvAnyNetwork
 
 
 class IPSet:

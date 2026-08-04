@@ -1,4 +1,4 @@
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from dns.message import QueryMessage, make_query, make_response
 from dns.rdatatype import RdataType
@@ -9,8 +9,10 @@ from dns.rrset import RRset
 from loguru import logger
 
 from smartdns.actions.base import BaseAction
-from smartdns.models.action import StaticActionConfig
 from smartdns.models.context import Context, Response
+
+if TYPE_CHECKING:
+    from smartdns.models.action import StaticActionConfig
 
 
 class StaticAction(BaseAction):

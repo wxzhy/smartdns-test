@@ -21,11 +21,8 @@ class AnyioDatagramSocket(DatagramSocket):
         self._repeat = repeat
         self._use_tricks = use_tricks
         self._addr = sock.extra(SocketAttribute.remote_address, None)
-        logger.debug(
-            f"创建AnyioDatagramSocket对象，sock: {sock}, repeat: {repeat}, use_tricks: {use_tricks}"
-        )
 
-    async def sendto(self, what, destination, timeout):  # noqa: ASYNC109
+    async def sendto(self, what, destination, timeout):
         try:
             with fail_after(timeout):
                 if destination is None:
@@ -41,7 +38,7 @@ class AnyioDatagramSocket(DatagramSocket):
             raise Timeout(timeout=timeout) from err
         return len(what)
 
-    async def recvfrom(self, size, timeout):  # noqa: ASYNC109
+    async def recvfrom(self, size, timeout):
         try:
             with fail_after(timeout):
                 if self._use_tricks:
@@ -66,7 +63,7 @@ class AnyioDatagramSocket(DatagramSocket):
     async def getsockname(self):
         return self._sock.extra(SocketAttribute.local_address, None)
 
-    async def getpeercert(self, timeout):  # noqa: ASYNC109
+    async def getpeercert(self, timeout):
         raise NotImplementedError
 
 
@@ -80,7 +77,7 @@ class AnyioStreamSocket(StreamSocket):
         self._stream = stream
         self._use_tricks = use_tricks
 
-    async def sendall(self, what, timeout):  # noqa: ASYNC109
+    async def sendall(self, what, timeout):
         try:
             with fail_after(timeout):
                 if self._use_tricks:
@@ -98,7 +95,7 @@ class AnyioStreamSocket(StreamSocket):
             logger.error(f"发送数据超时，timeout: {timeout}")
             raise Timeout(timeout=timeout) from err
 
-    async def recv(self, size, timeout):  # noqa: ASYNC109
+    async def recv(self, size, timeout):
         try:
             logger.debug(f"准备接收数据，size: {size}, timeout: {timeout}")
             with fail_after(timeout):
@@ -119,5 +116,5 @@ class AnyioStreamSocket(StreamSocket):
     async def getsockname(self):
         return self._stream.extra(SocketAttribute.local_address, None)
 
-    async def getpeercert(self, timeout):  # noqa: ASYNC109
+    async def getpeercert(self, timeout):
         return None

@@ -1,10 +1,15 @@
-from dns.name import Name
-from pydantic.networks import IPvAnyAddress
 
-from smartdns.models.geodata import GeoDataConfig
+from typing import TYPE_CHECKING
+
 from smartdns.routing.geoip import GeoIP
 from smartdns.routing.geosite import GeoSite
 from smartdns.routing.ipset import IPSet
+
+if TYPE_CHECKING:
+    from dns.name import Name
+    from pydantic.networks import IPvAnyAddress
+
+    from smartdns.models.geodata import GeoDataConfig
 
 
 class GeoManager:
@@ -49,7 +54,7 @@ _geo_manager: GeoManager | None = None
 
 def init_geo_manager(config: GeoDataConfig):
     """初始化GeoManager实例"""
-    global _geo_manager
+    global _geo_manager  # noqa: PLW0603  模块级单例，进程内唯一
     _geo_manager = GeoManager(config)
 
 

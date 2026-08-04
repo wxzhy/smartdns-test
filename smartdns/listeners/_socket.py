@@ -5,9 +5,6 @@ from anyio.abc import SocketAttribute
 from dns._asyncbackend import DatagramSocket, StreamSocket
 from dns.exception import Timeout
 
-# 以下方法中名为 `timeout` 的参数是 dnspython 后端 Socket ABC 接口签名的一部分，
-# 无法重命名，因此对 ASYNC109 规则在各方法上单独禁用。
-
 
 class AnyioDatagramSocket(DatagramSocket):
     """基于 anyio 的 DatagramSocket 实现，支持超时处理。"""
@@ -18,7 +15,7 @@ class AnyioDatagramSocket(DatagramSocket):
             family=sock.extra(SocketAttribute.family, None), type=SOCK_DGRAM
         )
 
-    async def sendto(self, what, destination, timeout):  # noqa: ASYNC109
+    async def sendto(self, what, destination, timeout):
         try:
             with fail_after(timeout):
                 await self._sock.sendto(what, destination[0], destination[1])
@@ -26,7 +23,7 @@ class AnyioDatagramSocket(DatagramSocket):
             raise Timeout(timeout=timeout) from err
         return len(what)
 
-    async def recvfrom(self, size, timeout):  # noqa: ASYNC109
+    async def recvfrom(self, size, timeout):
         try:
             with fail_after(timeout):
                 data, addr = await self._sock.receive()
@@ -43,7 +40,7 @@ class AnyioDatagramSocket(DatagramSocket):
     async def getsockname(self):
         return self._sock.extra(SocketAttribute.local_address, None)
 
-    async def getpeercert(self, timeout):  # noqa: ASYNC109
+    async def getpeercert(self, timeout):
         return None
 
 
@@ -56,14 +53,14 @@ class AnyioStreamSocket(StreamSocket):
             family=stream.extra(SocketAttribute.family, None), type=SOCK_STREAM
         )
 
-    async def sendall(self, what, timeout):  # noqa: ASYNC109
+    async def sendall(self, what, timeout):
         try:
             with fail_after(timeout):
                 return await self._stream.send(what)
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err
 
-    async def recv(self, size, timeout):  # noqa: ASYNC109
+    async def recv(self, size, timeout):
         try:
             with fail_after(timeout):
                 return await self._stream.receive(size)
@@ -82,5 +79,5 @@ class AnyioStreamSocket(StreamSocket):
     async def getsockname(self):
         return self._stream.extra(SocketAttribute.local_address, None)
 
-    async def getpeercert(self, timeout):  # noqa: ASYNC109
+    async def getpeercert(self, timeout):
         return None

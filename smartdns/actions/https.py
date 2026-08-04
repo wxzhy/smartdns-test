@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from dns.rcode import Rcode
 from dns.rdatatype import RdataType
 from dns.rdtypes.IN.HTTPS import HTTPS
@@ -7,9 +9,11 @@ from loguru import logger
 
 from smartdns.actions._helpers import is_excluded, replace_answer_rrset
 from smartdns.actions.base import BaseAction
-from smartdns.models.action import HTTPSActionConfig
-from smartdns.models.context import Context, Request, Response
-from smartdns.nameservers.client import HTTPClient
+
+if TYPE_CHECKING:
+    from smartdns.models.action import HTTPSActionConfig
+    from smartdns.models.context import Context, Request, Response
+    from smartdns.nameservers.client import HTTPClient
 
 
 class HTTPSAction(BaseAction):

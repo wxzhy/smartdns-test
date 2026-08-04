@@ -1,5 +1,8 @@
-from smartdns.models.action import BaseActionConfig
-from smartdns.models.context import Context
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from smartdns.models.action import BaseActionConfig
+    from smartdns.models.context import Context
 
 
 class BaseAction:

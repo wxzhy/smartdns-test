@@ -1,4 +1,5 @@
 from ipaddress import AddressValueError
+from typing import TYPE_CHECKING
 
 from dns.rcode import Rcode
 from dns.rdatatype import RdataType
@@ -9,8 +10,10 @@ from loguru import logger
 
 from smartdns.actions._helpers import is_excluded, replace_answer_rrset
 from smartdns.actions.base import BaseAction
-from smartdns.models.action import ReplaceActionConfig, ReplaceActionMap
-from smartdns.models.context import Context, IPInfo
+
+if TYPE_CHECKING:
+    from smartdns.models.action import ReplaceActionConfig, ReplaceActionMap
+    from smartdns.models.context import Context, IPInfo
 
 
 class ReplaceAction(BaseAction):

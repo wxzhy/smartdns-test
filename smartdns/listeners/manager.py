@@ -5,10 +5,10 @@ from loguru import logger
 
 from smartdns.listeners.tcp import TCPListener
 from smartdns.listeners.udp import UDPListener
-from smartdns.models.listener import ListenerConfig
 
 if TYPE_CHECKING:
     from smartdns.listeners.base import BaseListener
+    from smartdns.models.listener import ListenerConfig
 
 
 class ListenerManager:
@@ -21,14 +21,10 @@ class ListenerManager:
             for listener_config in self.config:
                 match listener_config.type:
                     case "tcp":
-                        logger.info(
-                            f"创建TCP监听器: {listener_config.name}，地址: {listener_config.host}:{listener_config.port}"
-                        )
+                        logger.info(f"创建TCP监听器: {listener_config.name}")
                         listener = TCPListener(config=listener_config)
                     case "udp":
-                        logger.info(
-                            f"创建UDP监听器: {listener_config.name}，地址: {listener_config.host}:{listener_config.port}"
-                        )
+                        logger.info(f"创建UDP监听器: {listener_config.name}")
                         listener = UDPListener(config=listener_config)
                     case _:
                         raise ValueError(f"不支持的监听器类型: {listener_config.type}")

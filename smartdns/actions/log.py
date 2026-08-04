@@ -1,9 +1,13 @@
+from typing import TYPE_CHECKING
+
 from dns.rdatatype import to_text
 from loguru import logger
 
 from smartdns.actions.base import BaseAction
-from smartdns.models.action import LogActionConfig
-from smartdns.models.context import Context
+
+if TYPE_CHECKING:
+    from smartdns.models.action import LogActionConfig
+    from smartdns.models.context import Context
 
 
 class LogAction(BaseAction):

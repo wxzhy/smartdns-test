@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+import dns.asyncbackend
 import dns.asyncquery
 import dns.message
 from anyio import create_connected_udp_socket

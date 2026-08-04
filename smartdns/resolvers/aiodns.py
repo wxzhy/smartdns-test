@@ -1,4 +1,4 @@
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import dns.rdataclass
 import dns.rdatatype
@@ -53,8 +53,10 @@ from pycares import (
 )
 
 from smartdns.models.context import Request, Response
-from smartdns.models.resolver import AioDNSResolverConfig
 from smartdns.resolvers.base import BaseResolver
+
+if TYPE_CHECKING:
+    from smartdns.models.resolver import AioDNSResolverConfig
 
 # 注册 pycares 未内置映射的记录类型（模块级，仅执行一次）。
 query_type_map.update({

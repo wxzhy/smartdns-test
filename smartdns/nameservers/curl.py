@@ -1,12 +1,16 @@
 from base64 import urlsafe_b64encode
+from typing import TYPE_CHECKING
 
+import dns.asyncbackend
 import dns.message
 from curl_cffi import AsyncSession, CurlOpt
 from loguru import logger
 
-from smartdns.models.nameserver import CurlNameserverConfig
 from smartdns.nameservers.base import BaseNameserver
-from smartdns.nameservers.client import HTTPClient
+
+if TYPE_CHECKING:
+    from smartdns.models.nameserver import CurlNameserverConfig
+    from smartdns.nameservers.client import HTTPClient
 
 
 class CurlNameserver(BaseNameserver):

@@ -1,19 +1,23 @@
+from typing import TYPE_CHECKING
+
 from dns.asyncresolver import Resolver
 from dns.rcode import Rcode
 from dns.resolver import NXDOMAIN
 from loguru import logger
 
 from smartdns.models.context import Request, Response
-from smartdns.models.resolver import PlainResolverConfig
-from smartdns.nameservers.base import BaseNameserver
-from smartdns.nameservers.manager import NameserverManager
 from smartdns.resolvers.base import BaseResolver
+
+if TYPE_CHECKING:
+    from smartdns.models.resolver import PlainResolverConfig
+    from smartdns.nameservers.base import BaseNameserver
+    from smartdns.nameservers.manager import NameserverManager
 
 
 class PlainResolver(BaseResolver, Resolver):
     def __init__(self, config: PlainResolverConfig, nameservers: NameserverManager):
-        # 两个基类 __init__ 签名不同：先初始化 dnspython Resolver（configure=False，
-        # 不读系统 DNS 配置），再初始化 BaseResolver（存 config/name/timeout）。顺序依赖 MRO。
+        # 两基类 __init__ 签名不同：先初始化 dnspython Resolver（configure=False，
+        # 不读系统 DNS 配置），再初始化 BaseResolver；顺序依赖 MRO。
         super(BaseResolver, self).__init__(configure=False)
         super().__init__(config)
         self.config: PlainResolverConfig = config
@@ -34,7 +38,7 @@ class PlainResolver(BaseResolver, Resolver):
                 logger.warning(f"Nameserver {name} 不存在")
         self.nameservers = nameservers
         logger.info(
-            f"PlainResolver {self.name} 启动成功，使用的上游DNS服务器: {self.nameservers}"
+            f"PlainResolver {self.name} 启动成功，上游数: {len(self.nameservers)}"
         )
 
     async def stop(self):

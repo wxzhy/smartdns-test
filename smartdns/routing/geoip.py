@@ -1,8 +1,13 @@
-from pathlib import Path
+
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from maxminddb import MODE_MMAP_EXT, Reader, open_database
-from pydantic.networks import IPvAnyAddress
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from pydantic.networks import IPvAnyAddress
 
 
 class GeoIP:

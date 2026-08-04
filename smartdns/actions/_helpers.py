@@ -7,11 +7,14 @@ replace/https 动作需修改应答中的 rrset，但该 Answer/Message 可能�
 """
 
 from copy import copy
+from typing import TYPE_CHECKING
 
 from dns.resolver import Answer
-from dns.rrset import RRset
 
 from smartdns.models.context import Request, Response
+
+if TYPE_CHECKING:
+    from dns.rrset import RRset
 
 
 def is_excluded(

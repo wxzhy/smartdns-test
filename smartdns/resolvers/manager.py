@@ -2,12 +2,12 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from smartdns.models.resolver import ResolverConfig
 from smartdns.resolvers.aiodns import AioDNSResolver
 from smartdns.resolvers.concurrent import ConcurrentResolver
 from smartdns.resolvers.plain import PlainResolver
 
 if TYPE_CHECKING:
+    from smartdns.models.resolver import ResolverConfig
     from smartdns.nameservers.manager import NameserverManager
     from smartdns.resolvers.base import BaseResolver
 
@@ -26,14 +26,10 @@ class ResolverManager:
                         config=resolver_config, nameservers=nameservers
                     )
                 case "aiodns":
-                    logger.info(
-                        f"创建AioDNS解析器: {resolver_config.name}，地址: {resolver_config.nameservers}:{resolver_config.port}"
-                    )
+                    logger.info(f"创建AioDNS解析器: {resolver_config.name}")
                     resolver = AioDNSResolver(config=resolver_config)
                 case "concurrent":
-                    logger.info(
-                        f"创建Concurrent解析器: {resolver_config.name}，上游解析器: {resolver_config.resolvers}"
-                    )
+                    logger.info(f"创建Concurrent解析器: {resolver_config.name}")
                     resolver = ConcurrentResolver(
                         config=resolver_config, resolvers=self
                     )

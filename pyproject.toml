@@ -49,7 +49,24 @@ select = [
     "PIE",
     "COM",
 ]
-ignore = ["RUF001", "RUF002", "RUF003", "COM812"]
+ignore = [
+    "RUF001",
+    "RUF002",
+    "RUF003",
+    "COM812",
+    # dnspython 后端 Socket ABC 与 Nameserver.async_query 接口签名强制带 timeout 参数，
+    # ASYNC109 在本 DNS 代理中系统性误报，统一禁用。
+    "ASYNC109",
+]
+
+[tool.ruff.lint.flake8-type-checking]
+# pydantic 模型/数据类在运行期需要字段注解来构建校验器（3.14 惰性注解下访问
+# __annotations__ 会触发求值），故其字段类型导入不得移入 TYPE_CHECKING。
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "pydantic_settings.BaseSettings",
+]
+runtime-evaluated-decorators = ["pydantic.dataclasses.dataclass"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

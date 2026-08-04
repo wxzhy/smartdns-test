@@ -1,11 +1,14 @@
+from typing import TYPE_CHECKING
+
 from dns.rcode import Rcode
 from dns.rdatatype import to_text
 from loguru import logger
 
-from smartdns.actions.manager import ActionManager
-from smartdns.models.context import Context
-from smartdns.models.rule import Rule
-from smartdns.resolvers.manager import ResolverManager
+if TYPE_CHECKING:
+    from smartdns.actions.manager import ActionManager
+    from smartdns.models.context import Context
+    from smartdns.models.rule import Rule
+    from smartdns.resolvers.manager import ResolverManager
 
 
 class Router:

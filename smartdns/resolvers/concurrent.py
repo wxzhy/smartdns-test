@@ -5,10 +5,10 @@ from dns.rcode import Rcode
 from loguru import logger
 
 from smartdns.models.context import Request, Response
-from smartdns.models.resolver import ConcurrentResolverConfig
 from smartdns.resolvers.base import BaseResolver
 
 if TYPE_CHECKING:
+    from smartdns.models.resolver import ConcurrentResolverConfig
     from smartdns.resolvers.manager import ResolverManager
 
 
