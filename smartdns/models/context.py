@@ -7,7 +7,6 @@ from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.rdtypes.svcbbase import IPv4HintParam, IPv6HintParam
 from dns.resolver import Answer
-from loguru import logger
 from pydantic import ConfigDict, Field
 from pydantic.dataclasses import dataclass
 from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
@@ -132,7 +131,6 @@ class Response:
         """从dns.resolver.Answer对象创建Response对象"""
         rcode = answer.response.rcode()
         if rcode != Rcode.NOERROR:
-            logger.info(f"上游返回错误码: {rcode}")
             return cls.from_rcode(rcode, upstream)
         response = cls(rcode, answer, upstream)
         response.name_list, response.name_infos = [], []
@@ -158,7 +156,6 @@ class Response:
                             response.ip_infos.append(
                                 IPInfo.from_ip(ip, resolver=upstream)
                             )
-        logger.debug(response)
         return response
 
     def __str__(self):

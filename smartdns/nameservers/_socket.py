@@ -44,21 +44,16 @@ class AnyioDatagramSocket(DatagramSocket):
     async def recvfrom(self, size, timeout):  # noqa: ASYNC109
         try:
             with fail_after(timeout):
-                # 多次接收，忽略伪造包
                 if self._use_tricks:
+                    # UDP socket 已连接，receive 即可；多次接收跳过明显伪造的包。
                     for _ in range(5):
-                        # UDP socket已经连接，receive即可，不需要recvfrom
                         data = await self._sock.receive()
-                        # data, addr = await self._sock.receive()
                         if len(data) > 32 and data[10:12] == b"\x00\x01":
-                            # return data[:size], addr
                             return data[:size], self._addr
-                    # 如果没有收到有效数据，则返回最后一次接收到的数据
+                    # 多次接收后仍无有效数据包，按超时处理。
                     raise TimeoutError("未收到有效数据包")
                 data = await self._sock.receive()
                 return data[:size], self._addr
-                # data,addr = await self._sock.receive()
-                # return data[:size], addr
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err
 
@@ -79,7 +74,6 @@ class AnyioStreamSocket(StreamSocket):
     """基于anyio的StreamSocket实现，支持超时处理"""
 
     def __init__(self, stream, use_tricks: bool = False):
-        logger.debug(f"创建AnyioStreamSocket对象，stream: {stream}")
         super().__init__(
             family=stream.extra(SocketAttribute.family, None), type=SOCK_STREAM
         )

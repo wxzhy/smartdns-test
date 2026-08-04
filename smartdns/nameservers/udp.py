@@ -61,6 +61,6 @@ class UDPNameserver(BaseAddressNameserver):
                     ignore_unexpected=True,
                     ignore_trailing=True,
                 )
-        except Exception as e:
-            logger.exception(f"UDP解析器 {self.name} 查询失败: {e}")
+        except Exception:
+            logger.exception(f"UDP解析器 {self.name} 查询失败")
             raise

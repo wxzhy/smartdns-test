@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 class ListenerManager:
     def __init__(self, config: list[ListenerConfig]):
         self.config = config
-        logger.debug(self.config)
         self.listeners: list[BaseListener] = []
 
     async def start_all(self, handler):

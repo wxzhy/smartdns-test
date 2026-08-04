@@ -7,12 +7,6 @@ from smartdns.models.resolver import AioDNSResolverConfig
 class HTTPClientConfig(BaseModel):
     """HTTP 客户端配置"""
 
-    # dns_servers: list[IPvAnyAddress] | None = Field(
-    #     default=None, description="HTTP客户端使用的DNS服务器列表"
-    # )
-    # dns_port: int = Field(default=53, ge=1, le=65535, description="DNS服务器端口")
-    # edns: bool = Field(default=True, description="是否启用EDNS")
-    # tcp_dns: bool = Field(default=False, description="是否使用TCP DNS解析")
     resolver: AioDNSResolverConfig | None = Field(
         default=None, description="HTTP客户端使用的上游DNS解析器配置"
     )
