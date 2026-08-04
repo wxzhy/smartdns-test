@@ -1,3 +1,4 @@
+from itertools import chain
 from time import time
 from typing import TYPE_CHECKING
 
@@ -10,37 +11,32 @@ if TYPE_CHECKING:
 
 
 class TTLCache(LRUCache):
-    """自动更新TTL的缓存类，继承自dns.resolver.LRUCache"""
+    """自动更新 TTL 的缓存，继承自 dns.resolver.LRUCache。
 
-    def __init__(self, maxsize: int = 10000):
-        super().__init__(maxsize)
+    注意：缓存键仅为 (qname, rdtype, rdclass)，不含客户端身份/ECS；按客户端 geo 路由
+    改写的应答会被跨客户端复用。此为已知限制，本次重构保留现状。
+    """
+
+    def __init__(self, max_size: int = 10000):
+        super().__init__(max_size)
 
     def get(self, key: CacheKey) -> Answer | None:
-        """重写get方法，获取缓存时自动更新TTL"""
+        """获取缓存并按剩余存活时间刷新各段 rrset 的 TTL。"""
         answer = super().get(key)
         if answer is not None:
-            # 更新TTL
-            ttl = int(answer.expiration - time())
-            for rrset in answer.response.answer:
-                rrset.update_ttl(ttl)
-            for rrset in answer.response.authority:
-                rrset.update_ttl(ttl)
-            for rrset in answer.response.additional:
+            ttl = max(0, int(answer.expiration - time()))
+            for rrset in chain(
+                answer.response.answer,
+                answer.response.authority,
+                answer.response.additional,
+            ):
                 rrset.update_ttl(ttl)
         return answer
 
     def cache_get(self, request: Request) -> Answer | None:
-        """根据请求获取缓存的Answer对象"""
-        key = (request.qname, request.rdtype, request.rdclass)
-        return self.get(key)
+        """根据请求获取缓存的 Answer 对象。"""
+        return self.get((request.qname, request.rdtype, request.rdclass))
 
     def cache_set(self, request: Request, answer: Answer) -> None:
-        """根据请求设置缓存的Answer对象"""
-        key = (request.qname, request.rdtype, request.rdclass)
-        super().put(key, answer)
-
-
-# class CacheManager:
-#     # 按照resolver名称的缓存
-#     caches: dict[str, TTLCache] = {}
-#     def __init__(self,config:ResolverConfig)
+        """根据请求写入缓存的 Answer 对象。"""
+        self.put((request.qname, request.rdtype, request.rdclass), answer)

@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from aiofastnet import patch_loop
 from dns.rcode import Rcode
 from loguru import logger
 
 from smartdns.actions.manager import ActionManager
-from smartdns.models.config import Config
-from smartdns.models.context import Context, Request, Response
+from smartdns.models.context import Context, Response
 from smartdns.nameservers.client import HTTPClient
 from smartdns.nameservers.manager import NameserverManager
 from smartdns.resolvers.manager import ResolverManager
 from smartdns.routing.router import Router
+
+if TYPE_CHECKING:
+    from smartdns.models.config import Config
+    from smartdns.models.context import Request
+
+
+def _servfail() -> Response:
+    """构造一个空 upstream 的 SERVFAIL 响应。"""
+    return Response.from_rcode(Rcode.SERVFAIL, upstream="")
 
 
 class Worker:
@@ -18,9 +28,8 @@ class Worker:
         self.worker_id = worker_id
         self.config = config
         self._nameservers: NameserverManager | None = None
-        # ResolverManager实例，稍后初始化
         self._resolvers: ResolverManager | None = None
-        # 规则列表，稍后初始化
+        self._actions: ActionManager | None = None
         self._rules: list[Router] = []
         self._client: HTTPClient | None = None
 
@@ -28,7 +37,6 @@ class Worker:
         """启动 Worker 服务"""
         patch_loop()
         logger.info(f"Worker {self.worker_id} 启动")
-        # 初始化HTTP客户端
         self._client = HTTPClient(config=self.config.client)
         await self._client.start()
         self._nameservers = NameserverManager(
@@ -40,33 +48,36 @@ class Worker:
         self._actions = ActionManager(config=self.config.actions, client=self._client)
         await self._actions.start_all()
         for rule in self.config.routing:
-            logger.debug(f"Worker {self.worker_id} 添加路由: {rule}")
             self._rules.append(Router(rule, self._resolvers, self._actions))
+
+    async def stop(self) -> None:
+        """停止 Worker：按依赖逆序停止各管理器并释放 HTTP 客户端。"""
+        logger.info(f"Worker {self.worker_id} 停止")
+        if self._resolvers is not None:
+            await self._resolvers.stop_all()
+        if self._nameservers is not None:
+            await self._nameservers.stop_all()
+        if self._actions is not None:
+            await self._actions.stop_all()
+        if self._client is not None:
+            await self._client.stop()
 
     async def handle(self, request: Request) -> Response:
         """处理请求"""
-        logger.debug(f"Worker {self.worker_id} 处理请求: {request}")
         ctx = Context(worker_id=self.worker_id, request=request)
         await self.process(ctx)
-        if ctx.response:
-            logger.debug(
-                f"Worker {self.worker_id} 处理请求完成: {request}, 响应: {ctx.response}"
-            )
+        if ctx.response is not None:
             return ctx.response
-        logger.debug(f"Worker {self.worker_id} 无法处理请求: {request}")
-        return Response.from_rcode(Rcode.SERVFAIL, upstream="")
+        logger.debug(f"Worker {self.worker_id} 无法处理请求: {request.qname}")
+        return _servfail()
 
-    async def process(self, context: Context):
-        """处理请求上下文"""
-        logger.info(f"Worker {self.worker_id} 处理请求上下文: {context}")
+    async def process(self, context: Context) -> None:
+        """按路由表依次处理请求上下文"""
         try:
             for rule in self._rules:
                 if await rule.query(context):
-                    logger.info(
-                        f"Worker {self.worker_id} 请求 {context.request} 匹配路由 {rule.config.name}"
-                    )
                     return
-            context.response = Response.from_rcode(Rcode.SERVFAIL, upstream="")
-        except Exception as e:
-            logger.exception(f"Worker {self.worker_id} 处理请求上下文时发生错误: {e}")
-            context.response = Response.from_rcode(Rcode.SERVFAIL, upstream="")
+            context.response = _servfail()
+        except Exception:
+            logger.exception(f"Worker {self.worker_id} 处理请求上下文失败")
+            context.response = _servfail()

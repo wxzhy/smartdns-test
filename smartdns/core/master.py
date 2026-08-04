@@ -4,6 +4,7 @@ from random import randint
 from typing import TYPE_CHECKING
 
 from aiofastnet import patch_loop
+from anyio import CancelScope
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from dns.rcode import Rcode
 from loguru import logger
@@ -15,8 +16,6 @@ from smartdns.routing.manager import init_geo_manager
 from .worker import Worker
 
 if TYPE_CHECKING:
-    from concurrent.futures import Future
-
     from dns.message import Message
 
     from smartdns.models.config import Config
@@ -31,64 +30,69 @@ class Master:
         self.workers: list[Worker] = []
         self.portals: list[BlockingPortal] = []
         self._cache = (
-            TTLCache(maxsize=config.cache_size) if config.cache_size > 0 else None
+            TTLCache(max_size=config.cache_size) if config.cache_size > 0 else None
         )
-        self._listener_manager = None  # ListenerManager实例，稍后初始化
+        self.listener_manager: ListenerManager | None = None
 
     async def start(self) -> None:
         """启动 Master 服务"""
         patch_loop()
         logger.info("启动 Master 服务")
-        # 初始化Geo数据
         if self.config.geodata:
             init_geo_manager(self.config.geodata)
         with ExitStack() as stack:
-            # 批量启动子线程
             for i in range(self.worker_count):
                 worker = Worker(worker_id=i, config=self.config)
-                ctx = start_blocking_portal(backend_options={"use_uvloop": True})
-                portal = stack.enter_context(ctx)
+                portal = stack.enter_context(
+                    start_blocking_portal(backend_options={"use_uvloop": True})
+                )
                 self.portals.append(portal)
                 self.workers.append(worker)
-                future: Future = portal.start_task_soon(worker.start)
-                await wrap_future(future)
-                logger.info(f"创建Worker {i}")
-            # 启动所有listener
-            logger.info("启动所有监听器")
+                await wrap_future(portal.start_task_soon(worker.start))
+            logger.info(f"已启动 {self.worker_count} 个 Worker，开始启动监听器")
             self.listener_manager = ListenerManager(config=self.config.listeners)
-            await self.listener_manager.start_all(handler=self.dispatch)
+            try:
+                await self.listener_manager.start_all(handler=self.dispatch)
+            finally:
+                # 停机（含取消）时屏蔽取消以完成资源清理，再退出 ExitStack 关闭 portal。
+                with CancelScope(shield=True):
+                    await self.stop()
+
+    async def stop(self) -> None:
+        """停止 Master：关闭监听器并停止各 worker（释放上游/HTTP 客户端等资源）。"""
+        logger.info("停止 Master 服务")
+        if self.listener_manager is not None:
+            await self.listener_manager.stop_all()
+        for worker, portal in zip(self.workers, self.portals, strict=False):
+            try:
+                await wrap_future(portal.start_task_soon(worker.stop))
+            except Exception:
+                logger.exception(f"停止 Worker {worker.worker_id} 失败")
 
     async def dispatch(self, request: Request) -> Message | None:
-        """分发请求到Worker并返回响应Message"""
-        logger.info(f"Master接收到请求: {request}")
-        # 读取缓存
+        """分发请求到 Worker 并返回响应 Message。"""
         if self._cache is not None:
-            cached_response = self._cache.cache_get(request)
-            if cached_response is not None:
-                logger.debug(f"从缓存中获取响应: {cached_response}")
-                return request.make_answer(cached_response)
-        # 随机选择一个worker处理
+            cached = self._cache.cache_get(request)
+            if cached is not None:
+                logger.debug(f"缓存命中: {request.qname}")
+                return request.make_answer(cached)
         worker_id = randint(0, self.worker_count - 1)
         portal = self.portals[worker_id]
         worker = self.workers[worker_id]
-        logger.info(f"分发请求到Worker {worker_id}: {request}")
-        # 使用blocking portal将请求发送到对应的worker
-        future: Future = portal.start_task_soon(worker.handle, request)
         try:
-            result: Response = await wrap_future(future)
-            logger.info(f"Worker {worker_id}处理完成请求: {request}, 响应: {result}")
+            result: Response = await wrap_future(
+                portal.start_task_soon(worker.handle, request)
+            )
             if result.rcode != Rcode.NOERROR:
                 logger.warning(
-                    f"Worker {worker_id}处理请求 {request} 返回错误码: {result.rcode}"
+                    f"Worker {worker_id} 请求 {request.qname} 返回 {result.rcode}"
                 )
                 return request.make_error(result.rcode)
             if result.ans is not None:
-                # 将响应缓存起来
-                if self._cache:
+                if self._cache is not None:
                     self._cache.cache_set(request, result.ans)
-                logger.debug(f"返回响应: {result.ans.response}")
                 return request.make_answer(result.ans)
             return None
-        except Exception as e:
-            logger.exception(f"分发请求到Worker {worker_id}时发生错误: {e}")
+        except Exception:
+            logger.exception(f"分发请求到 Worker {worker_id} 失败")
             return request.make_error(Rcode.SERVFAIL)

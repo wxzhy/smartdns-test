@@ -35,6 +35,12 @@ class HTTPClient:
         if self.resolver is not None:
             await self.resolver.start()
 
+    async def stop(self) -> None:
+        """停止HTTP客户端（停止内置解析器；curl 会话由各 CurlNameserver 自行关闭）。"""
+        logger.info("停止HTTP客户端")
+        if self.resolver is not None:
+            await self.resolver.stop()
+
     def _base_curl_options(self) -> dict[CurlOpt, object]:
         """根据客户端配置构建基础 curl 选项（DOH / 静态 hosts / DNS 缓存 / ECH）。"""
         opt: dict[CurlOpt, object] = {}
