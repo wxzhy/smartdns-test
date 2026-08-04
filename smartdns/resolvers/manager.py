@@ -15,10 +15,9 @@ if TYPE_CHECKING:
 class ResolverManager:
     def __init__(self, config: list[ResolverConfig]):
         self.config = config
-        logger.debug(self.config)
         self.resolvers: dict[str, BaseResolver] = {}
 
-    async def start_all(self, nameservers: NameserverManager):
+    async def start_all(self, nameservers: NameserverManager) -> None:
         for resolver_config in self.config:
             match resolver_config.type:
                 case "plain":
@@ -46,6 +45,6 @@ class ResolverManager:
     def get(self, name: str) -> BaseResolver | None:
         return self.resolvers.get(name, None)
 
-    async def stop_all(self):
+    async def stop_all(self) -> None:
         for resolver in self.resolvers.values():
             await resolver.stop()

@@ -3,7 +3,7 @@ from typing import cast
 import dns.rdataclass
 import dns.rdatatype
 from aiodns import DNSResolver, query_type_map
-from aiodns.error import ARES_ENODATA, DNSError
+from aiodns.error import ARES_ENODATA, ARES_ENOTFOUND, DNSError
 from dns.message import Message, QueryMessage, make_query, make_response
 from dns.name import Name, from_text
 from dns.rcode import Rcode
@@ -25,7 +25,7 @@ from dns.rdtypes.IN.HTTPS import HTTPS
 from dns.rdtypes.IN.NAPTR import NAPTR
 from dns.rdtypes.IN.SRV import SRV
 from dns.rdtypes.svcbbase import GenericParam, ParamKey
-from dns.resolver import Answer, CacheKey
+from dns.resolver import NXDOMAIN, Answer, CacheKey
 from dns.rrset import RRset
 from loguru import logger
 from pycares import (
@@ -56,6 +56,13 @@ from smartdns.models.context import Request, Response
 from smartdns.models.resolver import AioDNSResolverConfig
 from smartdns.resolvers.base import BaseResolver
 
+# 注册 pycares 未内置映射的记录类型（模块级，仅执行一次）。
+query_type_map.update({
+    "HTTPS": QUERY_TYPE_HTTPS,
+    "TLSA": QUERY_TYPE_TLSA,
+    "URI": QUERY_TYPE_URI,
+})
+
 
 class AioDNSResolver(BaseResolver):
     def __init__(self, config: AioDNSResolverConfig):
@@ -66,12 +73,6 @@ class AioDNSResolver(BaseResolver):
         self.rotate = config.rotate
         self.tries = config.tries
         self.nameservers = config.nameservers
-        # 添加HTTPS和TLS解析器类型
-        query_type_map.update({
-            "HTTPS": QUERY_TYPE_HTTPS,
-            "TLSA": QUERY_TYPE_TLSA,
-            "URI": QUERY_TYPE_URI,
-        })
         self._resolver: DNSResolver | None = None
 
     async def start(self):
@@ -99,12 +100,12 @@ class AioDNSResolver(BaseResolver):
         """处理查询"""
         try:
             answer = await self.resolve(request.qname, request.rdtype, request.rdclass)
-            return Response.from_answer(answer, upstream=self.config.name)
-        except Exception as e:
-            logger.exception(
-                f"AioDNSResolver {self.config.name} 解析请求 {request} 时发生错误: {e}"
-            )
-            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.config.name)
+            return Response.from_answer(answer, upstream=self.name)
+        except NXDOMAIN:
+            return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
+        except Exception:
+            logger.exception(f"AioDNSResolver {self.name} 解析请求失败")
+            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
     async def resolve(
         self,
@@ -127,23 +128,23 @@ class AioDNSResolver(BaseResolver):
 
             return self.make_answer(key, message)
         except DNSError as e:
-            code = e.args[0]
+            code = e.args[0] if e.args else None
             if code == ARES_ENODATA:
-                # 响应为空时正常处理，默认行为
+                # 空数据（NODATA）：返回空的 NOERROR 应答。
                 message = self.make_response(message)
                 return self.make_answer(key, message)
-            logger.error(
-                f"AioDNSResolver {self.config.name} 解析请求 {key} 时发生错误: {e}"
-            )
-            raise e
+            if code == ARES_ENOTFOUND:
+                # 域名不存在：抛 NXDOMAIN，交由 query() 转为 NXDOMAIN 响应。
+                raise NXDOMAIN(qnames=[qname]) from e
+            raise
 
     def make_query(self, key: CacheKey) -> Message:
-        """将pycares的DNSResult对象转换为dns.resolver.Answer对象"""
+        """构造 DNS 查询消息。"""
         return make_query(key[0], key[1], key[2], use_edns=self.edns, payload=1232)
 
     @staticmethod
     def make_response(message: Message, result: DNSResult | None = None) -> Message:
-        """将pycares的DNSResult对象转换为dns.resolver.Answer对象"""
+        """将 pycares 的 DNSResult 填充为 dns 响应消息。"""
         answer = make_response(message, True, our_payload=1232, pad=0)
         answer.set_rcode(Rcode.NOERROR)
         if result is None:
@@ -158,18 +159,19 @@ class AioDNSResolver(BaseResolver):
         for record in result.additional:
             rrset = AioDNSResolver.convert_record(record)
             answer.additional.append(rrset)
-        # 关闭索引
-        answer.index = None
+        # 关闭 RRset 索引（dnspython 运行期支持 index=None，其类型标注未含 None）。
+        answer.index = None  # ty: ignore[invalid-assignment]
         return answer
 
-    def make_answer(self, key: CacheKey, message: Message):
-        """转换为dns.resolver.Answer对象"""
+    def make_answer(self, key: CacheKey, message: Message) -> Answer:
+        """将消息包装为 dns.resolver.Answer 对象。"""
+        nameserver = self.nameservers[0] if self.nameservers else ""
         return Answer(
             key[0],
             key[1],
             key[2],
             cast("QueryMessage", message),
-            self.nameservers[0],
+            nameserver,
             self.port,
         )
 
@@ -204,13 +206,11 @@ class AioDNSResolver(BaseResolver):
                     params[key] = value
                 rdata = HTTPS(rdclass, rdtype, rdata.priority, rdata.target, params)
                 rdata_raw = rdata.to_wire()
-                logger.debug(f"HTTPS记录的rdata原始数据: {rdata_raw}")
                 if not rdata_raw:
                     raise ValueError("HTTPS记录的rdata为空")
                 new_rdata = from_wire(
                     rdclass, rdtype, rdata_raw, current=0, rdlen=len(rdata_raw)
                 )
-                logger.debug(f"HTTPS记录的rdata转换后的对象: {new_rdata}")
                 rrset.add(new_rdata)
             case NAPTRRecordData():
                 rrset.add(
