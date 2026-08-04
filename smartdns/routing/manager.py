@@ -1,4 +1,5 @@
 from dns.name import Name
+from pydantic.networks import IPvAnyAddress
 
 from smartdns.models.geodata import GeoDataConfig
 from smartdns.routing.geoip import GeoIP
@@ -25,7 +26,7 @@ class GeoManager:
             self.ipset = IPSet()
             self.ipset.load(config.ipset)
 
-    def lookup_ip(self, ip: str) -> tuple[set[str], int | None]:
+    def lookup_ip(self, ip: str | IPvAnyAddress) -> tuple[set[str], int | None]:
         """查找IP对应的国家和ASN"""
         tags = set()
         asn = None

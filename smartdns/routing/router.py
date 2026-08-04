@@ -31,64 +31,70 @@ class Router:
                     self.after.append(action)
         if self._upstream:
             self.resolver = self._resolvers.get(self._upstream)
-        logger.info(f"启动 {self.config.name} resolver名称:{self._upstream}")
+            if self.resolver is None:
+                logger.warning(
+                    f"路由 {self.config.name} 的上游解析器 {self._upstream} 不存在"
+                )
+        logger.info(f"启动路由 {self.config.name}，上游: {self._upstream}")
 
-    async def match(self, context: Context) -> bool:
-        """匹配请求上下文是否符合路由规则"""
-        if not self._matcher:
-            logger.debug(f"路由 {self.config.name} 没有匹配器，默认匹配所有请求")
+    def match(self, context: Context) -> bool:
+        """判断请求是否匹配本路由规则。"""
+        matcher = self._matcher
+        if matcher is None:
             return True
         request = context.request
-        query_type = to_text(request.rdtype)
-        if (
-            self._matcher.query_types is not None
-            and query_type not in self._matcher.query_types
+        if matcher.query_types is not None:
+            query_type = to_text(request.rdtype).upper()
+            if query_type not in {qt.upper() for qt in matcher.query_types}:
+                logger.debug(f"路由 {self.config.name} 不匹配查询类型 {query_type}")
+                return False
+        country = request.name_info.country
+        # domain_include 为 fail-closed：无法确认归属（含无 geo 数据）则不匹配。
+        if matcher.domain_include is not None and (
+            country is None or not (country & matcher.domain_include)
         ):
-            logger.debug(f"路由 {self.config.name} 不匹配查询类型 {query_type}")
+            logger.debug(
+                f"路由 {self.config.name} 域名 {request.qname} 不在 domain_include"
+            )
             return False
-        if request.name_info.country is not None:
-            if (
-                self._matcher.domain_include is not None
-                and not request.name_info.country & self._matcher.domain_include
-            ):
-                logger.debug(f"路由 {self.config.name} 不匹配域名 {request.qname}")
-                return False
-            if (
-                self._matcher.domain_exclude is not None
-                and request.name_info.country & self._matcher.domain_exclude
-            ):
-                logger.debug(f"路由 {self.config.name} 不匹配域名 {request.qname}")
-                return False
+        if (
+            matcher.domain_exclude is not None
+            and country is not None
+            and country & matcher.domain_exclude
+        ):
+            logger.debug(
+                f"路由 {self.config.name} 域名 {request.qname} 命中 domain_exclude"
+            )
+            return False
         return True
 
     async def query(self, context: Context) -> bool:
-        """处理请求上下文"""
-        if await self.match(context):
-            logger.info(f"路由 {self.config.name} 匹配请求 {context.request}")
-            for action in self.before:
-                await action.on_request(context)
-                if context.stop:
-                    logger.info(
-                        f"路由 {self.config.name} 在 before 阶段停止请求 {context.request}"
-                    )
-                    return True
-            if self.resolver is not None:
-                context.response = await self.resolver.query(context.request)
-            if (
-                not context.response
-                or context.response.rcode != Rcode.NOERROR
-                or context.stop
-            ):
-                logger.info(
-                    f"路由 {self.config.name} 在 resolver 阶段停止请求 {context.request}"
-                )
+        """按规则处理请求：before 动作 → resolver → after 动作。
+
+        返回 True 表示本路由已产出最终应答（停止后续路由）；
+        返回 False 表示本路由未处理（交由后续路由）。
+        """
+        if not self.match(context):
+            return False
+        request = context.request
+        logger.debug(f"路由 {self.config.name} 匹配 {request.qname}")
+        for action in self.before:
+            await action.on_request(context)
+            if context.stop:
+                logger.debug(f"路由 {self.config.name} 在 before 阶段停止")
                 return True
-            for action in self.after:
-                await action.on_response(context)
-                if context.stop:
-                    logger.info(
-                        f"路由 {self.config.name} 在 after 阶段停止请求 {context.request}"
-                    )
-                    return True
+        if self.resolver is not None:
+            context.response = await self.resolver.query(request)
+        if context.response is None:
+            # 无 resolver 或未产出应答：交后续路由，避免黑洞式吞掉请求。
+            logger.debug(f"路由 {self.config.name} 未产出应答，交后续路由")
+            return False
+        if context.response.rcode != Rcode.NOERROR:
+            # 权威否定/失败应答（NXDOMAIN 等）作为最终结果，跳过 after 动作。
             return True
-        return False
+        for action in self.after:
+            await action.on_response(context)
+            if context.stop:
+                logger.debug(f"路由 {self.config.name} 在 after 阶段停止")
+                return True
+        return True
