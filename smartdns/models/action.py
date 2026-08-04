@@ -19,13 +19,6 @@ class LogActionConfig(BaseActionConfig):
     text: str = Field(description="日志文本")
 
 
-class PrintActionConfig(BaseActionConfig):
-    """Print Action 配置。"""
-
-    type: Literal["print"]
-    text: str = Field(description="打印文本")
-
-
 class StaticActionConfig(BaseActionConfig):
     """静态返回 Action 配置。"""
 
@@ -81,7 +74,6 @@ class HTTPSActionConfig(BaseActionConfig):
 
 ActionConfig = Annotated[
     LogActionConfig
-    | PrintActionConfig
     | StaticActionConfig
     | ReplaceActionConfig
     | HTTPSActionConfig,

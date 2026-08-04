@@ -1,40 +1,26 @@
 from smartdns.models.action import BaseActionConfig
-from smartdns.models.context import Context, Request, Response
+from smartdns.models.context import Context
 
 
 class BaseAction:
-    """Base Action 类。"""
+    """Base Action 类。
+
+    生命周期方法与 hook 默认 no-op，各 Action 只覆写关心的阶段；
+    放到"错误"阶段时即无操作，而非抛 NotImplementedError 被吞成 SERVFAIL。
+    """
 
     def __init__(self, config: BaseActionConfig):
         self.name = config.name
         self.config = config
 
-    async def start(self):
+    async def start(self) -> None:
         """启动 Action"""
-        raise NotImplementedError
 
-    async def stop(self):
+    async def stop(self) -> None:
         """停止 Action"""
-        raise NotImplementedError
 
-    async def on_request(self, context: Context):
-        """在处理请求时，转发到resolver之前调用"""
-        raise NotImplementedError
+    async def on_request(self, context: Context) -> None:
+        """转发到 resolver 之前调用（before 阶段）。"""
 
-    async def pre_upstream(self, context: Context, request: Request):
-        """在resolver转发请求之前调用"""
-        raise NotImplementedError
-
-    async def post_upstream(
-        self, context: Context, request: Request, response: Response
-    ):
-        """在resolver转发请求，收到响应之后调用"""
-        raise NotImplementedError
-
-    async def on_subquery(self, context: Context):
-        """在处理子查询时调用"""
-        raise NotImplementedError
-
-    async def on_response(self, context: Context):
-        """在处理响应时，转发到客户端之前调用"""
-        raise NotImplementedError
+    async def on_response(self, context: Context) -> None:
+        """转发到客户端之前调用（after 阶段）。"""

@@ -1,22 +1,24 @@
+from dns.rdatatype import to_text
 from loguru import logger
 
 from smartdns.actions.base import BaseAction
-from smartdns.models.action import ActionConfig
+from smartdns.models.action import LogActionConfig
 from smartdns.models.context import Context
 
 
 class LogAction(BaseAction):
-    """日志 Action，用于记录请求信息"""
+    """日志 Action，用于记录请求摘要"""
 
-    def __init__(self, config: ActionConfig):
+    def __init__(self, config: LogActionConfig):
         super().__init__(config)
         self.text = config.text
 
-    async def start(self):
-        logger.info(f"LogAction {self.name} started with text: {self.text}")
+    async def start(self) -> None:
+        logger.info(f"启动 Log Action {self.name}: {self.text}")
 
-    async def stop(self):
-        logger.info(f"LogAction {self.name} stopped")
-
-    async def on_request(self, context: Context):
-        logger.info(f"LogAction {self.name} on_request: {context.request}")
+    async def on_request(self, context: Context) -> None:
+        request = context.request
+        logger.info(
+            f"[{self.text}] {request.qname} {to_text(request.rdtype)} "
+            f"from {request.remote_address}"
+        )
