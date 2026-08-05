@@ -56,6 +56,7 @@ from smartdns.models.context import Request, Response
 from smartdns.resolvers.base import BaseResolver
 
 if TYPE_CHECKING:
+    from smartdns.models.context import Context
     from smartdns.models.resolver import AioDNSResolverConfig
 
 # 注册 pycares 未内置映射的记录类型（模块级，仅执行一次）。
@@ -98,7 +99,7 @@ class AioDNSResolver(BaseResolver):
         """停止解析器"""
         self._resolver = None
 
-    async def query(self, request: Request) -> Response:
+    async def query(self, request: Request, context: Context | None = None) -> Response:
         """处理查询"""
         try:
             answer = await self.resolve(request.qname, request.rdtype, request.rdclass)

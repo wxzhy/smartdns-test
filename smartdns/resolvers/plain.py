@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING
 
 from dns.asyncresolver import Resolver
+from dns.edns import ECSOption
 from dns.rcode import Rcode
 from dns.resolver import NXDOMAIN
 from loguru import logger
@@ -9,6 +10,7 @@ from smartdns.models.context import Request, Response
 from smartdns.resolvers.base import BaseResolver
 
 if TYPE_CHECKING:
+    from smartdns.models.context import Context
     from smartdns.models.resolver import PlainResolverConfig
     from smartdns.nameservers.base import BaseNameserver
     from smartdns.nameservers.manager import NameserverManager
@@ -23,6 +25,11 @@ class PlainResolver(BaseResolver, Resolver):
         self.config: PlainResolverConfig = config
         self.rotate = config.rotate
         self.edns = config.edns
+        self.payload = 1232
+        if config.ecs is not None:
+            self.ednsoptions = [
+                ECSOption(str(config.ecs.network_address), config.ecs.prefixlen)
+            ]
         self.lifetime = config.lifetime
         self._upstreams = config.nameservers
         self._manager: NameserverManager = nameservers
@@ -46,7 +53,7 @@ class PlainResolver(BaseResolver, Resolver):
         self.nameservers = []
         logger.info(f"PlainResolver {self.name} 停止成功")
 
-    async def query(self, request: Request) -> Response:
+    async def query(self, request: Request, context: Context | None = None) -> Response:
         """解析域名"""
         try:
             answer = await self.resolve(

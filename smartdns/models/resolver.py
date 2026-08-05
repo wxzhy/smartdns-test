@@ -34,6 +34,9 @@ class AioDNSResolverConfig(BaseResolverConfig):
     cache_size: int = Field(default=0, ge=0, description="缓存大小")
     rotate: bool = Field(default=True, description="是否轮询上游nameserver")
     edns: bool = Field(default=True, description="是否启用EDNS")
+    ecs: IPvAnyNetwork | None = Field(
+        default=None, description="是否启用ECS，指定ECS网段"
+    )
     tcp: bool = Field(default=False, description="是否启用TCP")
     tries: int = Field(default=5, ge=1, description="请求尝试次数")
 
@@ -43,6 +46,10 @@ class ConcurrentResolverConfig(BaseResolverConfig):
 
     type: Literal["concurrent"]
     resolvers: list[str] = Field(description="上游resolver名称列表")
+    actions: list[str] = Field(
+        default_factory=list, description="请求完成后执行的动作列表"
+    )
+    wait_all: bool = Field(default=False, description="是否等待所有请求完成")
 
 
 ResolverConfig = Annotated[

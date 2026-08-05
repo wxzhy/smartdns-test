@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from smartdns.models.context import Request, Response
+    from smartdns.models.context import Context, Request, Response
     from smartdns.models.resolver import BaseResolverConfig
 
 
@@ -21,5 +21,9 @@ class BaseResolver(ABC):
         """停止解析器"""
 
     @abstractmethod
-    async def query(self, request: Request) -> Response:
-        """解析域名"""
+    async def query(self, request: Request, context: Context | None = None) -> Response:
+        """解析域名。
+
+        context 供需要向全局上下文写回中间结果的解析器使用（如 ConcurrentResolver
+        的候选应答列表）；不关心上下文的解析器忽略该参数即可。
+        """

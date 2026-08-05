@@ -16,7 +16,6 @@ class AddressNameserverConfig(BaseNameserverConfig):
 
     address: IPvAnyAddress | str = Field(description="目标地址")
     port: int = Field(ge=1, le=65535, description="目标端口")
-    use_tricks: bool = Field(default=False, description="是否使用收发技巧")
 
 
 class UDPNameserverConfig(AddressNameserverConfig):
@@ -24,6 +23,7 @@ class UDPNameserverConfig(AddressNameserverConfig):
 
     type: Literal["udp"]
     repeat: int = Field(default=0, ge=0, description="请求重复次数")
+    use_tricks: bool = Field(default=False, description="是否使用接收技巧")
 
 
 class TCPNameserverConfig(AddressNameserverConfig):
@@ -31,6 +31,7 @@ class TCPNameserverConfig(AddressNameserverConfig):
 
     type: Literal["tcp"]
     pool_size: int = Field(default=0, ge=0, description="连接池大小")
+    use_tricks: bool = Field(default=False, description="是否使用发送技巧")
 
 
 class CurlNameserverConfig(BaseNameserverConfig):

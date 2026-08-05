@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from smartdns.models.action import BaseActionConfig
-    from smartdns.models.context import Context
+    from smartdns.models.context import Context, Response
 
 
 class BaseAction:
@@ -24,6 +24,9 @@ class BaseAction:
 
     async def on_request(self, context: Context) -> None:
         """转发到 resolver 之前调用（before 阶段）。"""
+
+    async def on_resolver(self, context: Context, response: Response) -> None:
+        """转发到 resolver 之后调用（after 阶段）。"""
 
     async def on_response(self, context: Context) -> None:
         """转发到客户端之前调用（after 阶段）。"""

@@ -87,7 +87,7 @@ class Router:
                 logger.debug(f"路由 {self.config.name} 在 before 阶段停止")
                 return True
         if self.resolver is not None:
-            context.response = await self.resolver.query(request)
+            context.response = await self.resolver.query(request, context)
         if context.response is None:
             # 无 resolver 或未产出应答：交后续路由，避免黑洞式吞掉请求。
             logger.debug(f"路由 {self.config.name} 未产出应答，交后续路由")
