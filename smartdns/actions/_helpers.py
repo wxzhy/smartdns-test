@@ -17,9 +17,21 @@ if TYPE_CHECKING:
     from dns.rrset import RRset
 
 
-def is_excluded(
-    request: Request, response: Response, exclude: set[str] | None
-) -> bool:
+def is_included(request: Request, response: Response, include: set[str] | None) -> bool:
+    """请求域名或其 CNAME 链命中 include 标签集合则返回 True。"""
+    if include is None:
+        return False
+    country = request.name_info.country
+    if country is not None and country & include:
+        return True
+    if response.name_infos is not None:
+        for cname in response.name_infos:
+            if cname.country is not None and cname.country & include:
+                return True
+    return False
+
+
+def is_excluded(request: Request, response: Response, exclude: set[str] | None) -> bool:
     """请求域名或其 CNAME 链命中 exclude 标签集合则返回 True。"""
     if exclude is None:
         return False

@@ -6,9 +6,11 @@ from typing import TYPE_CHECKING
 from aiofastnet import patch_loop
 from anyio import CancelScope
 from anyio.from_thread import BlockingPortal, start_blocking_portal
+from cachetools import TLRUCache
 from dns.rcode import Rcode
 from loguru import logger
 
+from smartdns.actions._speedtest import set_cache
 from smartdns.core.cache import TTLCache
 from smartdns.listeners.manager import ListenerManager
 from smartdns.routing.manager import init_geo_manager
@@ -40,6 +42,8 @@ class Master:
         logger.info("启动 Master 服务")
         if self.config.geodata:
             init_geo_manager(self.config.geodata)
+        cache = TLRUCache(maxsize=10000, ttu=1800)
+        set_cache(cache)
         with ExitStack() as stack:
             for i in range(self.worker_count):
                 worker = Worker(worker_id=i, config=self.config)

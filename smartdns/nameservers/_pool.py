@@ -26,17 +26,12 @@ class TCPStreamConnectionManager(BaseConnectionManager[TcpEndpoint, SocketStream
         await conn.aclose()
 
     async def check_aliveness(self, endpoint: TcpEndpoint, conn: SocketStream) -> bool:
-        raw: socket.socket | None = conn.extra(SocketAttribute.raw_socket, None)
+        raw = conn.extra(SocketAttribute.raw_socket, None)
         if raw is None:
             return False
+        # 直接获取底层socket
+        probe = raw._sock  # ty: ignore[unresolved-attribute]
         try:
-            # asyncio 后端的 raw_socket 是受限的 TransportSocket（禁用 recv），
-            # 故复制一个真实 socket 副本做非阻塞窥探，用后即关（不影响原连接）。
-            probe = raw.dup()
-        except OSError:
-            return False
-        try:
-            probe.setblocking(False)
             # 对端关闭时返回 b""；无数据时抛 BlockingIOError（仍存活）。
             return probe.recv(1, socket.MSG_PEEK) != b""
         except BlockingIOError:

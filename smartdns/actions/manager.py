@@ -4,11 +4,13 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from smartdns.actions.fallback import FallbackAction
 from smartdns.actions.https import HTTPSAction
 from smartdns.actions.log import LogAction
 from smartdns.actions.replace import ReplaceAction
 from smartdns.actions.static import StaticAction
 from smartdns.models.action import (
+    FallbackActionConfig,
     HTTPSActionConfig,
     LogActionConfig,
     ReplaceActionConfig,
@@ -42,6 +44,9 @@ class ActionManager:
                 case HTTPSActionConfig():
                     logger.info(f"创建HTTPS Action: {action_config.name}")
                     action = HTTPSAction(config=action_config, client=self._client)
+                case FallbackActionConfig():
+                    logger.info(f"创建Fallback Action: {action_config.name}")
+                    action = FallbackAction(config=action_config)
                 case _:
                     raise ValueError(f"不支持的操作类型: {action_config.type}")
             await action.start()

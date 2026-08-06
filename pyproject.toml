@@ -13,6 +13,7 @@ dependencies = [
     "curl-cffi==0.16.0",
     "dnspython[doh,idna]>=2.8.0",
     "generic-connection-pool>=0.8.1",
+    "icmplib>=3.0.4",
     "loguru>=0.7.3",
     "marisa-trie>=1.4.1",
     "maxminddb>=3.1.1",

@@ -78,10 +78,52 @@ class HTTPSActionConfig(BaseActionConfig):
     )
 
 
+class FallbackMap(BaseModel):
+    """Fallback 映射配置。"""
+
+    domain_include: set[str] = Field(description="Fallback 映射的标签")
+    ip_include: set[str] = Field(description="Fallback 映射的IP地址")
+    ipv4: set[IPv4Address] | None = Field(
+        default=None,
+        description="静态返回的 IPv4 地址",
+    )
+    ipv6: set[IPv6Address] | None = Field(
+        default_factory=set,
+        description="静态返回的 IPv6 地址",
+    )
+
+
+class SpeedtestConfig(BaseModel):
+    """Speedtest 配置。"""
+
+    ping: bool = Field(default=True, description="是否启用ping测速")
+    port: set[int] | None = Field(
+        default=None, description="测速端口列表，空表示不测速"
+    )
+    timeout: float = Field(default=0.5, ge=0.1, description="测速超时时间（秒）")
+
+
+class FallbackActionConfig(BaseActionConfig):
+    """Fallback Action 配置。"""
+
+    type: Literal["fallback"]
+    ping: bool = Field(default=True, description="是否启用ping检测")
+    exclude: set[str] | None = Field(
+        default=None, description="不进行ping检测的域名列表"
+    )
+    speedtest: SpeedtestConfig = Field(
+        default_factory=SpeedtestConfig, description="测速配置"
+    )
+    map: list[FallbackMap] = Field(
+        default_factory=list, description="Fallback 映射列表"
+    )
+
+
 ActionConfig = Annotated[
     LogActionConfig
     | StaticActionConfig
     | ReplaceActionConfig
-    | HTTPSActionConfig,
+    | HTTPSActionConfig
+    | FallbackActionConfig,
     Field(discriminator="type"),
 ]

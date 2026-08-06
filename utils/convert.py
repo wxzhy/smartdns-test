@@ -3,6 +3,7 @@ from collections import defaultdict
 from itertools import chain, repeat
 from pathlib import Path
 
+import ujson
 from dns.name import from_text
 from marisa_trie import BytesTrie
 from pydantic import DirectoryPath, FilePath
@@ -43,11 +44,11 @@ def main(
             for domain in entry.domain:
                 if domain.type != DomainType.Regex:
                     normalized = normalize(domain.value)
-                    sites[entry.country_code].add(normalized)
+                    sites[entry.country_code.lower()].add(normalized)
                     # 额外的标签
                     if domain.attribute:
                         for attr in domain.attribute:
-                            sites[attr.key].add(normalized)
+                            sites[attr.key.lower()].add(normalized)
     geosite_path = tag_path / "geosite"
     if geosite_path.exists():
         for tag_file in geosite_path.glob("*.txt"):
@@ -56,7 +57,7 @@ def main(
                 for line in f:
                     if line and not line.startswith("#"):
                         normalized = normalize(line.strip())
-                        sites[tag_name].add(normalized)
+                        sites[tag_name.lower()].add(normalized)
     geoip_path = tag_path / "geoip"
     if geoip_path.exists():
         for tag_file in geoip_path.glob("*.txt"):
@@ -76,7 +77,11 @@ def main(
                         node.data[tag_name.lower()] = True
     if output_path.exists():
         # print(sites)
-        # ujson.dump(sites, (output_path / "geosite.json").open("w", encoding="utf-8"))
+        ujson.dump(
+            sites,
+            (output_path / "geosite.json").open("w", encoding="utf-8"),
+            default=tuple,
+        )
         tags, domains = [], []
         for k, v in sites.items():
             # 添加域名到列表中
