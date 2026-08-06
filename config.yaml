@@ -71,9 +71,9 @@ nameservers:
     timeout: 3
   - name: curl-doh
     type: curl
-    url: https://dns.cloudflare.com/dns-query
-    host: dns.cloudflare.com
-    want_get: true
+    url: https://jxl61mtx82.cloudflare-gateway.com/dns-query
+    host: jxl61mtx82.cloudflare-gateway.com
+    want_get: false
     verify: true
     ech: crypto.cloudflare.com
 resolvers:
@@ -119,6 +119,11 @@ resolvers:
     type: plain
     nameservers:
       - curl-doh
+  - name: doh-goog
+    type: plain
+    nameservers:
+      - curl-doh
+    ecs: 2409:8020:2000::/48
     timeout: 3
     lifetime: 5
   - name: google
@@ -142,7 +147,7 @@ actions:
     type: replace
     exclude:
       - mozilla
-      - paypal
+      - google
       - cn
       - cloudflare-cn
       - google-cn
@@ -177,6 +182,7 @@ actions:
   - name: fallback
     type: fallback
     exclude:
+      - googlefcm
       - google-cn
       - category-ntp
       - category-stun
@@ -203,12 +209,16 @@ routing:
       domain_include:
         - category-ads-all
         - category-ads
+  - name: rule-google
+    resolver: doh-goog
+    matcher:
+      domain_include:
+        - google-cn
   - name: rule1
     resolver: cn
     matcher:
       domain_include:
         - cn
-        - google-cn
   - name: rule2
     matcher:
       domain_include:

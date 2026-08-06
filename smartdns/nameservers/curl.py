@@ -90,7 +90,10 @@ class CurlNameserver(BaseNameserver):
                 result = await self._curl.post(
                     self.url,
                     data=message,
-                    headers={"Host": self.host},
+                    headers={
+                        "Host": self.host,
+                        "Content-Type": "application/dns-message",
+                    },
                     timeout=int(timeout),
                     verify=self.verify,
                 )
