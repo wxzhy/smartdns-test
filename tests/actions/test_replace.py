@@ -17,7 +17,8 @@ from dns.rrset import RRset
 
 from smartdns.actions.replace import ReplaceAction
 from smartdns.models.action import ReplaceActionConfig, ReplaceActionMap
-from smartdns.models.context import Context, IPInfo, Request, Response
+from smartdns.models.context import Context, Request, Response
+from smartdns.models.geodata import IPInfo
 
 
 def _a_response(*ips: str) -> Response:

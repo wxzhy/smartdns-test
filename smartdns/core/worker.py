@@ -44,9 +44,12 @@ class Worker:
         )
         await self._nameservers.start_all()
         self._resolvers = ResolverManager(config=self.config.resolvers)
-        await self._resolvers.start_all(nameservers=self._nameservers)
         self._actions = ActionManager(config=self.config.actions, client=self._client)
         await self._actions.start_all()
+        await self._resolvers.start_all(
+            nameservers=self._nameservers, actions=self._actions
+        )
+
         for rule in self.config.routing:
             self._rules.append(Router(rule, self._resolvers, self._actions))
 

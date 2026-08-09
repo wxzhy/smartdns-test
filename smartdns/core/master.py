@@ -10,7 +10,7 @@ from cachetools import TLRUCache
 from dns.rcode import Rcode
 from loguru import logger
 
-from smartdns.actions._speedtest import set_cache
+from smartdns.actions._ping import set_cache
 from smartdns.core.cache import TTLCache
 from smartdns.listeners.manager import ListenerManager
 from smartdns.routing.manager import init_geo_manager

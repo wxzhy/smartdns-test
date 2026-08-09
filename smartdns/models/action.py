@@ -3,6 +3,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+from smartdns.models.rule import RequestMatcher, ResponseIPMatcher
+
 
 class BaseActionConfig(BaseModel):
     """Action 配置基类。"""
@@ -34,7 +36,7 @@ class StaticActionConfig(BaseActionConfig):
 class ReplaceActionMap(BaseModel):
     """替换映射配置。"""
 
-    tag: set[str] = Field(description="替换映射的标签")
+    match_ip: ResponseIPMatcher = Field(description="替换映射的标签")
     ipv4_prefixlen: int = Field(
         default=32, ge=0, le=32, description="替换映射的 IPv4 前缀长度，默认为 32"
     )
@@ -53,7 +55,8 @@ class ReplaceActionConfig(BaseActionConfig):
     """替换IP Action 配置。"""
 
     type: Literal["replace"]
-    exclude: set[str] | None = Field(default=None, description="不进行替换的域名列表")
+    # exclude: set[str] | None = Field(default=None, description="不进行替换的域名列表")
+    match_name: RequestMatcher = Field(description="替换IP操作的请求匹配器")
     replace_map: list[ReplaceActionMap] = Field(
         default_factory=list, description="替换映射列表"
     )
@@ -70,8 +73,10 @@ class HTTPSActionConfig(BaseActionConfig):
         default=True, description="是否移除 HTTPS ALPN 中的 h3 参数"
     )
     add_ech: bool = Field(default=True, description="是否添加 HTTPS 中的 ech 参数")
-    exclude: set[str] | None = Field(default=None, description="不进行添加的域名列表")
-    tag: set[str] = Field(description="匹配的标签")
+    # exclude: set[str] | None = Field(default=None, description="不进行添加的域名列表")
+    match_name: RequestMatcher = Field(description="匹配的域名")
+    match_ip: ResponseIPMatcher = Field(description="匹配的IP地址")
+    # tag: set[str] = Field(description="匹配的标签")
     ech_domain: str = Field(
         default="crypto.cloudflare.com",
         description="ECH 域名，表示使用请求的域名",
@@ -81,8 +86,10 @@ class HTTPSActionConfig(BaseActionConfig):
 class FallbackMap(BaseModel):
     """Fallback 映射配置。"""
 
-    domain_include: set[str] = Field(description="Fallback 映射的标签")
-    ip_include: set[str] = Field(description="Fallback 映射的IP地址")
+    # domain_include: set[str] = Field(description="Fallback 映射的标签")
+    # ip_include: set[str] = Field(description="Fallback 映射的IP地址")
+    match_name: RequestMatcher = Field(description="匹配的域名")
+    match_ip: ResponseIPMatcher = Field(description="匹配的IP地址")
     ipv4: set[IPv4Address] | None = Field(
         default=None,
         description="静态返回的 IPv4 地址",
@@ -93,14 +100,25 @@ class FallbackMap(BaseModel):
     )
 
 
-class SpeedtestConfig(BaseModel):
-    """Speedtest 配置。"""
+class PingConfig(BaseModel):
+    """ping 测速配置。"""
 
     ping: bool = Field(default=True, description="是否启用ping测速")
     port: set[int] | None = Field(
         default=None, description="测速端口列表，空表示不测速"
     )
     timeout: float = Field(default=0.5, ge=0.1, description="测速超时时间（秒）")
+
+
+class SpeedcheckConfig(BaseActionConfig):
+    """Speedcheck 配置。"""
+
+    type: Literal["speedcheck"]
+    ping_config: PingConfig = Field(default_factory=PingConfig, description="测速配置")
+    match_ip: ResponseIPMatcher = Field(description="测速匹配器")
+    weight: list[str] | None = Field(
+        default=None, description="测速权重列表，按顺序匹配，空表示不添加"
+    )
 
 
 class FallbackActionConfig(BaseActionConfig):
@@ -111,9 +129,7 @@ class FallbackActionConfig(BaseActionConfig):
     exclude: set[str] | None = Field(
         default=None, description="不进行ping检测的域名列表"
     )
-    speedtest: SpeedtestConfig = Field(
-        default_factory=SpeedtestConfig, description="测速配置"
-    )
+    speedtest: PingConfig = Field(default_factory=PingConfig, description="测速配置")
     map: list[FallbackMap] = Field(
         default_factory=list, description="Fallback 映射列表"
     )
@@ -124,6 +140,7 @@ ActionConfig = Annotated[
     | StaticActionConfig
     | ReplaceActionConfig
     | HTTPSActionConfig
-    | FallbackActionConfig,
+    | FallbackActionConfig
+    | SpeedcheckConfig,
     Field(discriminator="type"),
 ]

@@ -33,9 +33,6 @@ class PlainResolver(BaseResolver, Resolver):
         self.lifetime = config.lifetime
         self._upstreams = config.nameservers
         self._manager: NameserverManager = nameservers
-
-    async def start(self):
-        """启动解析器"""
         nameservers: list[BaseNameserver] = []
         for name in self._upstreams:
             ns = self._manager.get(name)
@@ -44,6 +41,10 @@ class PlainResolver(BaseResolver, Resolver):
             else:
                 logger.warning(f"Nameserver {name} 不存在")
         self.nameservers = nameservers
+
+    async def start(self):
+        """启动解析器"""
+
         logger.info(
             f"PlainResolver {self.name} 启动成功，上游数: {len(self.nameservers)}"
         )

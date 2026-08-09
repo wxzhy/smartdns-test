@@ -7,7 +7,7 @@ from dns.rdtypes.svcbbase import ALPNParam, ECHParam, ParamKey
 from dns.rrset import RRset
 from loguru import logger
 
-from smartdns.actions._helpers import is_excluded, replace_answer_rrset
+# from smartdns.actions._helpers import is_excluded, replace_answer_rrset
 from smartdns.actions.base import BaseAction
 
 if TYPE_CHECKING:
@@ -21,8 +21,8 @@ class HTTPSAction(BaseAction):
 
     def __init__(self, config: HTTPSActionConfig, client: HTTPClient):
         super().__init__(config)
-        self.exclude = config.exclude
-        self.tags: set[str] = config.tag
+        self._match_name = config.match_name
+        self._match_ip = config.match_ip
         self._add_ech = config.add_ech
         self._remove_hint = config.remove_hint
         self._remove_h3 = config.remove_h3

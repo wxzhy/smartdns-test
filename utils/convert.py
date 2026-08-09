@@ -35,6 +35,7 @@ def main(
 ):
     """将 GeoSite 数据转换为 SmartDNS 可用的格式"""
     # 读取GeoSite数据
+    sites_normalized = defaultdict(set)
     sites = defaultdict(set)
     radix = Radix()
     if geodata_path.exists():
@@ -44,11 +45,15 @@ def main(
             for domain in entry.domain:
                 if domain.type != DomainType.Regex:
                     normalized = normalize(domain.value)
-                    sites[entry.country_code.lower()].add(normalized)
+                    code = entry.country_code.lower()
+                    sites[code].add(domain.value)
+                    sites_normalized[code].add(normalized)
                     # 额外的标签
                     if domain.attribute:
                         for attr in domain.attribute:
-                            sites[attr.key.lower()].add(normalized)
+                            code = attr.key.lower()
+                            sites[code].add(domain.value)
+                            sites_normalized[code].add(normalized)
     geosite_path = tag_path / "geosite"
     if geosite_path.exists():
         for tag_file in geosite_path.glob("*.txt"):
@@ -57,7 +62,7 @@ def main(
                 for line in f:
                     if line and not line.startswith("#"):
                         normalized = normalize(line.strip())
-                        sites[tag_name.lower()].add(normalized)
+                        sites_normalized[tag_name.lower()].add(normalized)
     geoip_path = tag_path / "geoip"
     if geoip_path.exists():
         for tag_file in geoip_path.glob("*.txt"):
@@ -83,7 +88,7 @@ def main(
             default=tuple,
         )
         tags, domains = [], []
-        for k, v in sites.items():
+        for k, v in sites_normalized.items():
             # 添加域名到列表中
             tags.append(repeat(k.lower().encode("ascii"), len(v)))
             domains.append(v)

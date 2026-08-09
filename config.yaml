@@ -143,63 +143,63 @@ resolvers:
 actions:
   - name: block
     type: static
-  - name: replace
-    type: replace
-    exclude:
-      - mozilla
-      - google
-      - cn
-      - cloudflare-cn
-      - google-cn
-      - category-ntp
-      - category-stun
-      - cloudflare-cn
-    replace_map:
-      - tag:
-          - cloudflare
-        ipv4:
-          - 162.159.38.0
-          - 162.159.39.0
-          - 162.159.44.0
-          - 162.159.45.0
-        ipv6:
-          - "2606:4700:52::"
-          - "2606:4700:57::"
-          - "2606:4700:5a::"
-      - tag:
-          - fastly
-        ipv4_prefixlen: 22
-        ipv6_prefixlen: 64
-        ipv4:
-          - 146.75.48.0
-        ipv6:
-          - "2a04:4e42:7c::"
-  - name: https
-    type: https
-    tag:
-      - cloudflare
-    ech: crypto.cloudflare.com
-  - name: fallback
-    type: fallback
-    exclude:
-      - googlefcm
-      - google-cn
-      - category-ntp
-      - category-stun
-    map:
-      - domain_include:
-          - google
-        ip_include:
-          - google
-        ipv4:
-          - 142.251.65.170
-        ipv6:
-          - "2607:f8b0:4007:804::2012"
-          - "2607:f8b0:4007:803::2015"
-          - "2607:f8b0:4007:807::2007"
-          - "2607:f8b0:4007:80b::2012"
-          - "2607:f8b0:4007:805::2015"
-          - "2607:f8b0:4007:806::2017"
+#  - name: replace
+#    type: replace
+#    exclude:
+#      - mozilla
+#      - github
+#      - cn
+#      - cloudflare-cn
+#      - google-cn
+#      - category-ntp
+#      - category-stun
+#      - cloudflare-cn
+#    replace_map:
+#      - tag:
+#          - cloudflare
+#        ipv4:
+#          - 162.159.38.0
+#          - 162.159.39.0
+#          - 162.159.44.0
+#          - 162.159.45.0
+#        ipv6:
+#          - "2606:4700:52::"
+#          - "2606:4700:57::"
+#          - "2606:4700:5a::"
+#      - tag:
+#          - fastly
+#        ipv4_prefixlen: 22
+#        ipv6_prefixlen: 64
+#        ipv4:
+#          - 146.75.48.0
+#        ipv6:
+#          - "2a04:4e42:7c::"
+#  - name: https
+#    type: https
+#    tag:
+#      - cloudflare
+#    ech: crypto.cloudflare.com
+#  - name: fallback
+#    type: fallback
+#    exclude:
+#      - googlefcm
+#      - google-cn
+#      - category-ntp
+#      - category-stun
+#    map:
+#      - domain_include:
+#          - google
+#        ip_include:
+#          - google
+#        ipv4:
+#          - 142.251.65.170
+#        ipv6:
+#          - "2607:f8b0:4007:804::2012"
+#          - "2607:f8b0:4007:803::2015"
+#          - "2607:f8b0:4007:807::2007"
+#          - "2607:f8b0:4007:80b::2012"
+#          - "2607:f8b0:4007:805::2015"
+#          - "2607:f8b0:4007:806::2017"
 routing:
   - name: ads
     before:
@@ -223,11 +223,11 @@ routing:
     matcher:
       domain_include:
         - google
-    after:
-      - fallback
+    #    after:
+    #      - fallback
     resolver: doh-test
   - name: rule3
-    after:
-      - replace
-      - https
+    #    after:
+    #      - replace
+    #      - https
     resolver: doh-test

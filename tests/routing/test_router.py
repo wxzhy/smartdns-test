@@ -12,7 +12,7 @@ import dns.message
 
 from smartdns.actions.manager import ActionManager
 from smartdns.models.context import Context, Request
-from smartdns.models.rule import Matcher, Rule
+from smartdns.models.rule import RequestMatcher, Rule
 from smartdns.resolvers.manager import ResolverManager
 from smartdns.routing.router import Router
 
@@ -43,14 +43,14 @@ async def test_no_resolver_falls_through_instead_of_blackhole() -> None:
 
 def test_domain_include_fail_closed_without_geodata() -> None:
     # domain_include 已配但无 geo 数据（country=None）：fail-closed 不匹配。
-    router = _router(Rule(name="t", matcher=Matcher(domain_include={"cn"})))
+    router = _router(Rule(name="t", matcher=RequestMatcher(domain_include={"cn"})))
     context = _context()
     context.request.name_info.country = None
     assert router.match(context) is False
 
 
 def test_domain_include_matches_when_tag_present() -> None:
-    router = _router(Rule(name="t", matcher=Matcher(domain_include={"cn"})))
+    router = _router(Rule(name="t", matcher=RequestMatcher(domain_include={"cn"})))
     context = _context()
     context.request.name_info.country = {"cn"}
     assert router.match(context) is True

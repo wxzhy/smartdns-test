@@ -1,6 +1,3 @@
-import platform
-import re
-import subprocess
 from asyncio import as_completed
 from ipaddress import IPv4Address, IPv6Address
 from threading import Lock
@@ -11,7 +8,7 @@ from icmplib import async_ping
 from loguru import logger
 from pydantic.networks import IPvAnyAddress
 
-from smartdns.models.action import SpeedtestConfig
+from smartdns.models.action import PingConfig
 from smartdns.utils.cache_async import cached
 
 cache = None
@@ -47,7 +44,7 @@ async def tcping(
 
 @cached(key=lambda ip, config: ip, cache=cache, lock=Lock())
 async def speedtest(
-    ip: str | IPv4Address | IPv6Address, config: SpeedtestConfig
+    ip: str | IPv4Address | IPv6Address, config: PingConfig
 ) -> float | None:
     """测速指定 IP 地址和端口，返回延迟（毫秒），失败返回 None。"""
     async with create_task_group() as tg:
@@ -57,8 +54,12 @@ async def speedtest(
             handles.append(tg.start_soon(ping, ip, config.timeout))
         if config.port is not None:
             # 并发测试
-            for port in config.port:
-                handles.append(tg.start_soon(tcping, ip, port, config.timeout))
+            handles.extend(
+                [
+                    tg.start_soon(tcping, ip, port, config.timeout)
+                    for port in config.port
+                ]
+            )
         for handle in as_completed(handles):
             result = await handle
             logger.debug(f"测速结果: {ip} -> {result}，配置: {config}")

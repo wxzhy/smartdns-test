@@ -82,7 +82,7 @@ class CurlNameserver(BaseNameserver):
                 result = await self._curl.get(
                     self.url,
                     params={"dns": encoded},
-                    headers={"Host": self.host},
+                    headers={"Host": self.host, "Accept": "application/dns-message"},
                     timeout=int(timeout),
                     verify=self.verify,
                 )
@@ -93,6 +93,7 @@ class CurlNameserver(BaseNameserver):
                     headers={
                         "Host": self.host,
                         "Content-Type": "application/dns-message",
+                        "Accept": "application/dns-message",
                     },
                     timeout=int(timeout),
                     verify=self.verify,

@@ -2,12 +2,18 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from smartdns.actions.manager import ActionManager
+from smartdns.models.resolver import (
+    AioDNSResolverConfig,
+    ConcurrentResolverConfig,
+    PlainResolverConfig,
+    ResolverConfig,
+)
 from smartdns.resolvers.aiodns import AioDNSResolver
 from smartdns.resolvers.concurrent import ConcurrentResolver
 from smartdns.resolvers.plain import PlainResolver
 
 if TYPE_CHECKING:
-    from smartdns.models.resolver import ResolverConfig
     from smartdns.nameservers.manager import NameserverManager
     from smartdns.resolvers.base import BaseResolver
 
@@ -17,21 +23,23 @@ class ResolverManager:
         self.config = config
         self.resolvers: dict[str, BaseResolver] = {}
 
-    async def start_all(self, nameservers: NameserverManager) -> None:
+    async def start_all(
+        self, nameservers: NameserverManager, actions: ActionManager
+    ) -> None:
         for resolver_config in self.config:
-            match resolver_config.type:
-                case "plain":
+            match resolver_config:
+                case PlainResolverConfig():
                     logger.info(f"创建Plain解析器: {resolver_config.name}")
                     resolver = PlainResolver(
                         config=resolver_config, nameservers=nameservers
                     )
-                case "aiodns":
+                case AioDNSResolverConfig():
                     logger.info(f"创建AioDNS解析器: {resolver_config.name}")
                     resolver = AioDNSResolver(config=resolver_config)
-                case "concurrent":
+                case ConcurrentResolverConfig():
                     logger.info(f"创建Concurrent解析器: {resolver_config.name}")
                     resolver = ConcurrentResolver(
-                        config=resolver_config, resolvers=self
+                        config=resolver_config, resolvers=self, actions=actions
                     )
                 case _:
                     raise ValueError(f"不支持的解析器类型: {resolver_config.type}")
