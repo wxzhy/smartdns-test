@@ -15,9 +15,7 @@ if TYPE_CHECKING:
 
 
 def replace_response_ip(
-    response: Response,
-    ips: set[IPv4Address] | set[IPv6Address],
-    upstream: str | None = None,
+    response: Response, ips: set[IPv4Address] | set[IPv6Address]
 ) -> None:
     """替换响应中的 IP 地址"""
     # 不存在响应的情况
@@ -37,7 +35,28 @@ def replace_response_ip(
             rrset.add(AAAA(rdclass, rdtype, ip))
         response.ip_infos.append(IPInfo.from_ip(ip, resolver=response.upstream))
 
-    return
+
+def replace_reponse_ipinfo(
+    response: Response, ips: dict[IPv4Address, IPInfo] | dict[IPv6Address, IPInfo]
+) -> None:
+    """替换响应中的 IPInfo"""
+    if not response.ans or not response.ans.rrset:
+        return
+    if not response.ans or not response.ans.rrset:
+        return
+    # 修改 rrset 中的 IP 地址
+    rrset = response.ans.rrset
+    # 清除原有的记录
+    rrset.clear()
+    response.ip_infos = []
+    rdtype, rdclass = rrset.rdtype, rrset.rdclass
+    # 添加新的记录
+    for ip, info in ips.items():
+        if isinstance(ip, IPv4Address):
+            rrset.add(A(rdclass, rdtype, ip))
+        elif isinstance(ip, IPv6Address):
+            rrset.add(AAAA(rdclass, rdtype, ip))
+        response.ip_infos.append(info)
 
 
 def make_static_response(

@@ -24,12 +24,15 @@ class ReplaceAction(BaseAction):
     def __init__(self, config: ReplaceActionConfig):
         super().__init__(config)
         self.matcher = config.match_name
+        # 设置查询类型为 A 和 AAAA，以便在 on_upstream 中处理 IP 替换
+        self.matcher.query_types = {"A", "AAAA"}
         self.replace_map: list[ReplaceActionMap] = config.replace_map
 
     async def start(self) -> None:
         logger.info(f"启动替换IP操作 {self.name}，替换映射数: {len(self.replace_map)}")
 
-    async def on_upstream(self, context: Context, response: Response) -> None:
+    async def on_resolver(self, context: Context, response: Response) -> None:
+        logger.debug(f"替换IP操作 {self.name} 开始处理应答")
         # 跳过排除项
         if not match_context(self.matcher, context):
             logger.debug(f"替换IP操作跳过排除域名: {context.request.qname}")
@@ -49,7 +52,7 @@ class ReplaceAction(BaseAction):
                 else:
                     logger.warning(f"替换IP操作不支持的记录类型: {response.ans.rdtype}")
                     return
-                replace_response_ip(response, new_ips, upstream=self.name)
+                replace_response_ip(response, new_ips)
                 return
 
     # async def on_response(self, context: Context) -> None:

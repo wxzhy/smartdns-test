@@ -115,10 +115,11 @@ class SpeedcheckConfig(BaseActionConfig):
 
     type: Literal["speedcheck"]
     ping_config: PingConfig = Field(default_factory=PingConfig, description="测速配置")
-    match_ip: ResponseIPMatcher = Field(description="测速匹配器")
-    weight: list[str] | None = Field(
-        default=None, description="测速权重列表，按顺序匹配，空表示不添加"
+    match_ip: ResponseIPMatcher = Field(
+        default_factory=ResponseIPMatcher, description="测速匹配器"
     )
+    max_num: int = Field(default=1, ge=1, description="测速后保留的IP最大数量")
+    threshold: float = Field(default=100.0, ge=0.0, description="rtt延迟阈值（毫秒）")
 
 
 class FallbackActionConfig(BaseActionConfig):

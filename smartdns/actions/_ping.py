@@ -66,4 +66,4 @@ async def speedtest(
             if result is not None:
                 tg.cancel()
                 return result
-    return None
+    return float("inf")  # 所有测试失败，返回无穷大延迟

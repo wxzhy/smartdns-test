@@ -1,3 +1,4 @@
+worker_count: 1
 listeners:
   - name: TCP
     type: tcp
@@ -139,41 +140,61 @@ resolvers:
       - dnspod
       - 114dns
     timeout: 2
+  - name: global
+    type: concurrent
+    resolvers:
+      - google
+      - doh-test
+    actions:
+      - replace
+      - speedcheck
+    timeout: 2
 
 actions:
   - name: block
     type: static
-#  - name: replace
-#    type: replace
-#    exclude:
-#      - mozilla
-#      - github
-#      - cn
-#      - cloudflare-cn
-#      - google-cn
-#      - category-ntp
-#      - category-stun
-#      - cloudflare-cn
-#    replace_map:
-#      - tag:
-#          - cloudflare
-#        ipv4:
-#          - 162.159.38.0
-#          - 162.159.39.0
-#          - 162.159.44.0
-#          - 162.159.45.0
-#        ipv6:
-#          - "2606:4700:52::"
-#          - "2606:4700:57::"
-#          - "2606:4700:5a::"
-#      - tag:
-#          - fastly
-#        ipv4_prefixlen: 22
-#        ipv6_prefixlen: 64
-#        ipv4:
-#          - 146.75.48.0
-#        ipv6:
-#          - "2a04:4e42:7c::"
+  - name: speedcheck
+    type: speedcheck
+
+
+  - name: replace
+    type: replace
+    match_name:
+      domain_exclude:
+        - mozilla
+        - github
+        - cn
+        - cloudflare-cn
+        - google-cn
+        - category-ntp
+        - category-stun
+        - category-ads
+        - cloudflare-cn
+      query_types:
+        - A
+        - AAAA
+    replace_map:
+      - match_ip:
+          ip_include:
+            - cloudflare
+        ipv4:
+          - 162.159.38.0
+          - 162.159.39.0
+          - 162.159.44.0
+          - 162.159.45.0
+        ipv6:
+          - "2606:4700:52::"
+          - "2606:4700:57::"
+          - "2606:4700:5a::"
+      - match_ip:
+          ip_include:
+            - fastly
+        ipv4_prefixlen: 22
+        ipv6_prefixlen: 64
+        ipv4:
+          - 146.75.48.0
+        ipv6:
+          - "2a04:4e42:7c::"
 #  - name: https
 #    type: https
 #    tag:
@@ -227,7 +248,7 @@ routing:
     #      - fallback
     resolver: doh-test
   - name: rule3
-    #    after:
-    #      - replace
-    #      - https
-    resolver: doh-test
+    after:
+
+      - speedcheck
+    resolver: global

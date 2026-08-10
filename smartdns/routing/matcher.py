@@ -107,5 +107,5 @@ def filter_ip(
             and ip.asn in matcher.asn_exclude
         ):
             continue
-        filtered_ips.append(ip)
+        filtered_ips.append(ip.ip)
     return filtered_ips

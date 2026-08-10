@@ -16,6 +16,7 @@ class Router:
         self, config: Rule, resolvers: ResolverManager, actions: ActionManager
     ):
         self.config = config
+        logger.debug(f"初始化路由 {self.config}，actions {actions}")
         self._resolvers = resolvers
         self._actions = actions
         self._upstream = config.resolver
@@ -25,13 +26,16 @@ class Router:
         if config.before:
             for action_name in config.before:
                 action = self._actions.get(action_name)
-                if action:
+                if action is not None:
                     self.before.append(action)
         if config.after:
             for action_name in config.after:
                 action = self._actions.get(action_name)
                 if action:
                     self.after.append(action)
+        logger.debug(
+            f"启动路由 {self.config.name}，上游: {self._upstream}，before: {self.before}，after: {self.after}"
+        )
         if self._upstream:
             self.resolver = self._resolvers.get(self._upstream)
             if self.resolver is None:
@@ -88,6 +92,9 @@ class Router:
                 return True
         if self.resolver is not None:
             context.response = await self.resolver.query(request, context)
+            logger.debug(
+                f"路由 {self.config.name} 上游 {self.resolver.name} 返回应答: {context.response}"
+            )
         if context.response is None:
             # 无 resolver 或未产出应答：交后续路由，避免黑洞式吞掉请求。
             logger.debug(f"路由 {self.config.name} 未产出应答，交后续路由")
@@ -95,7 +102,11 @@ class Router:
         if context.response.rcode != Rcode.NOERROR:
             # 权威否定/失败应答（NXDOMAIN 等）作为最终结果，跳过 after 动作。
             return True
+        logger.debug(
+            f"路由 {self.config.name} 产出应答，交给 after 动作处理{self.after}"
+        )
         for action in self.after:
+            logger.debug(f"路由 {self.config.name} 应答交给动作 {action.name} 处理")
             await action.on_response(context)
             if context.stop:
                 logger.debug(f"路由 {self.config.name} 在 after 阶段停止")

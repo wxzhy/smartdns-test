@@ -9,6 +9,7 @@ from loguru import logger
 
 # from smartdns.actions._helpers import is_excluded, replace_answer_rrset
 from smartdns.actions.base import BaseAction
+from smartdns.routing.matcher import match_context, match_response
 
 if TYPE_CHECKING:
     from smartdns.models.action import HTTPSActionConfig
@@ -22,6 +23,7 @@ class HTTPSAction(BaseAction):
     def __init__(self, config: HTTPSActionConfig, client: HTTPClient):
         super().__init__(config)
         self._match_name = config.match_name
+        self._match_name.query_types = {"HTTPS"}
         self._match_ip = config.match_ip
         self._add_ech = config.add_ech
         self._remove_hint = config.remove_hint
@@ -39,9 +41,11 @@ class HTTPSAction(BaseAction):
         request, response = context.request, context.response
         if response is None or response.ans is None or response.ans.rrset is None:
             return
-        if request.rdtype != RdataType.HTTPS:
+        if not match_context(self._match_name, context):
+            logger.debug(f"HTTPS操作跳过不匹配的域名: {request.qname}")
             return
-        if response.rcode != Rcode.NOERROR:
+        if not match_response(self._match_ip, response):
+            logger.debug(f"HTTPS操作跳过不匹配的标签: {request.qname}")
             return
         old_rrset = response.ans.rrset
         # 排除域名/标签判定与 ECH 密钥获取只做一次（与具体 rr 无关）。
@@ -54,31 +58,32 @@ class HTTPSAction(BaseAction):
             new_rrset.add(new_rr)
             changed = changed or rr_changed
         if changed:
+            logger.debug(f"HTTPS操作修改了应答: {request.qname}")
             context.response = replace_answer_rrset(response, new_rrset, self.name)
 
-    async def _resolve_ech_value(
-        self, request: Request, response: Response
-    ) -> str | None:
-        """按排除与标签判定是否添加 ECH，并返回其值（否则 None）。"""
-        if not self._add_ech:
-            return None
-        if is_excluded(request, response, self.exclude):
-            return None
-        if not self._tag_matches(response):
-            return None
-        ech_key = await self._client.get_ech_key(self._ech_domain)
-        if ech_key is None:
-            logger.warning(f"HTTPS操作未能获取ECH密钥: {self._ech_domain}")
-            return None
-        return ech_key.strip('"')
-
-    def _tag_matches(self, response: Response) -> bool:
-        if response.ip_infos is None:
-            return False
-        return any(
-            ip.country is not None and self.tags & ip.country
-            for ip in response.ip_infos
-        )
+    # async def _resolve_ech_value(
+    #     self, request: Request, response: Response
+    # ) -> str | None:
+    #     """按排除与标签判定是否添加 ECH，并返回其值（否则 None）。"""
+    #     if not self._add_ech:
+    #         return None
+    #     if is_excluded(request, response, self.exclude):
+    #         return None
+    #     if not self._tag_matches(response):
+    #         return None
+    #     ech_key = await self._client.get_ech_key(self._ech_domain)
+    #     if ech_key is None:
+    #         logger.warning(f"HTTPS操作未能获取ECH密钥: {self._ech_domain}")
+    #         return None
+    #     return ech_key.strip('"')
+    #
+    # def _tag_matches(self, response: Response) -> bool:
+    #     if response.ip_infos is None:
+    #         return False
+    #     return any(
+    #         ip.country is not None and self.tags & ip.country
+    #         for ip in response.ip_infos
+    #     )
 
     def _rewrite_https(self, rr: HTTPS, ech_value: str | None) -> tuple[HTTPS, bool]:
         """按配置重建单条 HTTPS rdata（copy-on-write，不改原不可变 rdata）。"""

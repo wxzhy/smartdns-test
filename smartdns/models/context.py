@@ -142,7 +142,8 @@ class Context:
     # 当前处理的响应对象
     response: Response | None = None
     # 结果列表
-    candidates: list[Response] | None = None
+    candidates: dict[str, Response] | None = None
+    ip_infos: dict[IPvAnyAddress, IPInfo] | None = None
     stop: bool = False
     is_subquery: bool = False
     subquery: Context | None = None

@@ -37,7 +37,7 @@ class ConcurrentResolver(BaseResolver):
     async def start(self):
         """启动解析器"""
         logger.info(
-            f"ConcurrentResolver {self.name} 启动成功，上游解析器: {self._upstreams}"
+            f"ConcurrentResolver {self.name} 启动成功，上游解析器: {self._upstreams}，动作: {self.actions}，wait_all: {self._wait_all}"
         )
 
     async def stop(self):
@@ -81,9 +81,15 @@ class ConcurrentResolver(BaseResolver):
                     f"ConcurrentResolver {self.name} 上游 {resolver.name} 返回异常应答: {result.rcode}"
                 )
                 return result
+            logger.debug(
+                f"收到 ConcurrentResolver {self.name} 上游 {resolver.name} 的应答"
+            )
             # 执行actions的on_resolver阶段
             if self.actions is not None and context is not None:
                 for action in self.actions:
+                    logger.debug(
+                        f"ConcurrentResolver {self.name} 上游 {resolver.name} 应答交给动作 {action.name} 处理"
+                    )
                     await action.on_resolver(context, result)
                     if result.invalid:
                         logger.debug(
@@ -91,9 +97,9 @@ class ConcurrentResolver(BaseResolver):
                         )
                         break
                 return result
-        except Exception:
-            logger.warning(
-                f"ConcurrentResolver {self.name} 上游 {resolver.name} 查询失败"
+        except Exception as e:
+            logger.exception(
+                f"ConcurrentResolver {self.name} 上游 {resolver.name} 查询失败: {e}"
             )
             return None
 
@@ -109,8 +115,10 @@ class ConcurrentResolver(BaseResolver):
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
         winner: Response | None = None
-        candidates: list[Response] = []
-
+        logger.debug(
+            f"ConcurrentResolver {self.name} 开始并发查询 {request.qname} Context: {context}"
+        )
+        candidates: dict[str, Response] = {}
         with move_on_after(self.timeout):
             async with create_task_group() as tg:
                 tasks = [
@@ -125,22 +133,21 @@ class ConcurrentResolver(BaseResolver):
                 # 选取最快的 NOERROR 应答为 winner，其他应答累积进 candidates
                 if winner is None and result.rcode == Rcode.NOERROR:
                     winner = result
-                candidates.append(result)
+                candidates[result.upstream] = result
                 # 等待全部上游完成或取消其余上游
                 if not self._wait_all:
                     tg.cancel_scope.cancel()
 
-        if context is not None and candidates:
-            if context.candidates is None:
-                context.candidates = []
-            context.candidates.extend(candidates)
-
         if winner is not None:
             return winner
+        if context is not None:
+            if context.candidates is None:
+                context.candidates = {}
+            context.candidates.update(candidates)
         # 无 NOERROR：优先返回 NXDOMAIN 等权威否定应答，而非一律 SERVFAIL。
-        for candidate in candidates:
+        for candidate in candidates.values():
             if candidate.rcode == Rcode.NXDOMAIN:
                 return candidate
         if candidates:
-            return candidates[0]
+            return next(iter(candidates.values()))
         return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
