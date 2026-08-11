@@ -97,7 +97,7 @@ class HTTPClient:
                 for rr in ans.rrset:
                     ecl = rr.params.get(ParamKey.ECH)
                     if ecl is not None:
-                        return ecl.to_text()
+                        return ecl.to_text().strip('"')
         except Exception:
             logger.exception("获取ECH密钥失败，域名: {}", domain)
         return None

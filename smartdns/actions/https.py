@@ -7,7 +7,7 @@ from dns.rdtypes.svcbbase import ALPNParam, ECHParam, ParamKey
 from dns.rrset import RRset
 from loguru import logger
 
-# from smartdns.actions._helpers import is_excluded, replace_answer_rrset
+from smartdns.actions._helper import check_ech, process_https_record
 from smartdns.actions.base import BaseAction
 from smartdns.routing.matcher import match_context, match_response
 
@@ -41,72 +41,75 @@ class HTTPSAction(BaseAction):
         request, response = context.request, context.response
         if response is None or response.ans is None or response.ans.rrset is None:
             return
+        # 跳过类型不匹配的
+        if response.rcode != Rcode.NOERROR or response.ans.rdtype != RdataType.HTTPS:
+            return
+        # 执行ALPN和HINT操作
+        process_https_record(context, self._remove_hint, self._remove_h3)
         if not match_context(self._match_name, context):
             logger.debug(f"HTTPS操作跳过不匹配的域名: {request.qname}")
             return
         if not match_response(self._match_ip, response):
             logger.debug(f"HTTPS操作跳过不匹配的标签: {request.qname}")
             return
-        old_rrset = response.ans.rrset
-        # 排除域名/标签判定与 ECH 密钥获取只做一次（与具体 rr 无关）。
-        ech_value = await self._resolve_ech_value(request, response)
-        new_rrset = RRset(old_rrset.name, old_rrset.rdclass, old_rrset.rdtype)
-        new_rrset.update_ttl(old_rrset.ttl)
-        changed = False
-        for rr in old_rrset:
-            new_rr, rr_changed = self._rewrite_https(rr, ech_value)
-            new_rrset.add(new_rr)
-            changed = changed or rr_changed
-        if changed:
-            logger.debug(f"HTTPS操作修改了应答: {request.qname}")
-            context.response = replace_answer_rrset(response, new_rrset, self.name)
 
-    # async def _resolve_ech_value(
-    #     self, request: Request, response: Response
-    # ) -> str | None:
-    #     """按排除与标签判定是否添加 ECH，并返回其值（否则 None）。"""
-    #     if not self._add_ech:
-    #         return None
-    #     if is_excluded(request, response, self.exclude):
-    #         return None
-    #     if not self._tag_matches(response):
-    #         return None
-    #     ech_key = await self._client.get_ech_key(self._ech_domain)
-    #     if ech_key is None:
-    #         logger.warning(f"HTTPS操作未能获取ECH密钥: {self._ech_domain}")
-    #         return None
-    #     return ech_key.strip('"')
-    #
-    # def _tag_matches(self, response: Response) -> bool:
-    #     if response.ip_infos is None:
-    #         return False
-    #     return any(
-    #         ip.country is not None and self.tags & ip.country
-    #         for ip in response.ip_infos
-    #     )
+        # 跳过已有ECH的
+        if check_ech(context):
+            logger.debug(f"HTTPS操作跳过已有ECH的: {request.qname}")
+            return
+        # 匹配
+        if self.match_context(context):
+            await self.add_ech(context)
 
-    def _rewrite_https(self, rr: HTTPS, ech_value: str | None) -> tuple[HTTPS, bool]:
-        """按配置重建单条 HTTPS rdata（copy-on-write，不改原不可变 rdata）。"""
-        params = dict(rr.params)
-        changed = False
-        if self._remove_hint:
-            if params.pop(ParamKey.IPV4HINT, None) is not None:
-                changed = True
-            if params.pop(ParamKey.IPV6HINT, None) is not None:
-                changed = True
-        if self._remove_h3 and ParamKey.ALPN in params:
-            old_ids = params[ParamKey.ALPN].ids
-            new_ids = tuple(i for i in old_ids if i != b"h3")
-            if new_ids != old_ids:
-                changed = True
-                if new_ids:
-                    params[ParamKey.ALPN] = ALPNParam(ids=new_ids)
-                else:
-                    # 唯一 ALPN 为 h3：移除整个 ALPN 参数而非留空 ids。
-                    del params[ParamKey.ALPN]
-        if ech_value is not None and ParamKey.ECH not in params:
-            params[ParamKey.ECH] = ECHParam.from_value(ech_value)
-            changed = True
-        if not changed:
-            return rr, False
-        return HTTPS(rr.rdclass, rr.rdtype, rr.priority, rr.target, params), True
+    def match_context(self, context: Context) -> bool:
+        """匹配请求上下文，返回是否匹配。"""
+        request = context.request
+        response = context.response
+        if response is None or response.ans is None:
+            return False
+        if not match_context(self._match_name, context):
+            logger.debug(f"HTTPS操作跳过不匹配的域名: {request.qname}")
+            return False
+        if not match_response(self._match_ip, response):
+            logger.debug(f"HTTPS操作跳过不匹配的标签: {request.qname}")
+            return False
+        return True
+
+    async def add_ech(self, context: Context) -> None:
+        """为匹配的HTTPS记录添加ECH参数。"""
+        request, response = context.request, context.response
+        if response is None or response.ans is None:
+            return
+        try:
+            # 获取ECH密钥
+            ech_key = await self._client.get_ech_key(self._ech_domain)
+            logger.debug(
+                f"HTTPS操作获取ECH密钥: {request.qname} {request.rdtype}，ECH密钥: {ech_key}"
+            )
+            if ech_key is not None:
+                value = ech_key
+                logger.debug(
+                    f"HTTPS操作成功添加ECH: {request.qname} {request.rdtype}，ECH密钥: {ech_key}"
+                )
+            else:
+                logger.warning(
+                    f"HTTPS操作未能获取到ECH密钥: {request.qname} {request.rdtype}"
+                )
+                return
+        except Exception as e:
+            logger.error(
+                f"HTTPS操作获取ECH密钥失败: {request.qname} {request.rdtype}，错误: {e}"
+            )
+            return
+        if response.ans.rrset is not None:
+            for rr in response.ans.rrset:
+                if not isinstance(rr, HTTPS):
+                    continue
+                rr.params._odict[ParamKey.ECH] = ECHParam.from_value(value)
+                logger.debug(
+                    f"HTTPS操作为记录添加ECH参数: {request.qname} {request.rdtype}，ECH密钥: {value}"
+                )
+        else:
+            logger.warning(
+                f"HTTPS操作未能为记录添加ECH参数: {request.qname} {request.rdtype}，因为没有找到HTTPS记录"
+            )

@@ -195,11 +195,15 @@ actions:
           - 146.75.48.0
         ipv6:
           - "2a04:4e42:7c::"
-#  - name: https
-#    type: https
-#    tag:
-#      - cloudflare
-#    ech: crypto.cloudflare.com
+  - name: https
+    type: https
+    match_name:
+      domain_include:
+        - cloudflare
+    match_ip:
+      ip_include:
+        - cloudflare
+    ech: crypto.cloudflare.com
 #  - name: fallback
 #    type: fallback
 #    exclude:
@@ -249,6 +253,6 @@ routing:
     resolver: doh-test
   - name: rule3
     after:
-
       - speedcheck
+      - https
     resolver: global
