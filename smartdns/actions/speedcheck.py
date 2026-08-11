@@ -55,6 +55,7 @@ class SpeedcheckAction(BaseAction):
         """转发到客户端之前调用，重写IP信息。"""
         logger.debug(f"Speedcheck Action {self.name} 开始处理响应")
         if context.candidates is None or context.ip_infos is None:
+            logger.debug(f"Speedcheck Action {self.name} 没有候选响应或IP信息")
             return
         if not context.ip_infos:
             logger.debug(f"Speedcheck Action {self.name} 没有可用的IP信息")
@@ -73,6 +74,9 @@ class SpeedcheckAction(BaseAction):
             return
         # 选取最优响应
         if best.resolver is not None:
+            logger.debug(
+                f"Speedcheck Action {self.name} 最优IP对应的解析器: {best.resolver}"
+            )
             context.response = context.candidates[best.resolver]
         if context.response is None:
             logger.debug(f"Speedcheck Action {self.name} 没有可用的响应，跳过替换")

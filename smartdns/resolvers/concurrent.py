@@ -137,13 +137,18 @@ class ConcurrentResolver(BaseResolver):
                 # 等待全部上游完成或取消其余上游
                 if not self._wait_all:
                     tg.cancel_scope.cancel()
-
-        if winner is not None:
-            return winner
+        logger.debug(
+            f"ConcurrentResolver {self.name} 并发查询 {request.qname} 完成，winner: {winner}, candidates: {list(candidates.keys())}"
+        )
         if context is not None:
             if context.candidates is None:
                 context.candidates = {}
             context.candidates.update(candidates)
+        logger.debug(
+            f"ConcurrentResolver {self.name} 并发查询 {request.qname} 完成，未收到 NOERROR，应答候选: {list(candidates.keys())}"
+        )
+        if winner is not None:
+            return winner
         # 无 NOERROR：优先返回 NXDOMAIN 等权威否定应答，而非一律 SERVFAIL。
         for candidate in candidates.values():
             if candidate.rcode == Rcode.NXDOMAIN:

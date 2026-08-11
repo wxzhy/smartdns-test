@@ -40,7 +40,7 @@ def replace_response_ip(
 
 
 def replace_reponse_ipinfo(
-    response: Response, ips: dict[IPv4Address, IPInfo] | dict[IPv6Address, IPInfo]
+    response: Response, ips: dict[IPv4Address | IPv6Address, IPInfo]
 ) -> None:
     """替换响应中的 IPInfo"""
     if not response.ans or not response.ans.rrset:
