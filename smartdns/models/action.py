@@ -43,11 +43,11 @@ class ReplaceActionMap(BaseModel):
     ipv6_prefixlen: int = Field(
         default=128, ge=0, le=128, description="替换映射的 IPv6 前缀长度，默认为 128"
     )
-    ipv4: set[IPv4Address] = Field(
-        default_factory=set, description="替换映射的 IPv4 地址"
+    ipv4: set[IPv4Address] | None = Field(
+        default=None, description="替换映射的 IPv4 地址"
     )
-    ipv6: set[IPv6Address] = Field(
-        default_factory=set, description="替换映射的 IPv6 地址"
+    ipv6: set[IPv6Address] | None = Field(
+        default=None, description="替换映射的 IPv6 地址"
     )
 
 
@@ -89,7 +89,6 @@ class FallbackMap(BaseModel):
     # domain_include: set[str] = Field(description="Fallback 映射的标签")
     # ip_include: set[str] = Field(description="Fallback 映射的IP地址")
     match_name: RequestMatcher = Field(description="匹配的域名")
-    match_ip: ResponseIPMatcher = Field(description="匹配的IP地址")
     ipv4: set[IPv4Address] | None = Field(
         default=None,
         description="静态返回的 IPv4 地址",
@@ -126,11 +125,6 @@ class FallbackActionConfig(BaseActionConfig):
     """Fallback Action 配置。"""
 
     type: Literal["fallback"]
-    ping: bool = Field(default=True, description="是否启用ping检测")
-    exclude: set[str] | None = Field(
-        default=None, description="不进行ping检测的域名列表"
-    )
-    speedtest: PingConfig = Field(default_factory=PingConfig, description="测速配置")
     map: list[FallbackMap] = Field(
         default_factory=list, description="Fallback 映射列表"
     )

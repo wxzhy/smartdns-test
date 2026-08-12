@@ -1,3 +1,6 @@
+from asyncio import as_completed
+
+from anyio import create_task_group
 from dns.rdatatype import RdataType
 from loguru import logger
 
@@ -42,14 +45,27 @@ class SpeedcheckAction(BaseAction):
             return
         if context.ip_infos is None:
             context.ip_infos = {}
+        ips = {}
         for ip_info in response.ip_infos:
             if ip_info.ip not in context.ip_infos:
                 context.ip_infos[ip_info.ip] = ip_info
-                rtt = await speedtest(ip_info.ip, config=self._speedtest)
-                ip_info.rtt = rtt
-                logger.debug(
-                    f"Speedcheck Action {self.name} 测速结果: {ip_info.ip} -> {rtt} ms"
+                ips[ip_info.ip] = ip_info
+        handles = {}
+        async with create_task_group() as tg:
+            for ip_info in ips.values():
+                handles[ip_info.ip] = tg.start_soon(
+                    speedtest, ip_info.ip, self._speedtest
                 )
+            for ip, task in handles.items():
+                try:
+                    rtt = await task
+                    context.ip_infos[ip].rtt = rtt
+                except Exception as e:
+                    logger.warning(f"Speedcheck Action {self.name} 测速 {ip} 失败: {e}")
+
+        logger.debug(
+            f"Speedcheck Action {self.name} 完成应答处理，共收集 {len(context.ip_infos)} 个IP信息"
+        )
 
     async def on_response(self, context: Context) -> None:
         """转发到客户端之前调用，重写IP信息。"""

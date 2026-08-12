@@ -107,13 +107,12 @@ def process_https_record(context: Context, remove_hint: bool, remove_h3: bool):
                 del params[ParamKey.IPV6HINT]
             logger.debug(f"HTTPS操作移除Hint: {request.qname} {request.rdtype}")
         # 移除 h3 参数
-        if remove_h3 and ParamKey.ALPN in rr:
-            ids: tuple = rr[ParamKey.ALPN].ids
-            new_ids = tuple(id for id in ids if id != b"h3")
-            params[ParamKey.ALPN] = ALPNParam(ids=new_ids)
-            logger.debug(
-                f"HTTPS操作移除H3: {request.qname} {request.rdtype}，剩余ALPN: {new_ids}"
-            )
+        if remove_h3:
+            # if remove_h3 and ParamKey.ALPN in rr:
+            # ids: tuple = rr[ParamKey.ALPN].ids
+            # new_ids = tuple(id for id in ids if id != b"h3")
+            params[ParamKey.ALPN] = ALPNParam(ids=(b"h2",))
+            logger.debug(f"HTTPS操作移除H3: {request.qname} {request.rdtype}")
 
 
 def check_ech(context: Context) -> bool:

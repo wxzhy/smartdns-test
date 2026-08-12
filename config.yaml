@@ -155,8 +155,6 @@ actions:
     type: static
   - name: speedcheck
     type: speedcheck
-
-
   - name: replace
     type: replace
     match_name:
@@ -204,27 +202,24 @@ actions:
       ip_include:
         - cloudflare
     ech: crypto.cloudflare.com
-#  - name: fallback
-#    type: fallback
-#    exclude:
-#      - googlefcm
-#      - google-cn
-#      - category-ntp
-#      - category-stun
-#    map:
-#      - domain_include:
-#          - google
-#        ip_include:
-#          - google
-#        ipv4:
-#          - 142.251.65.170
-#        ipv6:
-#          - "2607:f8b0:4007:804::2012"
-#          - "2607:f8b0:4007:803::2015"
-#          - "2607:f8b0:4007:807::2007"
-#          - "2607:f8b0:4007:80b::2012"
-#          - "2607:f8b0:4007:805::2015"
-#          - "2607:f8b0:4007:806::2017"
+  - name: fallback
+    type: fallback
+    map:
+      - match_name:
+          domain_include:
+            - google
+          domain_exclude:
+            - google-cn
+            - googlefcm
+        ipv4:
+          - 142.251.65.170
+        ipv6:
+          - "2607:f8b0:4007:804::2012"
+          - "2607:f8b0:4007:803::2015"
+          - "2607:f8b0:4007:807::2007"
+          - "2607:f8b0:4007:80b::2012"
+          - "2607:f8b0:4007:805::2015"
+          - "2607:f8b0:4007:806::2017"
 routing:
   - name: ads
     before:
@@ -244,15 +239,16 @@ routing:
     matcher:
       domain_include:
         - cn
-  - name: rule2
-    matcher:
-      domain_include:
-        - google
+    #  - name: rule2
+    #    matcher:
+    #      domain_include:
+    #        - google
     #    after:
     #      - fallback
-    resolver: doh-test
+  #    resolver: doh-test
   - name: rule3
     after:
       - speedcheck
+      - fallback
       - https
     resolver: global

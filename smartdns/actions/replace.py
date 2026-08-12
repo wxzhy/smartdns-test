@@ -43,10 +43,10 @@ class ReplaceAction(BaseAction):
             result = filter_ip(item.match_ip, response.ip_infos)
             if result:
                 logger.debug(f"替换IP操作命中替换映射: {item}")
-                if response.ans.rdtype == RdataType.A:
+                if response.ans.rdtype == RdataType.A and item.ipv4 is not None:
                     offset = int(result[0]) & ((1 << (32 - item.ipv4_prefixlen)) - 1)
                     new_ips = {base + offset for base in item.ipv4}
-                elif response.ans.rdtype == RdataType.AAAA:
+                elif response.ans.rdtype == RdataType.AAAA and item.ipv6 is not None:
                     offset = int(result[0]) & ((1 << (128 - item.ipv6_prefixlen)) - 1)
                     new_ips = {base + offset for base in item.ipv6}
                 else:

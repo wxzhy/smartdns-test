@@ -42,7 +42,7 @@ class Master:
         logger.info("启动 Master 服务")
         if self.config.geodata:
             init_geo_manager(self.config.geodata)
-        cache = TLRUCache(maxsize=10000, ttu=1800)
+        cache = TLRUCache(maxsize=10000, ttu=lambda key, value, now: now + 1800)
         set_cache(cache)
         with ExitStack() as stack:
             for i in range(self.worker_count):

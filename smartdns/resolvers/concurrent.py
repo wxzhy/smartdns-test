@@ -74,7 +74,7 @@ class ConcurrentResolver(BaseResolver):
         try:
             # 不向下传 context：candidates 只记录本层直接上游的应答，
             # 避免嵌套 concurrent 时同一结果被内外层重复写入。
-            result = await resolver.query(request)
+            result = await resolver.query(request, context)
             # 跳过异常的结果
             if result.rcode != Rcode.NOERROR or result.ans is None:
                 logger.debug(
@@ -96,6 +96,9 @@ class ConcurrentResolver(BaseResolver):
                             f"ConcurrentResolver {self.name} 上游 {resolver.name} 应答被动作 {action.name} 标记为无效"
                         )
                         break
+                logger.debug(
+                    f"ConcurrentResolver {self.name} 上游 {resolver.name} 应答处理完成，结果: {result.rcode}"
+                )
                 return result
         except Exception as e:
             logger.exception(
