@@ -1,6 +1,6 @@
 import re
 from collections import defaultdict
-from ipaddress import ip_address
+from ipaddress import IPv4Address, IPv6Address, ip_address
 from pathlib import Path
 
 import aiodns
@@ -72,6 +72,20 @@ async def start(domains: set[str] | None, ips: set[str] | None):
 app = Typer()
 
 
+def default(obj):
+    if isinstance(obj, set):
+        return list(obj)
+    if isinstance(
+        obj,
+        (
+            IPv4Address,
+            IPv6Address,
+        ),
+    ):
+        return str(obj)
+    raise TypeError(f"Unsupported type: {type(obj)}")
+
+
 @app.command()
 def main(
     domain: Path | None = None,
@@ -90,7 +104,7 @@ def main(
     run(start, domains, ips, backend_options={"use_uvloop": True})
     print(ip_list)
     with output.open("w") as f:
-        ujson.dump(ip_list, f, default=tuple)
+        ujson.dump(ip_list, f, default=default)
 
 
 if __name__ == "__main__":

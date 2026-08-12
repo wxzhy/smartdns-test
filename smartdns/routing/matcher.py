@@ -9,6 +9,7 @@ from smartdns.models.rule import RequestMatcher, ResponseCnameMatcher, ResponseI
 
 def match_request(matcher: RequestMatcher, request: Request) -> bool:
     """匹配请求"""
+    rdtypes = None
     # 转换类型
     if matcher.query_types is not None:
         try:
@@ -17,7 +18,7 @@ def match_request(matcher: RequestMatcher, request: Request) -> bool:
             logger.error(f"转换查询类型时出错: {e}")
             return False
     # 判断类型
-    if request.rdtype not in rdtypes:
+    if rdtypes is not None and request.rdtype not in rdtypes:
         return False
 
     # 判断域名

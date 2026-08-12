@@ -32,23 +32,32 @@ class FallbackAction(BaseAction):
 
     def __init__(self, config: FallbackActionConfig):
         super().__init__(config)
+        for item in config.map:
+            item.match_name.query_types = {"A", "AAAA"}
         self.map: list[FallbackMap] = config.map
 
     async def start(self) -> None:
         logger.info(f"启动 Fallback Action {self.name}，映射数: {len(self.map)}")
 
     async def on_response(self, context: Context) -> None:
+        logger.debug(f"Fallback Action {self.name} 开始处理应答")
         # 跳过无响应IP的请求
         if context.response is None or context.ip_infos is None or not context.ip_infos:
             logger.debug(f"Fallback Action {self.name} 跳过无响应IP的请求")
             return
         # 跳过有可用IP的请求
-        if any(info.rtt is not None for info in context.ip_infos.values()):
+        if any(
+            info.rtt is not None and info.rtt < float("inf")
+            for info in context.ip_infos.values()
+        ):
             logger.debug(f"Fallback Action {self.name} 跳过有可用IP的请求")
             return
         # 遍历映射，找到匹配的域名和IP，替换
         for item in self.map:
             if not match_context(item.match_name, context):
+                logger.debug(
+                    f"Fallback Action {item} 跳过不匹配的域名: {context.request.qname}"
+                )
                 continue
             logger.debug(f"Fallback Action {self.name} 命中映射: {item}")
             if context.request.rdtype == RdataType.A and item.ipv4 is not None:

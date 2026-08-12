@@ -97,7 +97,7 @@ class ConcurrentResolver(BaseResolver):
                         )
                         break
                 logger.debug(
-                    f"ConcurrentResolver {self.name} 上游 {resolver.name} 应答处理完成，结果: {result.rcode}"
+                    f"ConcurrentResolver {self.name} 上游 {resolver.name} 应答处理完成，结果: {result}"
                 )
                 return result
         except Exception as e:
@@ -132,6 +132,9 @@ class ConcurrentResolver(BaseResolver):
                 result = await task
                 # 收到正常结果
                 if result is None or result.invalid:
+                    logger.debug(
+                        f"ConcurrentResolver {self.name} 上游应答无效或异常，忽略: {result}"
+                    )
                     continue
                 # 选取最快的 NOERROR 应答为 winner，其他应答累积进 candidates
                 if winner is None and result.rcode == Rcode.NOERROR:
@@ -148,7 +151,7 @@ class ConcurrentResolver(BaseResolver):
                 context.candidates = {}
             context.candidates.update(candidates)
         logger.debug(
-            f"ConcurrentResolver {self.name} 并发查询 {request.qname} 完成，未收到 NOERROR，应答候选: {list(candidates.keys())}"
+            f"ConcurrentResolver {self.name} 并发查询 {request.qname} 完成，应答候选: {list(candidates.keys())}"
         )
         if winner is not None:
             return winner

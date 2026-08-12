@@ -27,13 +27,23 @@ client:
     tries: 4
   hosts:
     dns.cloudflare.com:
-      - 162.159.38.0
-      - 162.159.39.0
-      - 162.159.44.0
-      - 162.159.45.0
+      - 172.64.145.0
+      - 172.64.146.0
+      - 104.18.38.0
+      - 104.18.39.0
       - "2606:4700:52::"
       - "2606:4700:57::"
       - "2606:4700:5a::"
+    www.baidu.com:
+      - "2001:300::5"
+      - "2001:300::6"
+      - 103.2.57.5
+      - 103.2.57.6
+    www.sina.com:
+      - "2001:b000:168::1"
+      - "2001:b000:168::2"
+      - 168.95.1.1
+      - 168.95.192.1
 
 nameservers:
   - name: test-tcp
@@ -77,6 +87,18 @@ nameservers:
     want_get: false
     verify: true
     ech: crypto.cloudflare.com
+  - name: iij
+    type: curl
+    url: https://www.baidu.com/dns-query
+    host: public.dns.iij.jp
+    want_get: false
+    verify: false
+  - name: hinet
+    type: curl
+    url: https://www.sina.com/dns-query
+    host: dns.hinet.net
+    want_get: false
+    verify: false
 resolvers:
   - name: 114dns
     type: aiodns
@@ -100,26 +122,25 @@ resolvers:
       - 180.184.1.1
       - 180.184.2.2
       # - test-udp
+  - name: isp
+    type: aiodns
+    nameservers:
+      - 218.2.2.2
+      - 218.4.4.4
     timeout: 1
     tries: 4
-  - name: google-1
-    type: plain
-    nameservers:
-      - google-1
-      - google-2
-    timeout: 3
-    lifetime: 5
-  - name: google-2
-    type: plain
-    nameservers:
-      - google-3
-      - google-4
-    timeout: 3
-    lifetime: 5
   - name: doh-test
     type: plain
     nameservers:
       - curl-doh
+  - name: hinet
+    type: plain
+    nameservers:
+      - hinet
+  - name: iij
+    type: plain
+    nameservers:
+      - iij
   - name: doh-goog
     type: plain
     nameservers:
@@ -136,15 +157,17 @@ resolvers:
   - name: cn
     type: concurrent
     resolvers:
-      - trafficroute
+      - isp
       - dnspod
       - 114dns
     timeout: 2
   - name: global
     type: concurrent
     resolvers:
-      - google
+      - hinet
+      - iij
       - doh-test
+    wait_all: true
     actions:
       - replace
       - speedcheck
@@ -176,10 +199,10 @@ actions:
           ip_include:
             - cloudflare
         ipv4:
-          - 162.159.38.0
-          - 162.159.39.0
-          - 162.159.44.0
-          - 162.159.45.0
+          - 172.64.145.0
+          - 172.64.146.0
+          - 104.18.38.0
+          - 104.18.39.0
         ipv6:
           - "2606:4700:52::"
           - "2606:4700:57::"
@@ -196,8 +219,8 @@ actions:
   - name: https
     type: https
     match_name:
-      domain_include:
-        - cloudflare
+      domain_exclude:
+        - cn
     match_ip:
       ip_include:
         - cloudflare
@@ -211,15 +234,13 @@ actions:
           domain_exclude:
             - google-cn
             - googlefcm
-        ipv4:
-          - 142.251.65.170
         ipv6:
-          - "2607:f8b0:4007:804::2012"
-          - "2607:f8b0:4007:803::2015"
-          - "2607:f8b0:4007:807::2007"
-          - "2607:f8b0:4007:80b::2012"
-          - "2607:f8b0:4007:805::2015"
-          - "2607:f8b0:4007:806::2017"
+          - "2607:f8b0:400e:c17::c4"
+          - "2607:f8b0:400e:c0d::5a"
+          - "2607:f8b0:400e:c1b::7c"
+          - "2607:f8b0:400e:c00::5a"
+          - "2607:f8b0:400e:c0c::c8"
+          - "2607:f8b0:400e:c06::c2"
 routing:
   - name: ads
     before:
@@ -234,17 +255,16 @@ routing:
     matcher:
       domain_include:
         - google-cn
+    after:
+      - https
   - name: rule1
     resolver: cn
     matcher:
       domain_include:
         - cn
-    #  - name: rule2
-    #    matcher:
-    #      domain_include:
-    #        - google
-    #    after:
-    #      - fallback
+    after:
+      - speedcheck
+      - https
   #    resolver: doh-test
   - name: rule3
     after:

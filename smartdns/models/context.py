@@ -90,7 +90,7 @@ class Response:
     @classmethod
     def from_rcode(cls, rcode: Rcode, upstream: str) -> Response:
         """从rcode创建Response对象"""
-        return cls(rcode=rcode, upstream=upstream, invalid=True)
+        return cls(rcode=rcode, upstream=upstream, invalid=False)
 
     @classmethod
     def from_answer(cls, answer: Answer, upstream: str) -> Response:
