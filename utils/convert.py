@@ -1,5 +1,6 @@
 import pickle
 from collections import defaultdict
+from ipaddress import ip_address, ip_network
 from itertools import chain, repeat
 from pathlib import Path
 
@@ -72,12 +73,12 @@ def main(
                     if line and not line.startswith("#"):
                         ip = line.strip()
                         if "/" in ip:
-                            ip: IPvAnyNetwork = IPvAnyNetwork(ip)
+                            ip = ip_network(ip)
                             node = radix.add(
                                 packed=ip.network_address.packed, masklen=ip.prefixlen
                             )
                         else:
-                            ip = IPvAnyAddress(ip)
+                            ip = ip_address(ip)
                             node = radix.add(packed=ip.packed)
                         node.data[tag_name.lower()] = True
     if output_path.exists():
