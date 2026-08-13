@@ -151,7 +151,7 @@
 | `type` | 类 | 说明 |
 |---|---|---|
 | `udp` | `UDPNameserver` | UDP 直连。`repeat` 重复发包提高成功率；`use_tricks` 启用"多收几跳跳过伪造包"的接收技巧 |
-| `tcp` | `TCPNameserver` | TCP 直连。`pool_size>0` 时用 `generic_connection_pool` 复用连接；`use_tricks` 为兼容字段，AnyIO 路径使用安全的普通异步发送 |
+| `tcp` | `TCPNameserver` | TCP 直连。`pool_size>0` 时用 `generic_connection_pool` 复用连接；`use_tricks` 尝试非阻塞 OOB 前缀发送，不支持或失败时回退完整报文的普通异步发送 |
 | `curl` | `CurlNameserver` | 用 `curl-cffi`（chrome 指纹）发 DoH。支持自定义 `Host`、GET/POST、证书校验开关、**ECH**（从指定域名现查 HTTPS 记录取 ECH 密钥） |
 
 > curl 会话**每个上游独占一份** `AsyncSession`，避免共享会话被逐请求改 ECH 选项导致竞态。
@@ -315,5 +315,5 @@ uv run pytest
 - 想关缓存：`cache_size: 0`。
 - 广告拦截：定义 `static` 动作（默认 127.0.0.1 / ::1）+ 一条 `domain_include: [category-ads-all]` 的路由放在最前。
 - CDN 优选：用 `replace`（改写到自有优选段，保留主机位）或 `speedcheck`（实测择优）。
-- 防 DNS 污染：UDP 上游可开 `use_tricks` 多收并过滤明显异常包；TCP 始终使用普通异步发送。
+- 防 DNS 污染：UDP 上游可开 `use_tricks` 多收并过滤明显异常包；TCP 可开 `use_tricks` 尝试 OOB 前缀发送，失败时自动回退普通异步发送。
 - ECH：`curl` 上游 + `https` 动作配合，可对 Cloudflare 等 CDN 的 HTTPS 记录注入 ECH 密钥。

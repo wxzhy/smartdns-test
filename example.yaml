@@ -46,6 +46,22 @@ listeners:
     timeout: 5
 
 nameservers:
+  # UDP/TCP 上游选项示例；按需取消注释并让 plain Resolver 引用其名称。
+  # - name: udp-upstream
+  #   type: udp
+  #   address: 1.1.1.1
+  #   port: 53
+  #   repeat: 0
+  #   use_tricks: false
+  #   timeout: 3
+  # - name: tcp-upstream
+  #   type: tcp
+  #   address: 8.8.8.8
+  #   port: 53
+  #   pool_size: 4
+  #   use_tricks: false
+  #   timeout: 5
+
   - name: doh-cloudflare
     type: curl
     url: https://cloudflare-dns.com/dns-query

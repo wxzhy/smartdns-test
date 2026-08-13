@@ -144,7 +144,7 @@ listeners:
 - `pool_size: 0` 表示每次查询新建连接。
 - 大于 0 时按 Worker 创建独立连接池。
 - 连接池健康检查只做非破坏性 `MSG_PEEK`，不会关闭可复用连接。
-- `use_tricks` 为兼容字段；AnyIO 路径不会切换底层 socket 阻塞状态或发送 OOB 数据。
+- `use_tricks` 启用尽力而为的 OOB 前缀发送；实现不会切换 AnyIO 底层 socket 的阻塞状态，后端不支持或发送失败时会回退为完整报文的普通异步发送。
 
 ### curl DoH
 

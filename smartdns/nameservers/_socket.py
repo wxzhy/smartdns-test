@@ -1,4 +1,4 @@
-from socket import SOCK_DGRAM, SOCK_STREAM
+from socket import MSG_OOB, SOCK_DGRAM, SOCK_STREAM
 
 from anyio import EndOfStream, fail_after
 from anyio.abc import SocketAttribute
@@ -76,11 +76,31 @@ class AnyioStreamSocket(StreamSocket):
         self._stream = stream
         self._use_tricks = use_tricks
 
+    def _send_trick_prefix(self, what: bytes) -> bool:
+        """尝试以 OOB 方式发送报文前缀，不改变 AnyIO socket 的阻塞状态。"""
+        if not self._use_tricks or len(what) <= 32:
+            return False
+
+        try:
+            raw_socket = self._stream.extra(SocketAttribute.raw_socket, None)
+            if raw_socket is None:
+                return False
+
+            # asyncio 后端暴露的是 TransportSocket，实际 socket 位于 _sock；
+            # 其他后端可能直接返回标准库 socket。
+            socket = getattr(raw_socket, "_sock", raw_socket)
+            trick_prefix = what[:16] + b"\x00"
+            return socket.send(trick_prefix, MSG_OOB) == len(trick_prefix)
+        except Exception:
+            # 该技巧不是查询成功的必要条件。平台或后端不支持时由调用方
+            # 回退为完整报文的普通异步发送。
+            return False
+
     async def sendall(self, what, timeout):
         try:
             with fail_after(timeout):
-                # AnyIO stream 不能安全切换底层共享 socket 的阻塞模式；保留该配置
-                # 作为兼容字段，统一使用普通异步发送。
+                if self._send_trick_prefix(what):
+                    what = what[16:]
                 await self._stream.send(what)
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err

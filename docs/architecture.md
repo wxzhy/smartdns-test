@@ -192,7 +192,7 @@ Nameserver 代表 dnspython 可调用的一台底层上游，只被 `plain` Reso
 | 类型 | 实现 | 主要行为 |
 |---|---|---|
 | `udp` | `UDPNameserver` | 每次查询创建 connected UDP socket；`repeat` 控制重复发包次数；`use_tricks` 最多多收几次并按报文特征过滤明显异常包 |
-| `tcp` | `TCPNameserver` | 普通 DNS over TCP；`pool_size > 0` 时使用连接池复用连接；`use_tricks` 作为兼容字段保留，实际采用普通异步发送 |
+| `tcp` | `TCPNameserver` | 普通 DNS over TCP；`pool_size > 0` 时使用连接池复用连接；`use_tricks` 尝试非阻塞 OOB 前缀发送，失败时回退完整报文的普通异步发送 |
 | `curl` | `CurlNameserver` | 使用独占的 curl-cffi AsyncSession 发送 DoH GET/POST；可改 Host、证书验证并请求 ECH 配置 |
 
 curl 会话由各 CurlNameserver 独占，避免不同 DoH 上游共享并修改同一个 ECH 会话配置。`client.hosts` 会转换为 curl `RESOLVE`，仅为这些 HTTP 请求提供静态主机映射。
