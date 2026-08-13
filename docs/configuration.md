@@ -302,12 +302,15 @@ match_ip:
   type: speedcheck
   ping_config:
     ping: true
+    privileged: false
     port: [443]
     timeout: 0.3
   match_ip: {}
   max_num: 2
   threshold: 50
 ```
+
+`privileged: false`（默认）使用 icmplib 的非特权 ICMP 模式；设为 `true` 时使用原始 ICMP socket，进程需要平台要求的 root、管理员权限或 `CAP_NET_RAW`。它只影响 ICMP，不影响 TCP 端口测速。
 
 通常同时放在 ConcurrentResolver 的 `actions` 和路由 `after`：前者采样，后者择优。若只放在路由 `after`，没有 `context.ip_infos` 可供选择。
 

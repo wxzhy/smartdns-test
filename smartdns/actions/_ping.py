@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     from smartdns.models.action import PingConfig
 
-SpeedtestKey = tuple[str, bool, tuple[int, ...], float]
+SpeedtestKey = tuple[str, bool, bool, tuple[int, ...], float]
 
 
 class _CacheHolder:
@@ -45,14 +45,15 @@ def _speedtest_key(
     return (
         str(ip),
         config.ping,
+        config.privileged,
         tuple(sorted(config.port or set())),
         config.timeout,
     )
 
 
-async def ping(ip: str, timeout: float = 1.0) -> float | None:
+async def ping(ip: str, timeout: float = 1.0, privileged: bool = False) -> float | None:
     """ICMP 测速，返回毫秒。"""
-    output = await async_ping(ip, count=1, timeout=timeout, privileged=False)
+    output = await async_ping(ip, count=1, timeout=timeout, privileged=privileged)
     return output.avg_rtt if output.is_alive else None
 
 
@@ -71,7 +72,13 @@ async def tcping(ip: str, port: int, timeout: float = 1.0) -> float | None:
 async def _measure(ip: str, config: PingConfig) -> float:
     probes: list[Callable[[], Awaitable[float | None]]] = []
     if config.ping:
-        probes.append(lambda: ping(ip, config.timeout))
+        probes.append(
+            lambda: ping(
+                ip,
+                timeout=config.timeout,
+                privileged=config.privileged,
+            )
+        )
     probes.extend(
         lambda port=port: tcping(ip, port, config.timeout)
         for port in sorted(config.port or set())

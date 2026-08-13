@@ -100,8 +100,15 @@ class UDPListener(BaseListener):
                             )
                 except TimeoutError:
                     logger.warning("UDP监听器 {} 请求处理超时", self.name)
-                except Exception:
-                    logger.exception("UDP监听器 {} 处理请求失败", self.name)
+                except Exception as error:
+                    # 不用 logger.exception：Loguru diagnose 会展开 sendto 局部变量，
+                    # 从而把完整 DNS wire 写入日志。
+                    logger.warning(
+                        "UDP监听器 {} 处理请求失败: {}: {}",
+                        self.name,
+                        type(error).__name__,
+                        error,
+                    )
                 finally:
                     limiter.release()
 

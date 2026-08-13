@@ -103,6 +103,9 @@ class PingConfig(StrictModel):
     """ping 测速配置。"""
 
     ping: bool = Field(default=True, description="是否启用ping测速")
+    privileged: bool = Field(
+        default=False, description="是否使用需要系统权限的原始 ICMP socket"
+    )
     port: set[int] | None = Field(
         default=None, description="测速端口列表，空表示不测速"
     )

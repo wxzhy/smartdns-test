@@ -120,6 +120,7 @@ Master.dispatch()
 - TCP Listener 接受长连接，并在同一连接内循环处理多个 DNS 消息。
 - 两者都使用 dnspython 的 `receive_*`/`send_*`，底层通过 AnyIO socket 适配器接入。
 - UDP 响应按客户端 EDNS payload 序列化；无 EDNS 时使用传统 512 字节上限。超限时返回 `TC=1` 的截断响应，由客户端改用 TCP 重试，而不是丢包超时。
+- UDP 请求处理保持并发，但共享 Listener socket 的 datagram 写入会在适配器内排队，避免 AnyIO 对并发写入抛出 `BusyResourceError`。
 - TCP 响应按 DNS over TCP 的 65535 字节上限完整序列化，不继承查询中的 UDP EDNS payload 限制。
 - `Request.from_message()` 使用第一条 Question，填充 `qname`、`rdtype`、`rdclass`、客户端地址、`NameInfo` 和 `IPInfo`。
 - 单包或单连接处理异常只记录日志；Master/Worker 内部异常统一降级为 SERVFAIL。
@@ -288,7 +289,7 @@ Action 放在没有实现的阶段时是 no-op，不会报错。
 
 `on_resolver` 对 A/AAAA 候选 IP 进行 ICMP ping 和/或多个 TCP 端口连接测试；任一方式成功即采用该结果。`on_response` 选择最低 RTT 所属 Resolver 的候选，并保留与最佳结果标签集合相同、RTT 差不超过 `threshold` 的前 `max_num` 个地址。
 
-ICMP 与 TCP 测速均返回毫秒。任一探测成功后取消其余探测；结果缓存 1800 秒，键包含 IP、是否 ICMP、TCP 端口集合和超时配置。同一事件循环内的同键请求还会复用正在进行的测速任务。
+ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使用非特权模式还是原始 ICMP socket。任一探测成功后取消其余探测；结果缓存 1800 秒，键包含 IP、是否 ICMP、ICMP 特权模式、TCP 端口集合和超时配置。同一事件循环内的同键请求还会复用正在进行的测速任务。
 
 ### https
 

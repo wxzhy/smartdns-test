@@ -118,6 +118,7 @@ actions:
     type: speedcheck
     ping_config:
       ping: true
+      privileged: false
       timeout: 0.3
     max_num: 2
     threshold: 50

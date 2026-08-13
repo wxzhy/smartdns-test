@@ -81,5 +81,10 @@ class TCPListener(BaseListener):
                 pass
             except TimeoutError:
                 logger.warning(f"TCP监听器 {self.name} 请求处理超时")
-            except Exception:
-                logger.exception(f"TCP监听器 {self.name} 处理连接失败")
+            except Exception as error:
+                logger.warning(
+                    "TCP监听器 {} 处理连接失败: {}: {}",
+                    self.name,
+                    type(error).__name__,
+                    error,
+                )

@@ -1,6 +1,6 @@
 from socket import SOCK_DGRAM, SOCK_STREAM
 
-from anyio import EndOfStream, fail_after
+from anyio import EndOfStream, Lock, fail_after
 from anyio.abc import SocketAttribute
 from dns._asyncbackend import DatagramSocket, StreamSocket
 from dns.exception import Timeout
@@ -11,6 +11,9 @@ class AnyioDatagramSocket(DatagramSocket):
 
     def __init__(self, sock):
         self._sock = sock
+        # AnyIO UDPSocket 拒绝多个任务同时写入；Listener 会并发处理请求，
+        # 因此在适配器边界将每个完整 datagram 的发送排队。
+        self._send_lock = Lock()
         super().__init__(
             family=sock.extra(SocketAttribute.family, None), type=SOCK_DGRAM
         )
@@ -18,7 +21,8 @@ class AnyioDatagramSocket(DatagramSocket):
     async def sendto(self, what, destination, timeout):
         try:
             with fail_after(timeout):
-                await self._sock.sendto(what, destination[0], destination[1])
+                async with self._send_lock:
+                    await self._sock.sendto(what, destination[0], destination[1])
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err
         return len(what)
