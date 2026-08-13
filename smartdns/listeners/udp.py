@@ -22,6 +22,8 @@ from smartdns.listeners.base import BaseListener
 from smartdns.models.context import Request
 
 if TYPE_CHECKING:
+    from dns.message import Message
+
     from smartdns.listeners.base import Handler
     from smartdns.models.listener import Do53ListenerConfig
 
@@ -62,6 +64,12 @@ class UDPListener(BaseListener):
             sock.close()
             raise
 
+    @staticmethod
+    def _serialize_response(request: Message, response: Message) -> bytes:
+        """按客户端声明的 UDP 容量序列化，超限时返回带 TC 的合法响应。"""
+        max_size = request.payload if request.edns >= 0 else 512
+        return response.to_wire(max_size=max_size, prefer_truncation=True)
+
     async def start(self, handler: Handler):
         """启动UDP监听器并进入接收循环。"""
         self.handler = handler
@@ -83,16 +91,17 @@ class UDPListener(BaseListener):
                         )
                         response = await handler(request)
                         if response is not None:
+                            wire = self._serialize_response(request.msg, response)
                             await send_udp(
                                 anyio_socket,
-                                response.to_wire(),
+                                wire,
                                 client,
                                 expiration=time() + self.timeout,
                             )
                 except TimeoutError:
                     logger.warning("UDP监听器 {} 请求处理超时", self.name)
                 except Exception:
-                    logger.warning("UDP监听器 {} 处理请求失败", self.name)
+                    logger.exception("UDP监听器 {} 处理请求失败", self.name)
                 finally:
                     limiter.release()
 

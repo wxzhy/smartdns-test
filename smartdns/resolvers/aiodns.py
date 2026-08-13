@@ -197,7 +197,14 @@ class AioDNSResolver(BaseResolver):
             case MXRecordData():
                 rrset.add(MX(rdclass, rdtype, rdata.priority, rdata.exchange))
             case TXTRecordData():
-                rrset.add(TXT(rdclass, rdtype, (rdata.data,)))
+                # pycares 5 将一个 TXT RR 内的 character-string 拼成单个 bytes，
+                # 但 DNS wire 中每个 string 最长 255 字节。原始分段边界已丢失，
+                # 因此按协议上限重新分段，至少保证长 TXT 可合法编码和转发。
+                chunks = tuple(
+                    rdata.data[offset : offset + 255]
+                    for offset in range(0, len(rdata.data), 255)
+                ) or (b"",)
+                rrset.add(TXT(rdclass, rdtype, chunks))
             case CAARecordData():
                 rrset.add(CAA(rdclass, rdtype, rdata.critical, rdata.tag, rdata.value))
             case CNAMERecordData():

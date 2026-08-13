@@ -3,10 +3,10 @@ from typing import TYPE_CHECKING
 import dns.asyncbackend
 import dns.asyncquery
 import dns.message
-from anyio import create_connected_udp_socket
+from anyio import connect_tcp, create_connected_udp_socket
 from loguru import logger
 
-from smartdns.nameservers._socket import AnyioDatagramSocket
+from smartdns.nameservers._socket import AnyioDatagramSocket, AnyioStreamSocket
 from smartdns.nameservers.base import BaseAddressNameserver
 
 if TYPE_CHECKING:
@@ -47,6 +47,20 @@ class UDPNameserver(BaseAddressNameserver):
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
         try:
+            effective_timeout = timeout or self.timeout
+            if max_size:
+                # dnspython 在 UDP 响应带 TC 时会用同一 Nameserver 再调用一次，
+                # 并通过 max_size=True 要求改走 TCP。
+                async with await connect_tcp(self.host, self.port) as raw_stream:
+                    return await dns.asyncquery.tcp(
+                        request,
+                        where=self.address,
+                        timeout=effective_timeout,
+                        port=self.port,
+                        sock=AnyioStreamSocket(raw_stream),
+                        one_rr_per_rrset=one_rr_per_rrset,
+                        ignore_trailing=ignore_trailing,
+                    )
             async with await create_connected_udp_socket(
                 self.host, self.port
             ) as raw_sock:
@@ -56,11 +70,13 @@ class UDPNameserver(BaseAddressNameserver):
                 return await dns.asyncquery.udp(
                     request,
                     where=self.address,
-                    timeout=timeout or self.timeout,
+                    timeout=effective_timeout,
                     port=self.port,
                     sock=sock,
                     ignore_unexpected=True,
-                    ignore_trailing=True,
+                    one_rr_per_rrset=one_rr_per_rrset,
+                    ignore_trailing=ignore_trailing,
+                    raise_on_truncation=True,
                 )
         except Exception:
             logger.exception(f"UDP解析器 {self.name} 查询失败")

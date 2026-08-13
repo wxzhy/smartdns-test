@@ -119,6 +119,8 @@ Master.dispatch()
 - UDP Listener 逐包接收 DNS 消息，每个包独立调用处理器。
 - TCP Listener 接受长连接，并在同一连接内循环处理多个 DNS 消息。
 - 两者都使用 dnspython 的 `receive_*`/`send_*`，底层通过 AnyIO socket 适配器接入。
+- UDP 响应按客户端 EDNS payload 序列化；无 EDNS 时使用传统 512 字节上限。超限时返回 `TC=1` 的截断响应，由客户端改用 TCP 重试，而不是丢包超时。
+- TCP 响应按 DNS over TCP 的 65535 字节上限完整序列化，不继承查询中的 UDP EDNS payload 限制。
 - `Request.from_message()` 使用第一条 Question，填充 `qname`、`rdtype`、`rdclass`、客户端地址、`NameInfo` 和 `IPInfo`。
 - 单包或单连接处理异常只记录日志；Master/Worker 内部异常统一降级为 SERVFAIL。
 
@@ -191,7 +193,7 @@ Nameserver 代表 dnspython 可调用的一台底层上游，只被 `plain` Reso
 
 | 类型 | 实现 | 主要行为 |
 |---|---|---|
-| `udp` | `UDPNameserver` | 每次查询创建 connected UDP socket；`repeat` 控制重复发包次数；`use_tricks` 最多多收几次并按报文特征过滤明显异常包 |
+| `udp` | `UDPNameserver` | 每次查询创建 connected UDP socket；`repeat` 控制重复发包次数；`use_tricks` 最多多收几次并按报文特征过滤明显异常包；上游返回 `TC=1` 时由 dnspython 触发对同一地址的 TCP 重试 |
 | `tcp` | `TCPNameserver` | 普通 DNS over TCP；`pool_size > 0` 时使用连接池复用连接；`use_tricks` 尝试非阻塞 OOB 前缀发送，失败时回退完整报文的普通异步发送 |
 | `curl` | `CurlNameserver` | 使用独占的 curl-cffi AsyncSession 发送 DoH GET/POST；可改 Host、证书验证并请求 ECH 配置 |
 
@@ -207,7 +209,7 @@ TCP pool 使用非破坏性的 `MSG_PEEK` 健康检查，不会关闭被检查�
 
 `type: aiodns` 直接把 `nameservers` 中的 IP 地址交给 pycares，不经过 `nameservers` 管理器。它支持 EDNS、轮询、TCP、端口和重试次数，并把 pycares 结果转换为 dnspython Answer。
 
-已转换的记录类型包括 A、AAAA、CAA、CNAME、HTTPS、MX、NAPTR、NS、PTR、SOA、SRV、TLSA、TXT 和 URI。ARES_ENODATA 映射为空 NOERROR，ARES_ENOTFOUND 映射为 NXDOMAIN，其他异常映射为 SERVFAIL。
+已转换的记录类型包括 A、AAAA、CAA、CNAME、HTTPS、MX、NAPTR、NS、PTR、SOA、SRV、TLSA、TXT 和 URI。pycares 会丢失 TXT 的原始 character-string 分段边界，因此长 TXT 会按每段最多 255 字节重新分段后编码。ARES_ENODATA 映射为空 NOERROR，ARES_ENOTFOUND 映射为 NXDOMAIN，其他异常映射为 SERVFAIL。
 
 模型中存在 `ecs` 和 `cache_size` 字段，但当前 AioDNSResolver 实现没有使用它们。
 

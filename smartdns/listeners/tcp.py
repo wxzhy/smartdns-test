@@ -27,6 +27,11 @@ class TCPListener(BaseListener):
         self.reuse_port = config.reuse_port
         self._listener = None
 
+    @staticmethod
+    def _serialize_response(response: Message) -> bytes:
+        """序列化完整 TCP DNS 响应，不继承 UDP EDNS payload 限制。"""
+        return response.to_wire(max_size=65535)
+
     async def start(self, handler: Handler):
         """启动TCP监听器"""
         self._listener = await create_tcp_listener(
@@ -65,9 +70,10 @@ class TCPListener(BaseListener):
                         )
                         response: Message | None = await handler(request)
                         if response is not None:
+                            wire = self._serialize_response(response)
                             await send_tcp(
                                 anyio_stream,
-                                response.to_wire(),
+                                wire,
                                 expiration=time() + self.timeout,
                             )
             except EOFError:
@@ -76,4 +82,4 @@ class TCPListener(BaseListener):
             except TimeoutError:
                 logger.warning(f"TCP监听器 {self.name} 请求处理超时")
             except Exception:
-                logger.warning(f"TCP监听器 {self.name} 处理连接失败")
+                logger.exception(f"TCP监听器 {self.name} 处理连接失败")

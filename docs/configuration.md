@@ -110,6 +110,8 @@ listeners:
 | `timeout` | 全部 | 5 秒 | 单个请求从接收、处理到回写的整体超时 |
 | `reuse_port` | UDP/TCP | false | Windows UDP 会忽略并告警；TCP 交给 AnyIO |
 
+UDP 回包会遵循客户端声明的 EDNS payload；没有 EDNS 时上限为 512 字节。较大响应会返回带 `TC=1` 的合法截断报文，客户端随后可通过 TCP 获取完整结果。TCP Listener 支持完整的最大 65535 字节 DNS 消息，不受 UDP payload 限制。
+
 `type: http` 尚未实现，配置加载阶段会明确拒绝。
 
 ## 5. Nameserver
@@ -128,6 +130,7 @@ listeners:
 
 - `repeat` 为额外重复次数，0 表示只发一次。
 - `use_tricks` 启用最多五次接收和简单报文特征过滤。
+- 上游 UDP 响应带 `TC=1` 时，plain Resolver 会自动对同一地址和端口改用 TCP 重试。
 
 ### TCP
 

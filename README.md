@@ -150,13 +150,15 @@
 
 | `type` | 类 | 说明 |
 |---|---|---|
-| `udp` | `UDPNameserver` | UDP 直连。`repeat` 重复发包提高成功率；`use_tricks` 启用"多收几跳跳过伪造包"的接收技巧 |
+| `udp` | `UDPNameserver` | UDP 直连。`repeat` 重复发包提高成功率；`use_tricks` 启用"多收几跳跳过伪造包"的接收技巧；截断响应自动对同一上游改用 TCP 重试 |
 | `tcp` | `TCPNameserver` | TCP 直连。`pool_size>0` 时用 `generic_connection_pool` 复用连接；`use_tricks` 尝试非阻塞 OOB 前缀发送，不支持或失败时回退完整报文的普通异步发送 |
 | `curl` | `CurlNameserver` | 用 `curl-cffi`（chrome 指纹）发 DoH。支持自定义 `Host`、GET/POST、证书校验开关、**ECH**（从指定域名现查 HTTPS 记录取 ECH 密钥） |
 
 > curl 会话**每个上游独占一份** `AsyncSession`，避免共享会话被逐请求改 ECH 选项导致竞态。
 
 所有上游用 `anyio` 的 socket 适配成 dnspython 后端 `DatagramSocket` / `StreamSocket`（`nameservers/_socket.py`、`listeners/_socket.py`），从而统一用 `dns.asyncquery` 的收发逻辑。
+
+对客户端回包时，UDP 遵循 EDNS payload（无 EDNS 为 512 字节），大响应以 `TC=1` 截断；TCP 则返回最大 65535 字节的完整 DNS 消息。因此 `cloudflare.com` 这类较大的 TXT 响应不会再因 `TooBig` 被静默丢弃。
 
 ---
 
@@ -166,7 +168,7 @@
 
 | `type` | 类 | 说明 |
 |---|---|---|
-| `aiodns` | `AioDNSResolver` | 基于 `aiodns`/pycares 的异步解析，内置完整记录类型转换（A/AAAA/MX/TXT/CAA/CNAME/HTTPS/NAPTR/NS/PTR/SOA/SRV/TLSA/URI）。把 pycares 的 `DNSResult` 重新组装成 `dns.resolver.Answer`。支持 EDNS、TCP 模式、tries、轮询 |
+| `aiodns` | `AioDNSResolver` | 基于 `aiodns`/pycares 的异步解析，内置完整记录类型转换（A/AAAA/MX/TXT/CAA/CNAME/HTTPS/NAPTR/NS/PTR/SOA/SRV/TLSA/URI）；长 TXT 按 255 字节上限重新分段。把 pycares 的 `DNSResult` 重新组装成 `dns.resolver.Answer`。支持 EDNS、TCP 模式、tries、轮询 |
 | `plain` | `PlainResolver` | 继承 `dnspython.Resolver`，把配置里的上游**名字**解析成 `Nameserver` 实例挂在 `resolver.nameservers` 上，由 dnspython 自行调度。支持固定 ECS（EDNS Client Subnet）和 `lifetime` |
 | `concurrent` | `ConcurrentResolver` | 按完成顺序消费结果；`wait_all=false` 在首个带 Answer 的 NOERROR 后取消其余查询，`wait_all=true` 在整体超时内收集候选供 after 动作挑选 |
 
