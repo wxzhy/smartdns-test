@@ -154,19 +154,31 @@ class AioDNSResolver(BaseResolver):
         answer.set_rcode(Rcode.NOERROR)
         if result is None:
             return answer
-        # 将pycares的DNSResult对象转换为dns.resolver.Answer对象
-        for record in result.answer:
-            rrset = AioDNSResolver.convert_record(record)
-            answer.answer.append(rrset)
-        for record in result.authority:
-            rrset = AioDNSResolver.convert_record(record)
-            answer.authority.append(rrset)
-        for record in result.additional:
-            rrset = AioDNSResolver.convert_record(record)
-            answer.additional.append(rrset)
+        for records, section in (
+            (result.answer, answer.answer),
+            (result.authority, answer.authority),
+            (result.additional, answer.additional),
+        ):
+            for record in records:
+                AioDNSResolver.merge_record(answer, section, record)
         # 关闭 RRset 索引（dnspython 运行期支持 index=None，其类型标注未含 None）。
         answer.index = None  # ty: ignore[invalid-assignment]
         return answer
+
+    @staticmethod
+    def merge_record(message: Message, section: list[RRset], record: DNSRecord) -> None:
+        """将单条 pycares 记录合并到 section 中对应的标准 DNS RRset。"""
+        incoming = AioDNSResolver.convert_record(record)
+        rrset = message.find_rrset(
+            section,
+            incoming.name,
+            incoming.rdclass,
+            incoming.rdtype,
+            covers=incoming.covers,
+            deleting=incoming.deleting,
+            create=True,
+        )
+        rrset.update(incoming)
 
     def make_answer(self, key: CacheKey, message: Message) -> Answer:
         """将消息包装为 dns.resolver.Answer 对象。"""
