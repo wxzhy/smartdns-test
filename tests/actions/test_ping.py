@@ -1,5 +1,6 @@
 """测速单位、缓存键和同键 in-flight 合并回归测试。"""
 
+from asyncio import create_task
 from typing import TYPE_CHECKING
 
 import pytest
@@ -16,8 +17,6 @@ if TYPE_CHECKING:
 @pytest.fixture(autouse=True)
 def _reset_speed_cache() -> None:
     _ping.set_cache(None)
-    with _ping._inflight_lock:
-        _ping._inflight.clear()
 
 
 async def test_tcping_returns_milliseconds(monkeypatch) -> None:
@@ -83,9 +82,9 @@ async def test_speedtest_deduplicates_same_key_but_not_different_config(
     same = PingConfig(ping=False, port={443}, timeout=0.3)
     different = PingConfig(ping=False, port={80}, timeout=0.3)
 
-    first = _ping.create_task(_ping.speedtest("192.0.2.1", same))
-    duplicate = _ping.create_task(_ping.speedtest("192.0.2.1", same))
-    other = _ping.create_task(_ping.speedtest("192.0.2.1", different))
+    first = create_task(_ping.speedtest("192.0.2.1", same))
+    duplicate = create_task(_ping.speedtest("192.0.2.1", same))
+    other = create_task(_ping.speedtest("192.0.2.1", different))
     await started.wait()
     await checkpoint()
     assert sorted(calls) == [(80,), (443,)]

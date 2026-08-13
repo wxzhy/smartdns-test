@@ -1,5 +1,3 @@
-from asyncio import Task, create_task, get_running_loop, shield
-from contextlib import suppress
 from ipaddress import IPv6Address
 from threading import Lock
 from typing import TYPE_CHECKING, ClassVar
@@ -12,9 +10,16 @@ from dns.rdtypes.svcbbase import ParamKey
 from loguru import logger
 
 from smartdns.resolvers.aiodns import AioDNSResolver
+from smartdns.utils.cache_async import cached
 
 if TYPE_CHECKING:
     from smartdns.models.config import HTTPClientConfig
+
+
+def _ech_cache_key(client: object, domain: str | Name) -> tuple[int, str]:
+    if isinstance(domain, str):
+        domain = from_text(domain)
+    return id(client), domain.canonicalize().to_text()
 
 
 class HTTPClient:
@@ -30,8 +35,6 @@ class HTTPClient:
             if config.resolver is not None
             else None
         )
-        self._ech_inflight: dict[tuple[int, str], Task[str | None]] = {}
-        self._ech_lock = Lock()
 
     async def start(self):
         """启动HTTP客户端。
@@ -90,34 +93,13 @@ class HTTPClient:
             curl_options=opt,
         )
 
+    @cached(cache, key=_ech_cache_key, lock=_cache_lock)
     async def get_ech_key(self, domain: str | Name) -> str | None:
+        """查询 ECHConfig；缓存和同键调用合并由 decorator 统一处理。"""
         if self.resolver is None:
             raise ValueError("HTTP客户端未配置上游DNS解析器")
         if isinstance(domain, str):
             domain = from_text(domain)
-        domain_text = domain.canonicalize().to_text()
-        cache_key = (id(self), domain_text)
-        with self._cache_lock, suppress(KeyError):
-            return self.cache[cache_key]
-
-        loop_key = (id(get_running_loop()), domain_text)
-        with self._ech_lock:
-            task = self._ech_inflight.get(loop_key)
-            if task is None:
-                task = create_task(self._resolve_ech_key(domain))
-                self._ech_inflight[loop_key] = task
-        try:
-            result = await shield(task)
-            with self._cache_lock:
-                self.cache[cache_key] = result
-            return result
-        finally:
-            if task.done():
-                with self._ech_lock:
-                    self._ech_inflight.pop(loop_key, None)
-
-    async def _resolve_ech_key(self, domain: Name) -> str | None:
-        """解析单个域名的 ECHConfig；缓存和并发合并由调用方管理。"""
         assert self.resolver is not None
         try:
             ans = await self.resolver.resolve(domain, RdataType.HTTPS)

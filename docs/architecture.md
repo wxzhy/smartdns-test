@@ -304,11 +304,11 @@ ICMP 与 TCP 测速均返回毫秒。任一探测成功后取消其余探测；�
 
 1. Master DNS Answer 缓存：容量由顶层 `cache_size` 控制，`0` 关闭，过期时间取 Answer 自身 expiration。
 2. HTTPClient ECHConfig 缓存：类级 TTLCache，最多 10 项、300 秒，并按 HTTPClient 实例和域名隔离。
-3. 测速缓存：Master 创建 10000 项、1800 秒的 TLRUCache，保存跨 Worker 可共享的数值结果；每个事件循环单独维护 in-flight 任务。
+3. 测速缓存：Master 创建 10000 项、1800 秒的 TLRUCache，保存跨 Worker 可共享的数值结果。
 
 Master Answer 缓存键包含 `(qname, type, class, listener, client address, ECS)`，客户端相关路由结果不会交叉复用。写入与读取均复制 Answer，读取副本按剩余存活时间刷新所有 section 的 TTL。
 
-ECHConfig 缓存、测速缓存和 Answer 缓存分别承担不同职责；缓存中不会保存绑定到其他事件循环的 Future。
+ECHConfig 与测速函数统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task。Answer 缓存仍由 `core.cache.TTLCache` 独立管理。
 
 ## 11. 配置与启动顺序约束
 

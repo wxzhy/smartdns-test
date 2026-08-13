@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from asyncio import create_task, get_running_loop, shield
-from contextlib import suppress
 from threading import Lock
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from anyio import (
     connect_tcp,
@@ -13,6 +11,8 @@ from anyio import (
     fail_after,
 )
 from icmplib import async_ping
+
+from smartdns.utils.cache_async import cached
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, MutableMapping
@@ -27,14 +27,27 @@ class _CacheHolder:
     cache: MutableMapping[SpeedtestKey, float] | None = None
 
 
-_inflight: dict[tuple[int, SpeedtestKey], Any] = {}
 _cache_lock = Lock()
-_inflight_lock = Lock()
 
 
 def set_cache(cache: MutableMapping[SpeedtestKey, float] | None) -> None:
     """绑定结果缓存；缓存中只保存跨线程安全的数值。"""
     _CacheHolder.cache = cache
+
+
+def _get_cache() -> MutableMapping[SpeedtestKey, float] | None:
+    return _CacheHolder.cache
+
+
+def _speedtest_key(
+    ip: str | IPv4Address | IPv6Address, config: PingConfig
+) -> SpeedtestKey:
+    return (
+        str(ip),
+        config.ping,
+        tuple(sorted(config.port or set())),
+        config.timeout,
+    )
 
 
 async def ping(ip: str, timeout: float = 1.0) -> float | None:
@@ -89,34 +102,7 @@ async def _measure(ip: str, config: PingConfig) -> float:
     return float("inf")
 
 
+@cached(_get_cache, key=_speedtest_key, lock=_cache_lock)
 async def speedtest(ip: str | IPv4Address | IPv6Address, config: PingConfig) -> float:
-    """缓存并合并当前事件循环内的同配置测速。"""
-    key: SpeedtestKey = (
-        str(ip),
-        config.ping,
-        tuple(sorted(config.port or set())),
-        config.timeout,
-    )
-    cache = _CacheHolder.cache
-    if cache is not None:
-        with _cache_lock, suppress(KeyError):
-            return cache[key]
-
-    loop = get_running_loop()
-    loop_key = (id(loop), key)
-    with _inflight_lock:
-        task = _inflight.get(loop_key)
-        if task is None:
-            task = create_task(_measure(str(ip), config))
-            _inflight[loop_key] = task
-    try:
-        result = await shield(task)
-        cache = _CacheHolder.cache
-        if cache is not None:
-            with _cache_lock:
-                cache[key] = result
-        return result
-    finally:
-        if task.done():
-            with _inflight_lock:
-                _inflight.pop(loop_key, None)
+    """测速指定 IP；结果缓存和同键调用合并由 decorator 统一处理。"""
+    return await _measure(str(ip), config)

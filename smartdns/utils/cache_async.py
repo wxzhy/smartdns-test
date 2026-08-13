@@ -1,7 +1,11 @@
-from asyncio import Future, Task, get_running_loop, shield
+from __future__ import annotations
+
+from asyncio import Task, current_task, get_running_loop, shield
+from collections.abc import MutableMapping as MutableMappingABC
 from functools import update_wrapper
 from inspect import iscoroutinefunction
-from typing import TYPE_CHECKING, Any, Protocol
+from threading import Lock
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from cachetools.keys import hashkey
 from loguru import logger
@@ -12,68 +16,108 @@ if TYPE_CHECKING:
 
 
 class IdentityFunction[T](Protocol):
-    def __call__(self, x: T, /) -> T: ...
+    def __call__(self, value: T, /) -> T: ...
 
 
-def apply_task_result_to_future(task: Task[Any], future: Future[Any]) -> None:
-    if task.cancelled():
-        future.cancel()
-        return
-    exception = task.exception()
-    if exception is not None:
-        future.set_exception(exception)
-        return
-    future.set_result(task.result())
+def _consume_task_exception(task: Task[Any]) -> None:
+    """取出无人等待的任务异常，避免事件循环产生未处理异常警告。"""
+    if not task.cancelled():
+        task.exception()
 
 
-def cached[KT](
-    cache: MutableMapping[KT, Future[Any]] | None,
+def cached[KT, VT](
+    cache: (
+        MutableMapping[KT, VT] | Callable[[], MutableMapping[KT, VT] | None] | None
+    ),
     key: Callable[..., KT] = hashkey,  # ty: ignore[invalid-parameter-default]
     lock: AbstractContextManager[Any] | None = None,
     info: bool = False,
 ) -> IdentityFunction:
-    """将协程函数的结果缓存到 cache（in-flight 去重：并发同键复用同一 Future）。"""
-    if info:
-        raise NotImplementedError("cachetools_async does not support `info`")
+    """缓存异步函数结果，并在同一事件循环内合并同键调用。
 
-    def decorator(fn: Callable[..., Awaitable]):
+    ``cache`` 可直接传入 cachetools 缓存，也可传入无参 getter，以支持运行时
+    绑定缓存。缓存只保存最终结果；进行中的 Task 按事件循环隔离，不会写入共享
+    cachetools 缓存。
+    """
+    if info:
+        raise NotImplementedError("异步缓存暂不支持 info")
+
+    def get_cache() -> MutableMapping[KT, VT] | None:
+        if cache is None:
+            return None
+        if isinstance(cache, MutableMappingABC):
+            return cast("MutableMapping[KT, VT]", cache)
+        getter = cast("Callable[[], MutableMapping[KT, VT] | None]", cache)
+        return getter()
+
+    def decorator(fn: Callable[..., Awaitable[VT]]):
         if not iscoroutinefunction(fn):
             raise TypeError(f"Expected Coroutine function, got {fn}")
 
-        async def wrapper(*args, **kwargs):
-            if cache is None:
-                # 无缓存：直接执行。
-                return await fn(*args, **kwargs)
+        inflight: dict[tuple[object, KT], Task[VT]] = {}
+        inflight_lock = Lock()
+        missing = object()
 
-            k = key(*args, **kwargs)
+        def get_cached(cache_key: KT) -> VT | object:
+            current_cache = get_cache()
+            if current_cache is None:
+                return missing
             try:
                 if lock is not None:
                     with lock:
-                        future = cache[k]
-                else:
-                    future = cache[k]
+                        return current_cache[cache_key]
+                return current_cache[cache_key]
             except KeyError:
-                future = None
+                return missing
 
-            if future is not None:
-                if not future.done():
-                    return await shield(future)
-                if future.exception() is None:
-                    return future.result()
-
-            loop = get_running_loop()
-            task = loop.create_task(fn(*args, **kwargs))
-            f = loop.create_future()
-            task.add_done_callback(lambda t: apply_task_result_to_future(t, f))
+        def store(cache_key: KT, value: VT) -> VT:
+            current_cache = get_cache()
+            if current_cache is None:
+                return value
             try:
                 if lock is not None:
                     with lock:
-                        cache[k] = f
-                else:
-                    cache[k] = f
+                        return current_cache.setdefault(cache_key, value)
+                return current_cache.setdefault(cache_key, value)
             except ValueError:
-                logger.debug("缓存写入失败（值过大），跳过缓存: {}", k)
-            return await shield(f)
+                logger.debug("缓存值过大，跳过写入")
+                return value
+
+        async def invoke(
+            inflight_key: tuple[object, KT],
+            cache_key: KT,
+            args: tuple[Any, ...],
+            kwargs: dict[str, Any],
+        ) -> VT:
+            try:
+                return store(cache_key, await fn(*args, **kwargs))
+            finally:
+                task = current_task()
+                with inflight_lock:
+                    if task is not None and inflight.get(inflight_key) is task:
+                        del inflight[inflight_key]
+
+        async def wrapper(*args, **kwargs):
+            cache_key = key(*args, **kwargs)
+            value = get_cached(cache_key)
+            if value is not missing:
+                return value
+
+            inflight_key = (get_running_loop(), cache_key)
+            with inflight_lock:
+                # 首次查缓存与获取 in-flight 锁之间，其他事件循环可能已完成
+                # 计算并写入结果；创建新任务前再检查一次以避免重复执行。
+                value = get_cached(cache_key)
+                if value is not missing:
+                    return value
+                task = inflight.get(inflight_key)
+                if task is None:
+                    task = get_running_loop().create_task(
+                        invoke(inflight_key, cache_key, args, kwargs)
+                    )
+                    task.add_done_callback(_consume_task_exception)
+                    inflight[inflight_key] = task
+            return await shield(task)
 
         return update_wrapper(wrapper, fn)
 
