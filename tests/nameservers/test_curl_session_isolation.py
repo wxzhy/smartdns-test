@@ -5,11 +5,13 @@ curl_options[ECH]，在并发下产生竞态与跨上游 ECH 泄漏。修复后�
 create_session() 独立持有会话。
 """
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from smartdns.models.nameserver import CurlNameserverConfig
-from smartdns.nameservers.client import HTTPClient
 from smartdns.nameservers.curl import CurlNameserver
+
+if TYPE_CHECKING:
+    from smartdns.nameservers.client import HTTPClient
 
 
 class _FakeClient:
@@ -32,11 +34,11 @@ async def test_each_curl_nameserver_owns_a_distinct_session() -> None:
     client = _FakeClient()
     ns1 = CurlNameserver(
         _make_config("a", "https://a.example/dns-query", "a.example"),
-        cast(HTTPClient, client),
+        cast("HTTPClient", client),
     )
     ns2 = CurlNameserver(
         _make_config("b", "https://b.example/dns-query", "b.example"),
-        cast(HTTPClient, client),
+        cast("HTTPClient", client),
     )
 
     await ns1.start()

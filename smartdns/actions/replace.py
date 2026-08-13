@@ -1,16 +1,15 @@
 from ipaddress import AddressValueError
 from typing import TYPE_CHECKING
 
-from dns.rcode import Rcode
 from dns.rdatatype import RdataType
 from dns.rdtypes.IN.A import A
 from dns.rdtypes.IN.AAAA import AAAA
 from dns.rrset import RRset
 from loguru import logger
 
-from smartdns.actions._helper import replace_response_ip
+from smartdns.actions._helper import replace_answer_rrset
 from smartdns.actions.base import BaseAction
-from smartdns.routing.matcher import filter_ip, match_context, match_response
+from smartdns.routing.matcher import match_context, match_ip
 
 if TYPE_CHECKING:
     from smartdns.models.action import ReplaceActionConfig, ReplaceActionMap
@@ -19,108 +18,83 @@ if TYPE_CHECKING:
 
 
 class ReplaceAction(BaseAction):
-    """替换IP操作：将命中标签的应答 IP 按替换映射改写（保留原 IP 主机位）。"""
+    """按映射顺序改写候选应答 IP，同时保留原 IP 主机位。"""
 
-    def __init__(self, config: ReplaceActionConfig):
+    def __init__(self, config: ReplaceActionConfig) -> None:
         super().__init__(config)
-        self.matcher = config.match_name
-        # 设置查询类型为 A 和 AAAA，以便在 on_upstream 中处理 IP 替换
+        self.matcher = config.match_name.model_copy(deep=True)
         self.matcher.query_types = {"A", "AAAA"}
-        self.replace_map: list[ReplaceActionMap] = config.replace_map
+        self.replace_map = config.replace_map
 
     async def start(self) -> None:
-        logger.info(f"启动替换IP操作 {self.name}，替换映射数: {len(self.replace_map)}")
+        logger.info(
+            "替换 IP Action {} 已启动，映射数={}",
+            self.name,
+            len(self.replace_map),
+        )
 
     async def on_resolver(self, context: Context, response: Response) -> None:
-        logger.debug(f"替换IP操作 {self.name} 开始处理应答")
-        # 跳过排除项
-        if not match_context(self.matcher, context):
-            logger.debug(f"替换IP操作跳过排除域名: {context.request.qname}")
-            return
-        if response.ans is None or response.ip_infos is None:
-            return
-        for item in self.replace_map:
-            result = filter_ip(item.match_ip, response.ip_infos)
-            if result:
-                logger.debug(f"替换IP操作命中替换映射: {item}")
-                if response.ans.rdtype == RdataType.A and item.ipv4 is not None:
-                    offset = int(result[0]) & ((1 << (32 - item.ipv4_prefixlen)) - 1)
-                    new_ips = {base + offset for base in item.ipv4}
-                elif response.ans.rdtype == RdataType.AAAA and item.ipv6 is not None:
-                    offset = int(result[0]) & ((1 << (128 - item.ipv6_prefixlen)) - 1)
-                    new_ips = {base + offset for base in item.ipv6}
-                else:
-                    logger.warning(f"替换IP操作不支持的记录类型: {response.ans.rdtype}")
-                    return
-                replace_response_ip(response, new_ips)
+        original = context.response
+        context.response = response
+        try:
+            if not match_context(self.matcher, context):
                 return
+        finally:
+            context.response = original
+        if response.ans is None or response.ans.rrset is None or not response.ip_infos:
+            return
+        match = self._find_match(response.ip_infos)
+        if match is None:
+            return
+        info, mapping = match
+        rrset = self._build_rrset(
+            response.ans.rdtype, response.ans.rrset, info, mapping
+        )
+        if rrset is None:
+            return
+        rewritten = replace_answer_rrset(response, rrset)
+        response.rcode = rewritten.rcode
+        response.ans = rewritten.ans
+        response.ip_list = rewritten.ip_list
+        response.ip_infos = rewritten.ip_infos
+        response.name_list = rewritten.name_list
+        response.name_infos = rewritten.name_infos
 
-    # async def on_response(self, context: Context) -> None:
-    #     request, response = context.request, context.response
-    #     # if response is None or response.ans is None or response.ans.rrset is None:
-    #     #     return
-    #     # if request.rdtype not in (RdataType.A, RdataType.AAAA):
-    #     #     return
-    #     # if response.rcode != Rcode.NOERROR:
-    #     #     return
-    #     # if is_excluded(request, response, self.exclude):
-    #     #     logger.debug(f"替换IP操作跳过排除域名: {request.qname}")
-    #     #     return
-    #     # if response.ip_infos is None:
-    #     #     return
-    #     # match = self._find_match(response.ip_infos)
-    #     match=is
-    #     if match is None:
-    #         return
-    #     ip_info, replace = match
-    #     new_rrset = self._build_rrset(
-    #         request.rdtype, response.ans.rrset, ip_info, replace
-    #     )
-    #     if new_rrset is None:
-    #         return
-    #     context.response = replace_answer_rrset(response, new_rrset, self.name)
+    def _find_match(
+        self, infos: list[IPInfo]
+    ) -> tuple[IPInfo, ReplaceActionMap] | None:
+        """保留既定优先级：先 replace_map，后响应 IP。"""
+        for mapping in self.replace_map:
+            for info in infos:
+                if match_ip(mapping.match_ip, info):
+                    return info, mapping
+        return None
 
-    # def _find_match(
-    #     self, ip_infos: list[IPInfo]
-    # ) -> tuple[IPInfo, ReplaceActionMap] | None:
-    #     """返回首个命中的 (ip_info, replace) 对；无命中返回 None。"""
-    #     for replace in self.replace_map:
-    #         for ip_info in ip_infos:
-    #             if ip_info.country is None:
-    #                 continue
-    #             if replace.tag & ip_info.country:
-    #                 return ip_info, replace
-    #     return None
-    #
-    # def _build_rrset(
-    #     self,
-    #     rdtype: RdataType,
-    #     old_rrset: RRset,
-    #     ip_info: IPInfo,
-    #     replace: ReplaceActionMap,
-    # ) -> RRset | None:
-    #     """构造替换后的新 rrset；空替换集或全部越界时返回 None 以保留原应答。"""
-    #     new_rrset = RRset(old_rrset.name, old_rrset.rdclass, old_rrset.rdtype)
-    #     new_rrset.update_ttl(old_rrset.ttl)
-    #     if rdtype == RdataType.A:
-    #         offset = int(ip_info.ip) & ((1 << (32 - replace.ipv4_prefixlen)) - 1)
-    #         for base in replace.ipv4:
-    #             try:
-    #                 address = str(base + offset)
-    #             except AddressValueError:
-    #                 logger.warning(f"替换IP操作 IPv4 越界，跳过: {base}+{offset}")
-    #                 continue
-    #             new_rrset.add(A(old_rrset.rdclass, old_rrset.rdtype, address))
-    #     else:
-    #         offset = int(ip_info.ip) & ((1 << (128 - replace.ipv6_prefixlen)) - 1)
-    #         for base in replace.ipv6:
-    #             try:
-    #                 address = str(base + offset)
-    #             except AddressValueError:
-    #                 logger.warning(f"替换IP操作 IPv6 越界，跳过: {base}+{offset}")
-    #                 continue
-    #             new_rrset.add(AAAA(old_rrset.rdclass, old_rrset.rdtype, address))
-    #     if len(new_rrset) == 0:
-    #         logger.debug(f"替换IP操作未产生替换记录，保留原应答: {ip_info.ip}")
-    #         return None
-    #     return new_rrset
+    def _build_rrset(
+        self,
+        rdtype: RdataType,
+        old_rrset: RRset,
+        info: IPInfo,
+        mapping: ReplaceActionMap,
+    ) -> RRset | None:
+        """安全构造替换 RRset；空集合、地址族不符或越界时保留原应答。"""
+        new_rrset = RRset(old_rrset.name, old_rrset.rdclass, old_rrset.rdtype)
+        new_rrset.update_ttl(old_rrset.ttl)
+        if rdtype == RdataType.A:
+            bases = mapping.ipv4 or set()
+            offset = int(info.ip) & ((1 << (32 - mapping.ipv4_prefixlen)) - 1)
+            record_type = A
+        elif rdtype == RdataType.AAAA:
+            bases = mapping.ipv6 or set()
+            offset = int(info.ip) & ((1 << (128 - mapping.ipv6_prefixlen)) - 1)
+            record_type = AAAA
+        else:
+            return None
+        for base in bases:
+            try:
+                address = str(base + offset)
+            except AddressValueError:
+                logger.warning("替换 IP 越界，已跳过: {}+{}", base, offset)
+                continue
+            new_rrset.add(record_type(old_rrset.rdclass, old_rrset.rdtype, address))
+        return new_rrset or None

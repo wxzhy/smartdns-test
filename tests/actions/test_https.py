@@ -4,21 +4,25 @@
 污染可能被缓存/共享的不可变 rdata。修复后：所有记录都处理，且原 rdata 不被改写。
 """
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import dns.message
-from dns.message import QueryMessage
 from dns.name import from_text
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.rdtypes.svcbbase import ParamKey
 from dns.resolver import Answer
-from dns.rrset import RRset
 
 from smartdns.actions.https import HTTPSAction
 from smartdns.models.action import HTTPSActionConfig
 from smartdns.models.context import Context, Request, Response
-from smartdns.nameservers.client import HTTPClient
+from smartdns.models.rule import RequestMatcher, ResponseIPMatcher
+
+if TYPE_CHECKING:
+    from dns.message import QueryMessage
+    from dns.rrset import RRset
+
+    from smartdns.nameservers.client import HTTPClient
 
 
 def _https_response(*records: str) -> Response:
@@ -32,13 +36,14 @@ def _https_response(*records: str) -> Response:
         from_text("example.com."),
         RdataType.HTTPS,
         RdataClass.IN,
-        cast(QueryMessage, msg),
+        cast("QueryMessage", msg),
     )
     return Response.from_answer(answer, upstream="test")
 
 
 def _rrset(response: Response | None) -> RRset:
-    assert response is not None and response.ans is not None
+    assert response is not None
+    assert response.ans is not None
     assert response.ans.rrset is not None
     return response.ans.rrset
 
@@ -53,12 +58,13 @@ def _action(
     config = HTTPSActionConfig(
         name="h",
         type="https",
-        tag={"cn"},
+        match_name=RequestMatcher(),
+        match_ip=ResponseIPMatcher(),
         add_ech=add_ech,
         remove_hint=remove_hint,
         remove_h3=remove_h3,
     )
-    return HTTPSAction(config, cast(HTTPClient, None))
+    return HTTPSAction(config, cast("HTTPClient", None))
 
 
 async def test_all_https_records_processed() -> None:

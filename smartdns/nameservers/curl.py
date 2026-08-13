@@ -29,7 +29,10 @@ class CurlNameserver(BaseNameserver):
 
     async def start(self):
         """启动Curl解析器，创建本上游独占的 HTTP 会话。"""
-        self._curl = self._client.create_session()
+        options: dict[CurlOpt, object] | None = (
+            {CurlOpt.ECH: "true"} if self.ech is True else None
+        )
+        self._curl = self._client.create_session(options)
         logger.info(
             f"Curl解析器 {self.name} 已启动，目标: {self.url}, Host: {self.host}, "
             f"want_get: {self.want_get}, ech: {self.ech}"
