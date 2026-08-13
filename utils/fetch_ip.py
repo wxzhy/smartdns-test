@@ -1,225 +1,134 @@
 from pathlib import Path
+from typing import Any
 
 import netaddr
 from curl_cffi import Session
+from dns.exception import DNSException
 from dns.resolver import Resolver
+from typer import Typer
 
-s = Session()
-# 获取国内IP段
-r = s.get("https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip/cn.list")
-cn_cidr = netaddr.IPSet(r.text.splitlines())
-# 获得cloudflare的所有可用ip地址
-# 官网数据
-r = s.get("https://api.cloudflare.com/client/v4/ips")
-r = r.json()["result"]
-cf = netaddr.IPSet(r["ipv4_cidrs"] + r["ipv6_cidrs"])
-# 国内节点
-r = s.get("https://api.cloudflare.com/client/v4/ips?networks=jdcloud")
-r = r.json()["result"]
-cf_cn = netaddr.IPSet(r["ipv4_cidrs"] + r["ipv6_cidrs"])
-# print(ipset1)
-# 三方数据
-r = s.get(
-    "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip/cloudflare.list"
-)
-cf_alt = netaddr.IPSet(r.text.splitlines())
-# print(ipset3)
-# 用于匹配
-# cf_match = cf - cf_cn
-# 用于扫描IP
-cf_scan = cf_alt - cn_cidr
-# with (
-#     open("cf4.txt", "w", encoding="utf-8") as f4,
-#     open("cf6.txt", "w", encoding="utf-8") as f6,
-# ):
-#     for i in cf.iter_cidrs():
-#         if i.version == 4:
-#             f4.write(str(i) + "\n")
-#         else:
-#             f6.write(str(i) + "\n")
-res = set()
-for i in cf_scan.iter_cidrs():
-    if i.version == 4:
-        if i.prefixlen > 24:
-            res.add(i.supernet(24)[0].network)
+app = Typer()
+META_BASE = "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip"
+
+
+def _get_text(session: Session, url: str, timeout: float) -> str:
+    response = session.get(url, timeout=timeout)
+    response.raise_for_status()
+    return response.text
+
+
+def _get_json(session: Session, url: str, timeout: float) -> dict[str, Any]:
+    response = session.get(url, timeout=timeout)
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"响应不是 JSON object: {url}")
+    return data
+
+
+def _meta_ipset(session: Session, name: str, timeout: float) -> netaddr.IPSet:
+    text = _get_text(session, f"{META_BASE}/{name}.list", timeout)
+    return netaddr.IPSet(text.splitlines())
+
+
+def _scan_networks(ipset: netaddr.IPSet, ipv4_prefix: int = 24) -> set[str]:
+    result: set[str] = set()
+    for cidr in ipset.iter_cidrs():
+        prefix = ipv4_prefix if cidr.version == 4 else 48
+        if cidr.prefixlen > prefix:
+            result.add(str(cidr.supernet(prefix)[0].network))
         else:
-            for j in i.subnet(24):
-                res.add(j.network)
-    else:
-        if i.prefixlen > 48:
-            res.add(i.supernet(48)[0].network)
-        else:
-            for j in i.subnet(48):
-                res.add(j.network)
-
-# print(res)
-with open("cloudflare.txt", "w", encoding="utf-8") as f:
-    for i in res:
-        f.write(str(i) + "\n")
-print(f"Total {len(res)} IPs written to cloudflare.txt")
-
-# 获得cloudfront的所有可用ip地址
-# 官网数据
-r = s.get("https://ip-ranges.amazonaws.com/ip-ranges.json")
-r = r.json()
-cft = netaddr.IPSet()
-for i in r["prefixes"]:
-    if i["service"] == "CLOUDFRONT" and i["region"] == "GLOBAL":
-        cft.add(i["ip_prefix"])
-for i in r["ipv6_prefixes"]:
-    if i["service"] == "CLOUDFRONT" and i["region"] == "GLOBAL":
-        cft.add(i["ipv6_prefix"])
-# print(ipset1)
-# 三方数据
-r = s.get(
-    "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip/cloudfront.list"
-)
-cft_alt = netaddr.IPSet(r.text.splitlines())
-# print(ipset3)
-# 用于匹配
-# cft_match = cft - cn_cidr
-# 用于扫描IP
-cft_scan = cft_alt - cn_cidr
-# print(r)
-# with (
-#     open("cft4.txt", "w", encoding="utf-8") as f4,
-#     open("cft6.txt", "w", encoding="utf-8") as f6,
-# ):
-#     for i in cft_match.iter_cidrs():
-#         if i.version == 4:
-#             f4.write(str(i) + "\n")
-#         else:
-#             f6.write(str(i) + "\n")
-res = set()
-for i in cft_scan.iter_cidrs():
-    if i.version == 4:
-        if i.prefixlen > 24:
-            res.add(i.supernet(24)[0].network)
-        else:
-            for j in i.subnet(24):
-                res.add(j.network)
-    else:
-        if i.prefixlen > 48:
-            res.add(i.supernet(48)[0].network)
-        else:
-            for j in i.subnet(48):
-                res.add(j.network)
-
-# print(res)
-with open("cloudfront.txt", "w", encoding="utf-8") as f:
-    for i in res:
-        f.write(str(i) + "\n")
-print(f"Total {len(res)} IPs written to cloudfront.txt")
-
-r = s.get("https://api.fastly.com/public-ip-list")
-r = r.json()
-fast = netaddr.IPSet(r["addresses"] + r["ipv6_addresses"])
-# 将ip地址转换为netaddr的ip对象
-fast = netaddr.IPSet(fast)
-# print(ipset1)
-# 三方数据
-r = s.get(
-    "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip/fastly.list"
-)
-fast_alt = netaddr.IPSet(r.text.splitlines())
-# print(ipset3)
-# 交集
-# fastly_match = fast - cn_cidr
-fastly_scan = fast_alt - cn_cidr
-# print(r)
-# with (
-#     open("fastly4.txt", "w", encoding="utf-8") as f4,
-#     open("fastly6.txt", "w", encoding="utf-8") as f6,
-# ):
-#     for i in fastly_match.iter_cidrs():
-#         if i.version == 4:
-#             f4.write(str(i) + "\n")
-#         else:
-#             f6.write(str(i) + "\n")
-# 分割IP地址
-res = set()
-for i in fastly_scan.iter_cidrs():
-    if i.version == 4:
-        if i.prefixlen > 22:
-            res.add(i.supernet(22)[0][256 + 229])
-        else:
-            for j in i.subnet(22):
-                res.add(j[256 + 229])
-    else:
-        if i.prefixlen > 48:
-            res.add(i.supernet(48)[0][0x485])
-        else:
-            for j in i.subnet(48):
-                res.add(j[0x485])
-with open("fastly.txt", "w", encoding="utf-8") as f:
-    for i in res:
-        f.write(str(i) + "\n")
-print(f"Total {len(res)} IPs written to fastly.txt")
+            result.update(str(network.network) for network in cidr.subnet(prefix))
+    return result
 
 
-def parse(r):
-    """解析google官方数据"""
-    data = r.json()
-    ipset = netaddr.IPSet()
+def _fastly_addresses(ipset: netaddr.IPSet) -> set[str]:
+    result: set[str] = set()
+    for cidr in ipset.iter_cidrs():
+        prefix, offset = (22, 485) if cidr.version == 4 else (48, 0x485)
+        networks = (
+            cidr.supernet(prefix) if cidr.prefixlen > prefix else cidr.subnet(prefix)
+        )
+        result.update(str(network[offset]) for network in networks)
+    return result
+
+
+def _google_ranges(data: dict[str, Any]) -> netaddr.IPSet:
+    result = netaddr.IPSet()
     for prefix in data.get("prefixes", []):
-        if "ipv4Prefix" in prefix:
-            ipset.add(prefix["ipv4Prefix"])
-        elif "ipv6Prefix" in prefix:
-            ipset.add(prefix["ipv6Prefix"])
-    return ipset
+        if not isinstance(prefix, dict):
+            continue
+        value = prefix.get("ipv4Prefix") or prefix.get("ipv6Prefix")
+        if value:
+            result.add(value)
+    return result
 
 
-r = s.get(
-    "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip/google.list"
-)
-google_alt = netaddr.IPSet(r.text.splitlines())
-# print(f"Google alt IPs: {len(google_alt)}")
-# google官方数据
-google = s.get("https://www.gstatic.com/ipranges/goog.json")
-google = parse(google)
-gcloud = s.get("https://www.gstatic.com/ipranges/cloud.json")
-gcloud = parse(gcloud)
-gdns = s.get("https://www.gstatic.com/ipranges/publicdns.json")
-gdns = parse(gdns)
-gbot = s.get(
-    "https://developers.google.cn/static/crawling/ipranges/common-crawlers.json"
-)
-gbot = parse(gbot)
-gbot1 = s.get(
-    "https://developers.google.cn/static/crawling/ipranges/special-crawlers.json"
-)
-gbot1 = parse(gbot1)
-gbot2 = s.get(
-    "https://developers.google.cn/static/crawling/ipranges/user-triggered-fetchers.json"
-)
-gbot2 = parse(gbot2)
-gbot3 = s.get(
-    "https://developers.google.cn/static/crawling/ipranges/user-triggered-fetchers-google.json"
-)
-gbot3 = parse(gbot3)
-gbot4 = s.get(
-    "https://developers.google.cn/static/crawling/ipranges/user-triggered-agents.json"
-)
-gbot4 = parse(gbot4)
-# 获得SPF记录
-r = Resolver()
-spf = netaddr.IPSet()
-ans = r.resolve("_spf.google.com", "TXT")
-if ans is None or ans.rrset is None:
-    print("No TXT record found for _spf.google.com")
-else:
-    text = ans.rrset.to_text()
-    print(f"SPF record for _spf.google.com: {text}")
-    for record in text.split(" "):
-        if record.startswith("ip4:"):
-            spf.add(record[4:])
-        elif record.startswith("ip6:"):
-            spf.add(record[4:])
-    print(spf)
-gws = (
-    google_alt
-    & google - gcloud - gdns - gbot - gbot1 - gbot2 - gbot3 - gbot4 - spf - cn_cidr
-)
-with Path("google.txt").open("w") as f:
-    for ip in gws.iter_cidrs():
-        f.write(str(ip) + "\n")
+def _google_spf() -> netaddr.IPSet:
+    result = netaddr.IPSet()
+    resolver = Resolver()
+    resolver.lifetime = 5
+    try:
+        answer = resolver.resolve("_spf.google.com", "TXT")
+    except DNSException:
+        return result
+    for record in answer:
+        text = b"".join(record.strings).decode("ascii", errors="ignore")
+        for token in text.split():
+            if token.startswith(("ip4:", "ip6:")):
+                result.add(token[4:])
+    return result
+
+
+def _atomic_write(path: Path, values: set[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    content = "".join(f"{value}\n" for value in sorted(values))
+    temporary.write_text(content, encoding="utf-8")
+    temporary.replace(path)
+
+
+def fetch(output_path: Path, timeout: float = 15.0) -> dict[str, int]:
+    """抓取并生成 CDN/Google 地址文件；失败时不覆盖已有结果。"""
+    with Session() as session:
+        cn = _meta_ipset(session, "cn", timeout)
+        cloudflare = _scan_networks(_meta_ipset(session, "cloudflare", timeout) - cn)
+        cloudfront = _scan_networks(_meta_ipset(session, "cloudfront", timeout) - cn)
+        fastly = _fastly_addresses(_meta_ipset(session, "fastly", timeout) - cn)
+        google_alt = _meta_ipset(session, "google", timeout)
+        urls = [
+            "https://www.gstatic.com/ipranges/goog.json",
+            "https://www.gstatic.com/ipranges/cloud.json",
+            "https://www.gstatic.com/ipranges/publicdns.json",
+            "https://developers.google.cn/static/crawling/ipranges/common-crawlers.json",
+            "https://developers.google.cn/static/crawling/ipranges/special-crawlers.json",
+            "https://developers.google.cn/static/crawling/ipranges/user-triggered-fetchers.json",
+            "https://developers.google.cn/static/crawling/ipranges/user-triggered-fetchers-google.json",
+            "https://developers.google.cn/static/crawling/ipranges/user-triggered-agents.json",
+        ]
+        ranges = [_google_ranges(_get_json(session, url, timeout)) for url in urls]
+        google = google_alt & ranges[0]
+        for excluded in (*ranges[1:], _google_spf(), cn):
+            google -= excluded
+        google_values = {str(network) for network in google.iter_cidrs()}
+
+    outputs = {
+        "cloudflare.txt": cloudflare,
+        "cloudfront.txt": cloudfront,
+        "fastly.txt": fastly,
+        "google.txt": google_values,
+    }
+    for filename, values in outputs.items():
+        _atomic_write(output_path / filename, values)
+    return {filename: len(values) for filename, values in outputs.items()}
+
+
+@app.command()
+def main(output_path: Path = Path("utils"), timeout: float = 15.0) -> None:
+    """抓取 CDN 和 Google 地址列表。"""
+    for filename, count in fetch(output_path, timeout).items():
+        print(f"{filename}: {count}")
+
+
+if __name__ == "__main__":
+    app()
