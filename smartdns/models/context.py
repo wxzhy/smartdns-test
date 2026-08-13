@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ipaddress import ip_network
+
+from dns.edns import ECSOption
 from dns.message import Message, make_response
 from dns.name import Name
 from dns.rcode import Rcode
@@ -60,6 +63,11 @@ class Request:
         qname = question.name
         rdtype = question.rdtype
         rdclass = question.rdclass
+        ecs = None
+        for option in msg.options:
+            if isinstance(option, ECSOption):
+                ecs = ip_network(f"{option.address}/{option.srclen}", strict=False)
+                break
         return cls(
             id=msg.id,
             listener=listener,
@@ -70,6 +78,8 @@ class Request:
             rdclass=rdclass,
             name_info=NameInfo.from_name(qname),
             ip_info=IPInfo.from_ip(remote_address) if remote_address else None,
+            ecs=ecs,
+            ecs_info=IPInfo.from_ip(ecs.network_address) if ecs is not None else None,
         )
 
 

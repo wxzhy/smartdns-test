@@ -1,161 +1,127 @@
-from asyncio import as_completed
 from typing import TYPE_CHECKING
 
-from anyio import create_task_group, move_on_after
+from anyio import create_memory_object_stream, create_task_group, move_on_after
 from dns.rcode import Rcode
 from loguru import logger
 
-from smartdns.actions.base import BaseAction
-from smartdns.actions.manager import ActionManager
-from smartdns.models.context import Request, Response
+from smartdns.models.context import Context, Request, Response
 from smartdns.resolvers.base import BaseResolver
 
 if TYPE_CHECKING:
-    from smartdns.models.context import Context
+    from smartdns.actions.manager import ActionManager
     from smartdns.models.resolver import ConcurrentResolverConfig
     from smartdns.resolvers.manager import ResolverManager
 
 
 class ConcurrentResolver(BaseResolver):
-    """并发解析器：向多个上游同时查询，取最快的成功应答。"""
+    """并发查询直接上游，并按完成顺序选择和收集候选。"""
 
     def __init__(
         self,
         config: ConcurrentResolverConfig,
         resolvers: ResolverManager,
         actions: ActionManager,
-    ):
+    ) -> None:
         super().__init__(config)
-        self.config: ConcurrentResolverConfig = config
-        self._upstreams: list[str] = config.resolvers
-        self._manager: ResolverManager = resolvers
-        self._wait_all: bool = config.wait_all
-        self._actions: ActionManager = actions
-        self.resolvers = self._resolve_upstreams()
-        self.actions = self._resolve_actions()
+        self._upstream_names = config.resolvers
+        self._manager = resolvers
+        self._wait_all = config.wait_all
+        self._actions = [actions.get(name) for name in config.actions]
 
-    async def start(self):
-        """启动解析器"""
+    async def start(self) -> None:
         logger.info(
-            f"ConcurrentResolver {self.name} 启动成功，上游解析器: {self._upstreams}，动作: {self.actions}，wait_all: {self._wait_all}"
+            "ConcurrentResolver {} 已启动，上游={}，wait_all={}",
+            self.name,
+            self._upstream_names,
+            self._wait_all,
         )
 
-    async def stop(self):
-        """停止解析器"""
-        logger.info(f"ConcurrentResolver {self.name} 停止成功")
+    async def stop(self) -> None:
+        logger.info("ConcurrentResolver {} 已停止", self.name)
 
     def _resolve_upstreams(self) -> list[BaseResolver]:
-        """按名解析上游解析器实例。"""
-        resolvers: list[BaseResolver] = []
-        for name in self._upstreams:
-            resolver = self._manager.get(name)
-            if resolver is None:
-                logger.warning(f"ConcurrentResolver {self.name} 上游 {name} 不存在")
-            else:
-                resolvers.append(resolver)
-        return resolvers
+        return [
+            resolver
+            for name in self._upstream_names
+            if (resolver := self._manager.get(name)) is not None
+        ]
 
-    def _resolve_actions(self) -> list[BaseAction] | None:
-        """按名解析动作实例。"""
-        if self.config.actions is None:
-            return None
-        actions: list[BaseAction] = []
-        for name in self.config.actions:
-            action = self._actions.get(name)
-            if action is None:
-                logger.warning(f"ConcurrentResolver {self.name} 动作 {name} 不存在")
-            else:
-                actions.append(action)
-        return actions
-
-    async def _run(
-        self, resolver: BaseResolver, request: Request, context: Context | None = None
+    async def _query_upstream(
+        self,
+        resolver: BaseResolver,
+        request: Request,
+        context: Context | None,
     ) -> Response | None:
-        try:
-            # 不向下传 context：candidates 只记录本层直接上游的应答，
-            # 避免嵌套 concurrent 时同一结果被内外层重复写入。
-            result = await resolver.query(request, context)
-            # 跳过异常的结果
-            if result.rcode != Rcode.NOERROR or result.ans is None:
-                logger.debug(
-                    f"ConcurrentResolver {self.name} 上游 {resolver.name} 返回异常应答: {result.rcode}"
-                )
-                return result
-            logger.debug(
-                f"收到 ConcurrentResolver {self.name} 上游 {resolver.name} 的应答"
+        """执行单个直接上游，嵌套解析器使用独立 Context。"""
+        child_context = (
+            Context(
+                worker_id=context.worker_id,
+                request=request,
+                is_subquery=True,
+                ext=dict(context.ext),
             )
-            # 执行actions的on_resolver阶段
-            if self.actions is not None and context is not None:
-                for action in self.actions:
-                    logger.debug(
-                        f"ConcurrentResolver {self.name} 上游 {resolver.name} 应答交给动作 {action.name} 处理"
-                    )
+            if context is not None
+            else None
+        )
+        try:
+            result = await resolver.query(request, child_context)
+            if result.rcode == Rcode.NOERROR and result.ans is not None:
+                for action in self._actions:
+                    if action is None or context is None:
+                        continue
                     await action.on_resolver(context, result)
                     if result.invalid:
-                        logger.debug(
-                            f"ConcurrentResolver {self.name} 上游 {resolver.name} 应答被动作 {action.name} 标记为无效"
-                        )
                         break
-                logger.debug(
-                    f"ConcurrentResolver {self.name} 上游 {resolver.name} 应答处理完成，结果: {result}"
-                )
-                return result
-        except Exception as e:
-            logger.exception(
-                f"ConcurrentResolver {self.name} 上游 {resolver.name} 查询失败: {e}"
+            return result
+        except Exception:
+            logger.warning(
+                "ConcurrentResolver {} 的上游 {} 查询失败",
+                self.name,
+                resolver.name,
             )
             return None
 
     async def query(self, request: Request, context: Context | None = None) -> Response:
-        """并发查询所有上游，返回最快的 NOERROR 应答；否则返回最佳否定应答。
-
-        所有收到的应答（含否定应答）按到达顺序累积进 context.candidates，供 after
-        动作二次挑选；wait_all 为 True 时不提前取消其余上游，等到全部结束以收齐候选，
-        应答仍取最快到达的 NOERROR。整体查询以 self.timeout 为上界。
-        """
-        if not self.resolvers:
-            logger.warning(f"ConcurrentResolver {self.name} 没有可用上游解析器")
+        """在总超时内返回最快成功应答，并保留所有已完成候选。"""
+        resolvers = self._resolve_upstreams()
+        if not resolvers:
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
-        winner: Response | None = None
-        logger.debug(
-            f"ConcurrentResolver {self.name} 开始并发查询 {request.qname} Context: {context}"
-        )
         candidates: dict[str, Response] = {}
+        winner: Response | None = None
+        send, receive = create_memory_object_stream[Response | None](len(resolvers))
+
+        async def run(resolver: BaseResolver) -> None:
+            result = await self._query_upstream(resolver, request, context)
+            await send.send(result)
+
         with move_on_after(self.timeout):
             async with create_task_group() as tg:
-                tasks = [
-                    tg.start_soon(self._run, resolver, request, context)
-                    for resolver in self.resolvers
-                ]
-            for task in as_completed(tasks):
-                result = await task
-                # 收到正常结果
-                if result is None or result.invalid:
-                    logger.debug(
-                        f"ConcurrentResolver {self.name} 上游应答无效或异常，忽略: {result}"
-                    )
-                    continue
-                # 选取最快的 NOERROR 应答为 winner，其他应答累积进 candidates
-                if winner is None and result.rcode == Rcode.NOERROR:
-                    winner = result
-                candidates[result.upstream] = result
-                # 等待全部上游完成或取消其余上游
-                if not self._wait_all:
-                    tg.cancel_scope.cancel()
-        logger.debug(
-            f"ConcurrentResolver {self.name} 并发查询 {request.qname} 完成，winner: {winner}, candidates: {list(candidates.keys())}"
-        )
+                for resolver in resolvers:
+                    tg.start_soon(run, resolver)
+                for _ in resolvers:
+                    result = await receive.receive()
+                    if result is None or result.invalid:
+                        continue
+                    candidates[result.upstream] = result
+                    if (
+                        winner is None
+                        and result.rcode == Rcode.NOERROR
+                        and result.ans is not None
+                    ):
+                        winner = result
+                        if not self._wait_all:
+                            tg.cancel_scope.cancel()
+                            break
+
+        await send.aclose()
+        await receive.aclose()
         if context is not None:
             if context.candidates is None:
                 context.candidates = {}
             context.candidates.update(candidates)
-        logger.debug(
-            f"ConcurrentResolver {self.name} 并发查询 {request.qname} 完成，应答候选: {list(candidates.keys())}"
-        )
         if winner is not None:
             return winner
-        # 无 NOERROR：优先返回 NXDOMAIN 等权威否定应答，而非一律 SERVFAIL。
         for candidate in candidates.values():
             if candidate.rcode == Rcode.NXDOMAIN:
                 return candidate
