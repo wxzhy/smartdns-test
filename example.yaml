@@ -1,0 +1,140 @@
+# SmartDNS 参考配置。
+#
+# 默认配置不依赖本地 Geo 数据，复制后即可通过 Config 模型加载。它展示：
+# - UDP/TCP 对外监听；
+# - aiodns 直连解析；
+# - curl DoH + plain Resolver；
+# - concurrent Resolver 与请求日志；
+# - 顺序路由和最终兜底。
+#
+# wait_all=false 会在首个带 Answer 的 NOERROR 后取消其余查询；true 会在整体 timeout 内收集候选。
+
+worker_count: 1
+cache_size: 10000
+
+# 标签分流可选。启用前先确保这些文件存在，否则 Pydantic FilePath 校验失败。
+# geodata:
+#   geosite: tags/output/geosite.trie
+#   geoip: tags/output/geoip.metadb
+#   asn: tags/output/asn.mmdb
+#   ipset: tags/output/geoip.radix
+
+client:
+  max_clients: 256
+  dns_cache_ttl: 300
+  shuffle: true
+  # curl DoH 上游使用字符串 ech 或 HTTPS Action 注入 ECH 时需要该解析器。
+  resolver:
+    name: http-bootstrap
+    type: aiodns
+    nameservers:
+      - 1.1.1.1
+      - 8.8.8.8
+    timeout: 2
+    tries: 3
+
+listeners:
+  - name: udp-main
+    type: udp
+    host: "::"
+    port: 5335
+    timeout: 5
+  - name: tcp-main
+    type: tcp
+    host: "::"
+    port: 5335
+    timeout: 5
+
+nameservers:
+  - name: doh-cloudflare
+    type: curl
+    url: https://cloudflare-dns.com/dns-query
+    host: cloudflare-dns.com
+    timeout: 5
+    want_get: false
+    verify: true
+    ech: true
+
+resolvers:
+  # aiodns 的 nameservers 填 IP 地址，不引用 nameservers 节点。
+  - name: direct-primary
+    type: aiodns
+    nameservers:
+      - 223.5.5.5
+      - 119.29.29.29
+    timeout: 2
+    rotate: true
+    edns: true
+    tries: 3
+
+  # plain 的 nameservers 填前面 nameservers[].name。
+  - name: doh-primary
+    type: plain
+    nameservers:
+      - doh-cloudflare
+    lifetime: 5
+    rotate: true
+    edns: true
+
+  # concurrent 只能引用配置列表中位于它之前的 Resolver。
+  - name: mixed
+    type: concurrent
+    resolvers:
+      - direct-primary
+      - doh-primary
+    wait_all: true
+    timeout: 5
+
+actions:
+  - name: access-log
+    type: log
+    text: dns-query
+
+  - name: block
+    type: static
+    ipv4:
+      - 0.0.0.0
+    ipv6:
+      - "::"
+
+  # 完整动作示例。当前未接入默认路由，便于先以最小功能运行。
+  - name: speed
+    type: speedcheck
+    ping_config:
+      ping: true
+      timeout: 0.3
+    max_num: 2
+    threshold: 50
+
+  - name: fallback-example
+    type: fallback
+    map:
+      - match_name:
+          domain_include:
+            - example-fallback
+        ipv4:
+          - 203.0.113.10
+        ipv6:
+          - "2001:db8::10"
+
+routing:
+  # 启用 GeoSite 后可取消以下规则注释。
+  # - name: block-ads
+  #   matcher:
+  #     domain_include:
+  #       - category-ads-all
+  #       - category-ads
+  #   before:
+  #     - block
+  #
+  # - name: domestic
+  #   matcher:
+  #     domain_include:
+  #       - cn
+  #   resolver: direct-primary
+
+  # 最后一条不带 matcher，作为所有请求的兜底。
+  - name: default
+    resolver: mixed
+    before:
+      - access-log
