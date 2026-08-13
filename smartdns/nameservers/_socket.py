@@ -1,10 +1,9 @@
-from socket import MSG_OOB, SOCK_DGRAM, SOCK_STREAM
+from socket import SOCK_DGRAM, SOCK_STREAM
 
 from anyio import EndOfStream, fail_after
 from anyio.abc import SocketAttribute
 from dns._asyncbackend import DatagramSocket, StreamSocket
 from dns.exception import Timeout
-from loguru import logger
 
 # 以下方法中名为 `timeout` 的参数是 dnspython 后端 Socket ABC 接口签名的一部分，
 # 无法重命名，因此对 ASYNC109 规则在各方法上单独禁用。
@@ -80,28 +79,17 @@ class AnyioStreamSocket(StreamSocket):
     async def sendall(self, what, timeout):
         try:
             with fail_after(timeout):
-                if self._use_tricks:
-                    # 获取原始socket
-                    raw_socket = self._stream.extra(SocketAttribute.raw_socket, None)
-                    # 分段发送
-                    if raw_socket is not None and len(what) > 32:
-                        # 此时不分片
-                        raw_socket._sock.setblocking(True)
-                        raw_socket._sock.sendall(what[:16] + b"\x00", MSG_OOB)
-                        raw_socket._sock.setblocking(False)
-                        what = what[16:]
+                # AnyIO stream 不能安全切换底层共享 socket 的阻塞模式；保留该配置
+                # 作为兼容字段，统一使用普通异步发送。
                 await self._stream.send(what)
         except TimeoutError as err:
-            logger.error(f"发送数据超时，timeout: {timeout}")
             raise Timeout(timeout=timeout) from err
 
     async def recv(self, size, timeout):
         try:
-            logger.debug(f"准备接收数据，size: {size}, timeout: {timeout}")
             with fail_after(timeout):
                 return await self._stream.receive(size)
         except TimeoutError as err:
-            logger.error(f"接收数据超时，timeout: {timeout}")
             raise Timeout(timeout=timeout) from err
         except EndOfStream:
             # 对端关闭连接，返回空字节以模拟 dnspython 期望的 EOF 行为

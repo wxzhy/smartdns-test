@@ -1,7 +1,7 @@
 from asyncio import wrap_future
 from contextlib import ExitStack
 from random import randint
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from aiofastnet import patch_loop
 from anyio import CancelScope
@@ -18,8 +18,11 @@ from smartdns.routing.manager import init_geo_manager
 from .worker import Worker
 
 if TYPE_CHECKING:
+    from collections.abc import MutableMapping
+
     from dns.message import Message
 
+    from smartdns.actions._ping import SpeedtestKey
     from smartdns.models.config import Config
     from smartdns.models.context import Request, Response
 
@@ -42,20 +45,22 @@ class Master:
         logger.info("启动 Master 服务")
         if self.config.geodata:
             init_geo_manager(self.config.geodata)
-        cache = TLRUCache(maxsize=10000, ttu=lambda key, value, now: now + 1800)
-        set_cache(cache)
+        cache: TLRUCache = TLRUCache(
+            maxsize=10000, ttu=lambda key, value, now: now + 1800
+        )
+        set_cache(cast("MutableMapping[SpeedtestKey, float]", cache))
         with ExitStack() as stack:
-            for i in range(self.worker_count):
-                worker = Worker(worker_id=i, config=self.config)
-                portal = stack.enter_context(
-                    start_blocking_portal(backend_options={"use_uvloop": True})
-                )
-                self.portals.append(portal)
-                self.workers.append(worker)
-                await wrap_future(portal.start_task_soon(worker.start))
-            logger.info(f"已启动 {self.worker_count} 个 Worker，开始启动监听器")
-            self.listener_manager = ListenerManager(config=self.config.listeners)
             try:
+                for i in range(self.worker_count):
+                    worker = Worker(worker_id=i, config=self.config)
+                    portal = stack.enter_context(
+                        start_blocking_portal(backend_options={"use_uvloop": True})
+                    )
+                    self.portals.append(portal)
+                    self.workers.append(worker)
+                    await wrap_future(portal.start_task_soon(worker.start))
+                logger.info(f"已启动 {self.worker_count} 个 Worker，开始启动监听器")
+                self.listener_manager = ListenerManager(config=self.config.listeners)
                 await self.listener_manager.start_all(handler=self.dispatch)
             finally:
                 # 停机（含取消）时屏蔽取消以完成资源清理，再退出 ExitStack 关闭 portal。
@@ -65,9 +70,17 @@ class Master:
     async def stop(self) -> None:
         """停止 Master：关闭监听器并停止各 worker（释放上游/HTTP 客户端等资源）。"""
         logger.info("停止 Master 服务")
-        if self.listener_manager is not None:
-            await self.listener_manager.stop_all()
-        for worker, portal in zip(self.workers, self.portals, strict=False):
+        listener_manager = self.listener_manager
+        self.listener_manager = None
+        if listener_manager is not None:
+            try:
+                await listener_manager.stop_all()
+            except Exception:
+                logger.exception("停止监听器失败")
+        worker_portals = list(zip(self.workers, self.portals, strict=False))
+        self.workers.clear()
+        self.portals.clear()
+        for worker, portal in worker_portals:
             try:
                 await wrap_future(portal.start_task_soon(worker.stop))
             except Exception:

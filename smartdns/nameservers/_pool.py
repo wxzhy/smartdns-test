@@ -38,5 +38,3 @@ class TCPStreamConnectionManager(BaseConnectionManager[TcpEndpoint, SocketStream
             return True
         except OSError:
             return False
-        finally:
-            probe.close()

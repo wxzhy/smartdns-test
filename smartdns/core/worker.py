@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from aiofastnet import patch_loop
+from anyio import CancelScope
 from dns.rcode import Rcode
 from loguru import logger
 
@@ -37,33 +38,53 @@ class Worker:
         """启动 Worker 服务"""
         patch_loop()
         logger.info(f"Worker {self.worker_id} 启动")
-        self._client = HTTPClient(config=self.config.client)
-        await self._client.start()
-        self._nameservers = NameserverManager(
-            config=self.config.nameservers, client=self._client
-        )
-        await self._nameservers.start_all()
-        self._resolvers = ResolverManager(config=self.config.resolvers)
-        self._actions = ActionManager(config=self.config.actions, client=self._client)
-        await self._actions.start_all()
-        await self._resolvers.start_all(
-            nameservers=self._nameservers, actions=self._actions
-        )
-
-        for rule in self.config.routing:
-            self._rules.append(Router(rule, self._resolvers, self._actions))
+        try:
+            self._client = HTTPClient(config=self.config.client)
+            await self._client.start()
+            self._nameservers = NameserverManager(
+                config=self.config.nameservers, client=self._client
+            )
+            await self._nameservers.start_all()
+            self._resolvers = ResolverManager(config=self.config.resolvers)
+            self._actions = ActionManager(
+                config=self.config.actions, client=self._client
+            )
+            await self._actions.start_all()
+            await self._resolvers.start_all(
+                nameservers=self._nameservers, actions=self._actions
+            )
+            self._rules = [
+                Router(rule, self._resolvers, self._actions)
+                for rule in self.config.routing
+            ]
+        except BaseException:
+            with CancelScope(shield=True):
+                await self.stop()
+            raise
 
     async def stop(self) -> None:
         """停止 Worker：按依赖逆序停止各管理器并释放 HTTP 客户端。"""
         logger.info(f"Worker {self.worker_id} 停止")
-        if self._resolvers is not None:
-            await self._resolvers.stop_all()
-        if self._nameservers is not None:
-            await self._nameservers.stop_all()
-        if self._actions is not None:
-            await self._actions.stop_all()
-        if self._client is not None:
-            await self._client.stop()
+        components = (
+            ("Resolver", self._resolvers, "stop_all"),
+            ("Action", self._actions, "stop_all"),
+            ("Nameserver", self._nameservers, "stop_all"),
+            ("HTTP 客户端", self._client, "stop"),
+        )
+        for label, component, method_name in components:
+            if component is None:
+                continue
+            try:
+                await getattr(component, method_name)()
+            except Exception:
+                logger.exception("Worker {} 停止 {} 失败", self.worker_id, label)
+        rules = getattr(self, "_rules", None)
+        if rules is not None:
+            rules.clear()
+        self._resolvers = None
+        self._nameservers = None
+        self._actions = None
+        self._client = None
 
     async def handle(self, request: Request) -> Response:
         """处理请求"""

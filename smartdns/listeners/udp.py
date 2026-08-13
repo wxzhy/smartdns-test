@@ -11,7 +11,7 @@ from sys import platform
 from time import time
 from typing import TYPE_CHECKING
 
-from anyio import ClosedResourceError
+from anyio import ClosedResourceError, Semaphore, create_task_group, fail_after
 from anyio.abc import UDPSocket
 from dns.asyncquery import receive_udp, send_udp
 from dns.inet import af_for_address
@@ -44,19 +44,23 @@ class UDPListener(BaseListener):
     def _create_socket(self) -> socket:
         """创建并绑定 UDP 套接字。仅 IPv6 设置双栈 V6ONLY=0，避免 IPv4 下崩溃。"""
         sock = socket(self._family, SOCK_DGRAM)
-        if self._family == AF_INET6:
-            sock.setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, 0)
-        sock.setblocking(False)
-        if platform == "win32":
-            sock.setsockopt(SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
-            if self.reuse_port:
-                logger.warning(f"UDP监听器 {self.name}: Windows 忽略 reuse_port")
-        else:
-            sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-            if self.reuse_port:
-                sock.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
-        sock.bind((self.host, self.port))
-        return sock
+        try:
+            if self._family == AF_INET6:
+                sock.setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, 0)
+            sock.setblocking(False)
+            if platform == "win32":
+                sock.setsockopt(SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
+                if self.reuse_port:
+                    logger.warning(f"UDP监听器 {self.name}: Windows 忽略 reuse_port")
+            else:
+                sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+                if self.reuse_port:
+                    sock.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
+            sock.bind((self.host, self.port))
+            return sock
+        except BaseException:
+            sock.close()
+            raise
 
     async def start(self, handler: Handler):
         """启动UDP监听器并进入接收循环。"""
@@ -67,27 +71,48 @@ class UDPListener(BaseListener):
         logger.info(f"UDP监听器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
         async with self._listener:
             anyio_socket = AnyioDatagramSocket(self._listener)
-            while True:
+            limiter = Semaphore(256)
+
+            async def process(msg, client) -> None:
                 try:
-                    msg, _, client = await receive_udp(
-                        anyio_socket, ignore_trailing=True
-                    )
-                    request = Request.from_message(
-                        msg=msg, listener=self.name, remote_address=client[0]
-                    )
-                    response = await handler(request)
-                    if response is not None:
-                        await send_udp(
-                            anyio_socket,
-                            response.to_wire(),
-                            client,
-                            expiration=time() + self.timeout,
+                    with fail_after(self.timeout):
+                        request = Request.from_message(
+                            msg=msg,
+                            listener=self.name,
+                            remote_address=client[0],
                         )
-                except ClosedResourceError:
-                    break  # 监听器已关闭（stop/取消），正常退出循环
+                        response = await handler(request)
+                        if response is not None:
+                            await send_udp(
+                                anyio_socket,
+                                response.to_wire(),
+                                client,
+                                expiration=time() + self.timeout,
+                            )
+                except TimeoutError:
+                    logger.warning("UDP监听器 {} 请求处理超时", self.name)
                 except Exception:
-                    # 单个请求失败（畸形包 / 处理器错误等），记录后继续服务。
-                    logger.warning(f"UDP监听器 {self.name} 处理请求失败")
+                    logger.warning("UDP监听器 {} 处理请求失败", self.name)
+                finally:
+                    limiter.release()
+
+            async with create_task_group() as tg:
+                while True:
+                    try:
+                        msg, _, client = await receive_udp(
+                            anyio_socket, ignore_trailing=True
+                        )
+                    except ClosedResourceError:
+                        break
+                    except Exception:
+                        logger.warning("UDP监听器 {} 接收请求失败", self.name)
+                        continue
+                    await limiter.acquire()
+                    try:
+                        tg.start_soon(process, msg, client)
+                    except BaseException:
+                        limiter.release()
+                        raise
 
     async def stop(self):
         """停止UDP监听器并释放套接字。"""

@@ -1,7 +1,7 @@
 from time import time
 from typing import TYPE_CHECKING
 
-from anyio import create_tcp_listener
+from anyio import create_tcp_listener, fail_after
 from dns.asyncquery import receive_tcp, send_tcp
 from loguru import logger
 
@@ -41,6 +41,7 @@ class TCPListener(BaseListener):
         """停止TCP监听器"""
         if self._listener is not None:
             await self._listener.aclose()
+            self._listener = None
             logger.info(f"TCP监听器 {self.name} 已停止")
 
     async def handle_connection(self, stream: SocketStream):
@@ -55,19 +56,24 @@ class TCPListener(BaseListener):
             logger.debug(f"接收到来自 {client_address} 的TCP连接")
             try:
                 while True:
-                    data, _ = await receive_tcp(anyio_stream, ignore_trailing=True)
-                    request = Request.from_message(
-                        msg=data, listener=self.name, remote_address=client_address
-                    )
-                    response: Message | None = await handler(request)
-                    if response is not None:
-                        await send_tcp(
-                            anyio_stream,
-                            response.to_wire(),
-                            expiration=time() + self.timeout,
+                    with fail_after(self.timeout):
+                        data, _ = await receive_tcp(anyio_stream, ignore_trailing=True)
+                        request = Request.from_message(
+                            msg=data,
+                            listener=self.name,
+                            remote_address=client_address,
                         )
+                        response: Message | None = await handler(request)
+                        if response is not None:
+                            await send_tcp(
+                                anyio_stream,
+                                response.to_wire(),
+                                expiration=time() + self.timeout,
+                            )
             except EOFError:
                 # 客户端正常关闭连接（读到 EOF），非错误路径。
                 pass
+            except TimeoutError:
+                logger.warning(f"TCP监听器 {self.name} 请求处理超时")
             except Exception:
                 logger.warning(f"TCP监听器 {self.name} 处理连接失败")

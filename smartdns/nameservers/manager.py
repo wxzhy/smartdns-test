@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+from anyio import CancelScope
 from loguru import logger
 
 from smartdns.models.nameserver import (
@@ -18,42 +19,38 @@ if TYPE_CHECKING:
 
 
 class NameserverManager:
-    def __init__(self, config: list[NameserverConfig], client: HTTPClient):
+    def __init__(self, config: list[NameserverConfig], client: HTTPClient) -> None:
         self.config = config
         self.nameservers: dict[str, BaseNameserver] = {}
         self._client = client
 
     async def start_all(self) -> None:
-        for nameserver_config in self.config:
-            match nameserver_config:
-                case TCPNameserverConfig():
-                    logger.info(
-                        f"创建TCP上游: {nameserver_config.name}，"
-                        f"地址: {nameserver_config.address}:{nameserver_config.port}"
-                    )
-                    nameserver: BaseNameserver = TCPNameserver(config=nameserver_config)
-                case UDPNameserverConfig():
-                    logger.info(
-                        f"创建UDP上游: {nameserver_config.name}，"
-                        f"地址: {nameserver_config.address}:{nameserver_config.port}"
-                    )
-                    nameserver = UDPNameserver(config=nameserver_config)
-                case CurlNameserverConfig():
-                    logger.info(
-                        f"创建Curl上游: {nameserver_config.name}，"
-                        f"地址: {nameserver_config.url}"
-                    )
-                    nameserver = CurlNameserver(
-                        config=nameserver_config, client=self._client
-                    )
-                case _:
-                    raise ValueError(f"不支持的上游类型: {nameserver_config.type}")
-            await nameserver.start()
-            self.nameservers[nameserver.name] = nameserver
+        try:
+            for config in self.config:
+                match config:
+                    case TCPNameserverConfig():
+                        nameserver: BaseNameserver = TCPNameserver(config=config)
+                    case UDPNameserverConfig():
+                        nameserver = UDPNameserver(config=config)
+                    case CurlNameserverConfig():
+                        nameserver = CurlNameserver(config=config, client=self._client)
+                    case _:
+                        raise ValueError(f"不支持的上游类型: {config.type}")
+                self.nameservers[nameserver.name] = nameserver
+                await nameserver.start()
+        except BaseException:
+            with CancelScope(shield=True):
+                await self.stop_all()
+            raise
 
     def get(self, name: str) -> BaseNameserver | None:
         return self.nameservers.get(name)
 
     async def stop_all(self) -> None:
-        for nameserver in self.nameservers.values():
-            await nameserver.stop()
+        nameservers = list(self.nameservers.values())
+        self.nameservers.clear()
+        for nameserver in reversed(nameservers):
+            try:
+                await nameserver.stop()
+            except Exception:
+                logger.exception("停止 Nameserver {} 失败", nameserver.name)
