@@ -15,6 +15,6 @@ def test_all_submodules_import() -> None:
     for module in pkgutil.walk_packages(smartdns.__path__, "smartdns."):
         try:
             importlib.import_module(module.name)
-        except Exception as exc:  # noqa: BLE001 - 汇总所有失败一次性报告
+        except Exception as exc:
             failed.append(f"{module.name}: {exc!r}")
     assert not failed, "以下子模块导入失败:\n" + "\n".join(failed)

@@ -20,9 +20,9 @@ async def _serve(config: Config) -> None:
 
 @app.command()
 def start(
-    config: Annotated[
-        Path, typer.Option(exists=True, help="配置文件路径")
-    ] = Path("config.yaml"),
+    config: Annotated[Path, typer.Option(exists=True, help="配置文件路径")] = Path(
+        "config.yaml"
+    ),
 ) -> None:
     """启动 SmartDNS 服务"""
     logger.info("启动 SmartDNS 服务")

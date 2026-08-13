@@ -1,4 +1,3 @@
-
 from typing import TYPE_CHECKING
 
 from dns.name import Name, from_text
