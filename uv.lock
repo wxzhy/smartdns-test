@@ -1133,7 +1133,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiodns", specifier = ">=4.0.4" },
-    { name = "aiofastnet", specifier = ">=1.0.5" },
+    { name = "aiofastnet", specifier = ">=1.0.4" },
     { name = "anyio", specifier = ">=4.14.2" },
     { name = "betterproto2", specifier = ">=0.10.0" },
     { name = "cachetools", specifier = ">=7.1.7" },
