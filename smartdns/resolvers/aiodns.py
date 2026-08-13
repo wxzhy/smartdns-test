@@ -60,11 +60,13 @@ if TYPE_CHECKING:
     from smartdns.models.resolver import AioDNSResolverConfig
 
 # 注册 pycares 未内置映射的记录类型（模块级，仅执行一次）。
-query_type_map.update({
-    "HTTPS": QUERY_TYPE_HTTPS,
-    "TLSA": QUERY_TYPE_TLSA,
-    "URI": QUERY_TYPE_URI,
-})
+query_type_map.update(
+    {
+        "HTTPS": QUERY_TYPE_HTTPS,
+        "TLSA": QUERY_TYPE_TLSA,
+        "URI": QUERY_TYPE_URI,
+    }
+)
 
 
 class AioDNSResolver(BaseResolver):
@@ -75,7 +77,7 @@ class AioDNSResolver(BaseResolver):
         self.tcp = config.tcp
         self.rotate = config.rotate
         self.tries = config.tries
-        self.nameservers = config.nameservers
+        self.nameservers = [str(address) for address in config.nameservers]
         self._resolver: DNSResolver | None = None
 
     async def start(self):

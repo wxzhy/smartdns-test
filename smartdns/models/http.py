@@ -1,10 +1,11 @@
-from pydantic import BaseModel, Field
+from pydantic import Field
 from pydantic.networks import HttpUrl, IPvAnyAddress
 
 from smartdns.models.resolver import AioDNSResolverConfig
+from smartdns.models.rule import StrictModel
 
 
-class HTTPClientConfig(BaseModel):
+class HTTPClientConfig(StrictModel):
     """HTTP 客户端配置"""
 
     resolver: AioDNSResolverConfig | None = Field(

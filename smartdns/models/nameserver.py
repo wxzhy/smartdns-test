@@ -1,10 +1,12 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from pydantic.networks import HttpUrl, IPvAnyAddress
 
+from smartdns.models.rule import StrictModel
 
-class BaseNameserverConfig(BaseModel):
+
+class BaseNameserverConfig(StrictModel):
     """Nameserver 配置基类。"""
 
     name: str

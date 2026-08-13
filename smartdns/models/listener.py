@@ -1,10 +1,12 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from pydantic.networks import IPvAnyAddress
 
+from smartdns.models.rule import StrictModel
 
-class BaseListenerConfig(BaseModel):
+
+class BaseListenerConfig(StrictModel):
     """Listener 配置基类。"""
 
     name: str

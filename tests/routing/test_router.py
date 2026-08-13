@@ -1,20 +1,22 @@
 """Phase 6：Router 黑洞与域名 fail-closed 回归测试。
 
-修复前：匹配的路由若无 resolver（或 resolver 未产出应答），query 因 `not context.response`
+修复前：匹配的路由若无 resolver（或 resolver 未产出应答），query 错误地
 返回 True，声称"已处理"却无应答 → worker 得到 None → SERVFAIL（黑洞）。
 修复后：无应答时返回 False，交后续路由处理。
 另：domain_include 已配但无 geo 数据（country=None）时应 fail-closed 不匹配。
 """
 
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import dns.message
 
-from smartdns.actions.manager import ActionManager
 from smartdns.models.context import Context, Request
 from smartdns.models.rule import RequestMatcher, Rule
-from smartdns.resolvers.manager import ResolverManager
 from smartdns.routing.router import Router
+
+if TYPE_CHECKING:
+    from smartdns.actions.manager import ActionManager
+    from smartdns.resolvers.manager import ResolverManager
 
 
 class _FakeManager:
@@ -24,7 +26,7 @@ class _FakeManager:
 
 def _router(rule: Rule) -> Router:
     fake = _FakeManager()
-    return Router(rule, cast(ResolverManager, fake), cast(ActionManager, fake))
+    return Router(rule, cast("ResolverManager", fake), cast("ActionManager", fake))
 
 
 def _context(qname: str = "example.com.", qtype: str = "A") -> Context:

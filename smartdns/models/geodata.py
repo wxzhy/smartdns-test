@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dns.name import Name
-from pydantic import BaseModel, ConfigDict, FilePath, IPvAnyAddress
+from pydantic import ConfigDict, FilePath, IPvAnyAddress
 from pydantic.dataclasses import dataclass
 
+from smartdns.models.rule import StrictModel
 from smartdns.routing.manager import get_geo_manager
 
 
-class GeoDataConfig(BaseModel):
+class GeoDataConfig(StrictModel):
     """geo文件配置"""
 
     geoip: FilePath | None = None

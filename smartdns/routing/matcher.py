@@ -1,112 +1,99 @@
-from ipaddress import IPv4Address, IPv6Address
+from typing import TYPE_CHECKING
 
-from dns.rdatatype import RdataType, from_text
-from loguru import logger
+from dns.rdatatype import to_text
 
-from smartdns.models.context import Context, Request, Response
-from smartdns.models.rule import RequestMatcher, ResponseCnameMatcher, ResponseIPMatcher
+if TYPE_CHECKING:
+    from ipaddress import IPv4Address, IPv6Address
+
+    from smartdns.models.context import Context, Request, Response
+    from smartdns.models.geodata import IPInfo
+    from smartdns.models.rule import (
+        RequestMatcher,
+        ResponseCnameMatcher,
+        ResponseIPMatcher,
+    )
 
 
 def match_request(matcher: RequestMatcher, request: Request) -> bool:
-    """匹配请求"""
-    rdtypes = None
-    # 转换类型
-    if matcher.query_types is not None:
-        try:
-            rdtypes: set[RdataType] = {from_text(t) for t in matcher.query_types}
-        except Exception as e:
-            logger.error(f"转换查询类型时出错: {e}")
-            return False
-    # 判断类型
-    if rdtypes is not None and request.rdtype not in rdtypes:
-        return False
-
-    # 判断域名
-    if matcher.domain_include is not None and (
-        request.name_info.country is None
-        or not (request.name_info.country & matcher.domain_include)
+    """匹配查询类型和请求域名标签。"""
+    if (
+        matcher.query_types is not None
+        and to_text(request.rdtype) not in matcher.query_types
     ):
         return False
-    return not (
-        matcher.domain_exclude is not None
-        and request.name_info.country is not None
-        and request.name_info.country & matcher.domain_exclude
-    )
+    labels = request.name_info.country or set()
+    if matcher.domain_exclude is not None and labels & matcher.domain_exclude:
+        return False
+    return matcher.domain_include is None or bool(labels & matcher.domain_include)
 
 
 def match_response_cname(matcher: ResponseCnameMatcher, response: Response) -> bool:
-    """匹配响应 CNAME"""
-    # 无结果的情况
-    if response.name_infos is None:
+    """匹配完整 CNAME 标签链，exclude 对任意记录全局优先。"""
+    labels = [info.country or set() for info in response.name_infos or []]
+    if matcher.cname_exclude is not None and any(
+        item & matcher.cname_exclude for item in labels
+    ):
         return False
-    # 遍历cname
-    for name in response.name_infos:
-        if name.country is None:
-            continue
-        if matcher.cname_exclude is not None and (name.country & matcher.cname_exclude):
-            return False
-        if matcher.cname_include is not None and name.country & matcher.cname_include:
-            return True
-    # 若设置include，未命中返回false
-    return matcher.cname_include is None
+    return matcher.cname_include is None or any(
+        item & matcher.cname_include for item in labels
+    )
 
 
 def match_context(matcher: RequestMatcher, context: Context) -> bool:
-    """匹配请求上下文"""
-    if match_request(matcher, context.request):
-        return True
-    if not context.response or context.response.ans is None:
+    """匹配请求域名与响应 CNAME 组成的完整标签链。"""
+    if (
+        matcher.query_types is not None
+        and to_text(context.request.rdtype) not in matcher.query_types
+    ):
         return False
-    response_matcher = ResponseCnameMatcher(
-        cname_include=matcher.domain_include, cname_exclude=matcher.domain_exclude
+    labels = [context.request.name_info.country or set()]
+    if context.response is not None:
+        labels.extend(
+            info.country or set() for info in context.response.name_infos or []
+        )
+    if matcher.domain_exclude is not None and any(
+        item & matcher.domain_exclude for item in labels
+    ):
+        return False
+    return matcher.domain_include is None or any(
+        item & matcher.domain_include for item in labels
     )
-    return match_response_cname(response_matcher, context.response)
+
+
+def match_ip(matcher: ResponseIPMatcher, info: IPInfo) -> bool:
+    """匹配单个 IP；IP 标签和 ASN include 之间采用 OR。"""
+    labels = info.country or set()
+    if matcher.ip_exclude is not None and labels & matcher.ip_exclude:
+        return False
+    if matcher.asn_exclude is not None and info.asn in matcher.asn_exclude:
+        return False
+    has_include = matcher.ip_include is not None or matcher.asn_include is not None
+    if not has_include:
+        return True
+    return bool(
+        (matcher.ip_include is not None and labels & matcher.ip_include)
+        or (matcher.asn_include is not None and info.asn in matcher.asn_include)
+    )
 
 
 def match_response(matcher: ResponseIPMatcher, response: Response) -> bool:
-    """匹配响应 IP"""
-    # 无结果的情况
-    if response.ip_infos is None:
+    """匹配响应 IP 列表，任一 exclude 否决整个响应。"""
+    infos = response.ip_infos or []
+    if any(
+        (
+            matcher.ip_exclude is not None
+            and (info.country or set()) & matcher.ip_exclude
+        )
+        or (matcher.asn_exclude is not None and info.asn in matcher.asn_exclude)
+        for info in infos
+    ):
         return False
-    # 遍历ip
-    for ip in response.ip_infos:
-        if ip.country is not None:
-            if matcher.ip_include is not None and (ip.country & matcher.ip_include):
-                return True
-            if matcher.ip_exclude is not None and (ip.country & matcher.ip_exclude):
-                return False
-        if ip.asn is not None:
-            if matcher.asn_include is not None and ip.asn in matcher.asn_include:
-                return True
-            if matcher.asn_exclude is not None and ip.asn in matcher.asn_exclude:
-                return False
-    # 若设置include，未命中返回false
-    return not (matcher.ip_include is not None or matcher.asn_include is not None)
+    has_include = matcher.ip_include is not None or matcher.asn_include is not None
+    return not has_include or any(match_ip(matcher, info) for info in infos)
 
 
 def filter_ip(
-    matcher: ResponseIPMatcher, ip_infos: list
+    matcher: ResponseIPMatcher, ip_infos: list[IPInfo]
 ) -> list[IPv4Address | IPv6Address]:
-    """过滤响应 IP"""
-    filtered_ips = []
-    for ip in ip_infos:
-        if ip.country is None:
-            continue
-        if matcher.ip_include is not None and not (ip.country & matcher.ip_include):
-            continue
-        if matcher.ip_exclude is not None and (ip.country & matcher.ip_exclude):
-            continue
-        if (
-            matcher.asn_include is not None
-            and ip.asn is not None
-            and ip.asn not in matcher.asn_include
-        ):
-            continue
-        if (
-            matcher.asn_exclude is not None
-            and ip.asn is not None
-            and ip.asn in matcher.asn_exclude
-        ):
-            continue
-        filtered_ips.append(ip.ip)
-    return filtered_ips
+    """返回匹配的 IP 地址，保持输入顺序。"""
+    return [info.ip for info in ip_infos if match_ip(matcher, info)]

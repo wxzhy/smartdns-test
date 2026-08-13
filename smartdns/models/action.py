@@ -1,12 +1,12 @@
 from ipaddress import IPv4Address, IPv6Address
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from smartdns.models.rule import RequestMatcher, ResponseIPMatcher
+from smartdns.models.rule import RequestMatcher, ResponseIPMatcher, StrictModel
 
 
-class BaseActionConfig(BaseModel):
+class BaseActionConfig(StrictModel):
     """Action 配置基类。"""
 
     name: str
@@ -33,7 +33,7 @@ class StaticActionConfig(BaseActionConfig):
     )
 
 
-class ReplaceActionMap(BaseModel):
+class ReplaceActionMap(StrictModel):
     """替换映射配置。"""
 
     match_ip: ResponseIPMatcher = Field(description="替换映射的标签")
@@ -83,7 +83,7 @@ class HTTPSActionConfig(BaseActionConfig):
     )
 
 
-class FallbackMap(BaseModel):
+class FallbackMap(StrictModel):
     """Fallback 映射配置。"""
 
     # domain_include: set[str] = Field(description="Fallback 映射的标签")
@@ -99,14 +99,14 @@ class FallbackMap(BaseModel):
     )
 
 
-class PingConfig(BaseModel):
+class PingConfig(StrictModel):
     """ping 测速配置。"""
 
     ping: bool = Field(default=True, description="是否启用ping测速")
     port: set[int] | None = Field(
         default=None, description="测速端口列表，空表示不测速"
     )
-    timeout: float = Field(default=0.5, ge=0.1, description="测速超时时间（秒）")
+    timeout: float = Field(default=0.3, ge=0.1, description="测速超时时间（秒）")
 
 
 class SpeedcheckConfig(BaseActionConfig):

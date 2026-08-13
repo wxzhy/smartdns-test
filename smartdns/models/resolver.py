@@ -1,10 +1,12 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
-from pydantic.networks import IPvAnyNetwork
+from pydantic import Field
+from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
+
+from smartdns.models.rule import StrictModel
 
 
-class BaseResolverConfig(BaseModel):
+class BaseResolverConfig(StrictModel):
     """Resolver 配置基类。"""
 
     name: str
@@ -15,7 +17,7 @@ class PlainResolverConfig(BaseResolverConfig):
     """Plain Resolver 配置。"""
 
     type: Literal["plain"]
-    nameservers: list[str] = Field(description="上游nameserver名称列表")
+    nameservers: list[str] = Field(description="上游 nameserver 名称列表")
     cache_size: int = Field(default=10000, ge=0, description="缓存大小")
     rotate: bool = Field(default=True, description="是否轮询上游nameserver")
     edns: bool = Field(default=True, description="是否启用EDNS")
@@ -29,7 +31,7 @@ class AioDNSResolverConfig(BaseResolverConfig):
     """AioDNS Resolver 配置。"""
 
     type: Literal["aiodns"]
-    nameservers: list[str] = Field(description="上游nameserver名称列表")
+    nameservers: list[IPvAnyAddress] = Field(description="上游 DNS 服务器地址列表")
     port: int = Field(default=53, ge=1, le=65535, description="上游nameserver端口")
     cache_size: int = Field(default=0, ge=0, description="缓存大小")
     rotate: bool = Field(default=True, description="是否轮询上游nameserver")

@@ -148,12 +148,6 @@ resolvers:
     ecs: 2409:8020:2000::/48
     timeout: 3
     lifetime: 5
-  - name: google
-    type: concurrent
-    resolvers:
-      - google-1
-      - google-2
-    timeout: 5
   - name: cn
     type: concurrent
     resolvers:
@@ -161,6 +155,8 @@ resolvers:
       - dnspod
       - 114dns
     timeout: 2
+    actions:
+      - speedcheck
   - name: global
     type: concurrent
     resolvers:
@@ -171,7 +167,7 @@ resolvers:
     actions:
       - replace
       - speedcheck
-    timeout: 2
+    timeout: 5
 
 actions:
   - name: block
@@ -224,7 +220,7 @@ actions:
     match_ip:
       ip_include:
         - cloudflare
-    ech: crypto.cloudflare.com
+    ech_domain: crypto.cloudflare.com
   - name: fallback
     type: fallback
     map:
@@ -250,13 +246,13 @@ routing:
       domain_include:
         - category-ads-all
         - category-ads
-  - name: rule-google
-    resolver: doh-goog
-    matcher:
-      domain_include:
-        - google-cn
-    after:
-      - https
+  #  - name: rule-google
+  #    resolver: doh-goog
+  #    matcher:
+  #      domain_include:
+  #        - google-cn
+  #    after:
+  #      - https
   - name: rule1
     resolver: cn
     matcher:
