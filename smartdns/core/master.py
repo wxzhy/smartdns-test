@@ -7,12 +7,14 @@ from aiofastnet import patch_loop
 from anyio import CancelScope
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from cachetools import TLRUCache
+from cachetools import TTLCache as CachetoolsTTLCache
 from dns.rcode import Rcode
 from loguru import logger
 
 from smartdns.actions._ping import set_cache
 from smartdns.core.cache import TTLCache
 from smartdns.listeners.manager import ListenerManager
+from smartdns.nameservers.client import set_ech_cache
 from smartdns.routing.manager import init_geo_manager
 
 from .worker import Worker
@@ -45,10 +47,12 @@ class Master:
         logger.info("启动 Master 服务")
         if self.config.geodata:
             init_geo_manager(self.config.geodata)
-        cache: TLRUCache = TLRUCache(
+        speedtest_cache: TLRUCache = TLRUCache(
             maxsize=10000, ttu=lambda key, value, now: now + 1800
         )
-        set_cache(cast("MutableMapping[SpeedtestKey, float]", cache))
+        set_cache(cast("MutableMapping[SpeedtestKey, float]", speedtest_cache))
+        ech_cache: CachetoolsTTLCache = CachetoolsTTLCache(maxsize=100, ttl=300)
+        set_ech_cache(cast("MutableMapping[str, str | None]", ech_cache))
         with ExitStack() as stack:
             try:
                 for i in range(self.worker_count):

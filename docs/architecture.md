@@ -310,12 +310,12 @@ ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使
 项目中有三类缓存设计：
 
 1. Master DNS Answer 缓存：容量由顶层 `cache_size` 控制，`0` 关闭，过期时间取 Answer 自身 expiration。
-2. HTTPClient ECHConfig 缓存：类级 TTLCache，最多 10 项、300 秒，并按 HTTPClient 实例和域名隔离。
+2. 全局 ECHConfig 缓存：Master 创建 100 项、300 秒的 TTLCache 并通过 `set_ech_cache` 注入，所有 Worker 的 HTTPClient 共享；键为域名规范化文本，不含实例标识。
 3. 测速缓存：Master 创建 10000 项、1800 秒的 TLRUCache，保存跨 Worker 可共享的数值结果。
 
 Master Answer 缓存键包含 `(qname, type, class, listener, client address, ECS)`，客户端相关路由结果不会交叉复用。写入与读取均复制 Answer，读取副本按剩余存活时间刷新所有 section 的 TTL。
 
-ECHConfig 与测速函数统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task。Answer 缓存仍由 `core.cache.TTLCache` 独立管理。
+ECHConfig 与测速函数统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task。两类缓存均为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。Answer 缓存仍由 `core.cache.TTLCache` 独立管理。
 
 ## 11. 配置与启动顺序约束
 

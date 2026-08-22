@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 from ipaddress import IPv6Address
 from threading import Lock
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
-from cachetools import TTLCache
 from curl_cffi import AsyncSession, CurlHttpVersion, CurlOpt
 from dns.name import Name, from_text
 from dns.rdatatype import RdataType
@@ -13,21 +14,35 @@ from smartdns.resolvers.aiodns import AioDNSResolver
 from smartdns.utils.cache_async import cached
 
 if TYPE_CHECKING:
+    from collections.abc import MutableMapping
+
     from smartdns.models.config import HTTPClientConfig
 
 
-def _ech_cache_key(client: object, domain: str | Name) -> tuple[int, str]:
+class _CacheHolder:
+    cache: MutableMapping[str, str | None] | None = None
+
+
+_cache_lock = Lock()
+
+
+def set_ech_cache(cache: MutableMapping[str, str | None] | None) -> None:
+    """绑定 ECH 结果缓存；缓存全局共享，只保存跨线程安全的字符串结果。"""
+    _CacheHolder.cache = cache
+
+
+def _get_ech_cache() -> MutableMapping[str, str | None] | None:
+    return _CacheHolder.cache
+
+
+def _ech_cache_key(client: object, domain: str | Name) -> str:
+    """ECH 缓存键为域名规范化文本，全局共享，不含实例标识。"""
     if isinstance(domain, str):
         domain = from_text(domain)
-    return id(client), domain.canonicalize().to_text()
+    return domain.canonicalize().to_text()
 
 
 class HTTPClient:
-    cache: ClassVar[TTLCache[tuple[int, str], str | None]] = TTLCache(
-        maxsize=10, ttl=300
-    )
-    _cache_lock: ClassVar[Lock] = Lock()
-
     def __init__(self, config: HTTPClientConfig):
         self.config = config
         self.resolver: AioDNSResolver | None = (
@@ -93,7 +108,7 @@ class HTTPClient:
             curl_options=opt,
         )
 
-    @cached(cache, key=_ech_cache_key, lock=_cache_lock)
+    @cached(_get_ech_cache, key=_ech_cache_key, lock=_cache_lock)
     async def get_ech_key(self, domain: str | Name) -> str | None:
         """查询 ECHConfig；缓存和同键调用合并由 decorator 统一处理。"""
         if self.resolver is None:
