@@ -388,14 +388,13 @@ routing:
 
 ## 10. 示例配置的两种运行模式
 
-`example.yaml` 默认不依赖 Geo 数据，只有一条兜底路由，复制后即可通过配置模型加载。
+`example.yaml` 是覆盖全部组件类型的完整参考配置：UDP/TCP 监听、三种 Nameserver（UDP/TCP/curl DoH）、三种 Resolver（aiodns/plain/concurrent）、七种 Action 与完整路由链。除注释掉的 `geodata` 外不依赖本地文件，复制后即可通过配置模型加载；无 Geo 数据时，带 `domain_include` 的路由 fail-closed，请求由末尾兜底路由处理。
 
 若要启用标签分流：
 
 1. 先生成/准备 `tags/output/geosite.trie`、GeoIP 和 ASN 文件。
-2. 取消 `example.yaml` 中 `geodata` 示例注释。
-3. 取消广告与 `cn` 路由示例注释，并确保最后仍有兜底路由。
-4. 需要 Replace/HTTPS 标签匹配时，再定义对应 Action 和 ConcurrentResolver actions。
+2. 取消 `example.yaml` 中 `geodata` 注释。
+3. 广告拦截与 `cn` 分流规则、Replace/HTTPS/Filter 等标签匹配 Action 均已就位并被正确引用，启用 Geo 数据后自动生效。
 
 ## 11. 启动前自检
 

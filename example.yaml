@@ -1,111 +1,163 @@
-# SmartDNS 参考配置。
+# SmartDNS 完整参考配置。
 #
-# 默认配置不依赖本地 Geo 数据，复制后即可通过 Config 模型加载。它展示：
-# - UDP/TCP 对外监听；
-# - aiodns 直连解析；
-# - curl DoH + plain Resolver；
-# - concurrent Resolver 与请求日志；
-# - 顺序路由和最终兜底。
+# 覆盖全部配置模型：顶层选项、geodata、client（HTTP 客户端）、listeners（UDP/TCP）、
+# nameservers（UDP/TCP/curl DoH）、resolvers（aiodns/plain/concurrent）、七种 Action
+# （log/static/replace/https/fallback/speedcheck/filter）以及路由规则的全部字段。
 #
-# wait_all=false 会在首个带 Answer 的 NOERROR 后取消其余查询；true 会在整体 timeout 内收集候选。
+# 除注释掉的 geodata 外不依赖本地文件，复制后即可通过 Config 模型加载：
+#   uv run python -m smartdns.main --config example.yaml
+#
+# 无 Geo 数据时，带 domain_include 的路由 fail-closed（不匹配、继续下一条），
+# 请求最终由末尾无 matcher 的兜底路由处理。
 
+# Worker 线程/事件循环数量；每个 Worker 独立持有上游连接池与 curl 会话。
 worker_count: 1
+# Master Answer 缓存容量；0 表示关闭。
 cache_size: 10000
 
-# 标签分流可选。启用前先确保这些文件存在，否则 Pydantic FilePath 校验失败。
+# Geo 数据文件（FilePath 校验，启用时必须已存在），四项均可省略。
+# geosite 产生域名标签（domain_include/exclude）；geoip 与 ipset 产生 IP 标签
+# （ip_include/exclude）；asn 产生整数 ASN（asn_include/exclude）。
 # geodata:
 #   geosite: tags/output/geosite.trie
 #   geoip: tags/output/geoip.metadb
 #   asn: tags/output/asn.mmdb
 #   ipset: tags/output/geoip.radix
 
+# curl HTTP 客户端公共配置，供 curl DoH 上游与 HTTPS Action 的 ECH 查询使用。
 client:
+  # 每个 curl session 的最大连接数。
   max_clients: 256
+  # curl DNS 缓存秒数。
   dns_cache_ttl: 300
+  # 是否打乱解析到的地址顺序。
   shuffle: true
-  # curl DoH 上游使用字符串 ech 或 HTTPS Action 注入 ECH 时需要该解析器。
+  # curl 自身解析目标主机时使用的 DoH；null 使用系统解析。hosts 的 RESOLVE 优先。
+  doh: https://dns.google/dns-query
+  # 上述 DoH URL 的证书验证。
+  doh_verify: true
+  # 静态主机映射，转为 curl RESOLVE（固定 443 端口）。
+  hosts:
+    dns.example.com:
+      - 192.0.2.53
+      - "2001:db8::53"
+  # 查询 ECHConfig（curl 上游 ech 为字符串、HTTPS Action add_ech）时使用的内嵌
+  # aiodns 解析器；不使用 ECH 时可整段删除。
   resolver:
     name: http-bootstrap
     type: aiodns
     nameservers:
       - 1.1.1.1
       - 8.8.8.8
+    port: 53
     timeout: 2
     tries: 3
+    rotate: true
+    edns: true
+    tcp: false
+    # ecs: 203.0.113.0/24   # 保留字段，当前 aiodns 路径未使用
+    # cache_size: 10000     # 保留字段，当前 aiodns 路径未使用
 
+# 对外监听器。当前仅支持 UDP/TCP；type: http（DoH 监听）尚未实现，配置会被拒绝。
 listeners:
   - name: udp-main
     type: udp
-    host: "::"
+    host: "::"            # 缺省 "::"（IPv4/IPv6 双栈）；Windows 下 reuse_port 被忽略并告警
     port: 5335
-    timeout: 5
+    timeout: 5            # 单请求从接收、处理到回写的整体超时
+    reuse_port: false
   - name: tcp-main
     type: tcp
     host: "::"
     port: 5335
     timeout: 5
+    reuse_port: false
 
+# 底层上游，只被 plain Resolver 按名称引用。
 nameservers:
-  # UDP/TCP 上游选项示例；按需取消注释并让 plain Resolver 引用其名称。
-  # - name: udp-upstream
-  #   type: udp
-  #   address: 1.1.1.1
-  #   port: 53
-  #   repeat: 0
-  #   use_tricks: false
-  #   timeout: 3
-  # - name: tcp-upstream
-  #   type: tcp
-  #   address: 8.8.8.8
-  #   port: 53
-  #   pool_size: 4
-  #   use_tricks: false
-  #   timeout: 5
-
+  # UDP 上游：repeat 为额外重复发包次数；use_tricks 启用最多五次接收与报文
+  # 特征过滤；响应带 TC=1 时自动对同一地址改走 TCP。
+  - name: udp-114
+    type: udp
+    address: 114.114.114.114
+    port: 53
+    timeout: 3
+    repeat: 0
+    use_tricks: false
+  # TCP 上游：pool_size 为 0 时每次查询新建连接，大于 0 时按 Worker 创建连接池；
+  # use_tricks 启用尽力而为的 OOB 前缀发送，失败时回退完整报文的普通发送。
+  - name: tcp-google
+    type: tcp
+    address: 8.8.8.8
+    port: 53
+    timeout: 5
+    pool_size: 4
+    use_tricks: false
+  # curl DoH 上游：ech 为 true 时启用 curl 自动 ECH；false 不设置 ECH；
+  # 字符串时先经 client.resolver 查询该域名的 HTTPS 记录并提取 ECHConfig。
   - name: doh-cloudflare
     type: curl
     url: https://cloudflare-dns.com/dns-query
-    host: cloudflare-dns.com
+    host: cloudflare-dns.com   # 缺省取 URL 主机；改写 Host 头可用于域名前置
     timeout: 5
-    want_get: false
+    want_get: false            # false 为 POST application/dns-message，true 为 GET ?dns=
     verify: true
-    ech: true
+    ech: crypto.cloudflare.com
 
+# 解析策略，按声明顺序创建；concurrent 只能引用位于它之前的条目。
 resolvers:
-  # aiodns 的 nameservers 填 IP 地址，不引用 nameservers 节点。
-  - name: direct-primary
+  # aiodns 直连：nameservers 只接受 IP 地址，不引用 nameservers 节点。
+  - name: direct-cn
     type: aiodns
     nameservers:
       - 223.5.5.5
       - 119.29.29.29
-    timeout: 2
-    rotate: true
+    port: 53
+    timeout: 2          # 单次查询超时
+    tries: 3            # 尝试次数
+    rotate: true        # 轮询上游地址
     edns: true
-    tries: 3
-
-  # plain 的 nameservers 填前面 nameservers[].name。
-  - name: doh-primary
+    tcp: false          # true 时强制走 TCP
+    # ecs: 203.0.113.0/24   # 保留字段，当前未使用
+    # cache_size: 10000     # 保留字段，当前未使用
+  # plain：nameservers 引用前面 nameservers[].name，可混用 UDP/TCP/curl。
+  # timeout 为单次上游尝试时限，lifetime 为整个解析过程的总时限。
+  - name: doh-fallback
     type: plain
     nameservers:
       - doh-cloudflare
+      - tcp-google
+      - udp-114
+    timeout: 3
     lifetime: 5
     rotate: true
     edns: true
-
-  # concurrent 只能引用配置列表中位于它之前的 Resolver。
-  - name: mixed
+    ecs: 203.0.113.0/24     # 携带固定的 EDNS Client Subnet 选项
+    # cache_size: 10000     # 保留字段，当前未使用
+  # concurrent：并发查询多个 Resolver，按完成顺序收集候选。
+  # actions 在每个直接子 Resolver 返回带 Answer 的 NOERROR 后调用（on_resolver），
+  # 这是 replace/speedcheck/filter 唯一生效的位置；路由 after 只触发 on_response。
+  # wait_all=false 首个成功后取消其余查询；true 在 timeout 内收集全部候选供测速选优。
+  - name: race
     type: concurrent
     resolvers:
-      - direct-primary
-      - doh-primary
+      - direct-cn
+      - doh-fallback
+    actions:
+      - replace-cdn
+      - speed
+      - drop-polluted
     wait_all: true
     timeout: 5
 
+# 加工动作。放错阶段的 Action 是 no-op，不会报错。
 actions:
+  # before 阶段记录请求摘要。
   - name: access-log
     type: log
     text: dns-query
 
+  # before 阶段静态应答并终止路由；固定 TTL 86400，非 A/AAAA 返回空 NOERROR。
   - name: block
     type: static
     ipv4:
@@ -113,45 +165,124 @@ actions:
     ipv6:
       - "::"
 
-  # 完整动作示例。当前未接入默认路由，便于先以最小功能运行。
-  - name: speed
-    type: speedcheck
-    ping_config:
-      ping: true
-      privileged: false
-      timeout: 0.3
-    max_num: 2
-    threshold: 50
+  # 替换 CDN IP：保留原 IP 在 prefixlen 之外的主机位，叠加到目标基址。
+  # 例：原 192.0.2.42 + 基址 198.51.100.0 + ipv4_prefixlen 24 → 198.51.100.42。
+  # 仅 ConcurrentResolver 的 actions 阶段生效（查询类型固定为 A/AAAA）。
+  - name: replace-cdn
+    type: replace
+    match_name:
+      domain_exclude:     # 标签而非字面域名
+        - cn
+    replace_map:
+      - match_ip:
+          ip_include:
+            - cloudflare
+        ipv4_prefixlen: 24
+        ipv6_prefixlen: 64
+        ipv4:
+          - 198.51.100.0
+        ipv6:
+          - "2001:db8:100::"
 
-  - name: fallback-example
+  # HTTPS 记录参数调整：移除 ipv4/ipv6 hint、ALPN 去 h3，按需注入 ECH
+  # （ech_domain 的 ECHConfig 经 client.resolver 查询；查询类型固定为 HTTPS）。
+  - name: tune-https
+    type: https
+    remove_hint: true
+    remove_h3: true
+    add_ech: true
+    match_name:
+      domain_exclude:
+        - cn
+    match_ip:
+      ip_include:
+        - cloudflare
+    ech_domain: crypto.cloudflare.com
+
+  # 测速回退：所有候选测速均失败时以静态地址替换当前响应
+  # （依赖 speedcheck 已在 on_resolver 阶段采样；查询类型固定为 A/AAAA）。
+  - name: fallback-map
     type: fallback
     map:
       - match_name:
           domain_include:
-            - example-fallback
+            - google
         ipv4:
           - 203.0.113.10
         ipv6:
           - "2001:db8::10"
 
-routing:
-  # 启用 GeoSite 后可取消以下规则注释。
-  # - name: block-ads
-  #   matcher:
-  #     domain_include:
-  #       - category-ads-all
-  #       - category-ads
-  #   before:
-  #     - block
-  #
-  # - name: domestic
-  #   matcher:
-  #     domain_include:
-  #       - cn
-  #   resolver: direct-primary
+  # 测速选优：on_resolver 阶段对候选 IP 并发 ICMP/TCP 探测（任一成功即取消其余），
+  # on_response 阶段保留与最优 RTT 差不超过 threshold 的前 max_num 个地址。
+  # 通常同时放入 ConcurrentResolver 的 actions 与路由 after：前者采样，后者择优。
+  - name: speed
+    type: speedcheck
+    ping_config:
+      ping: true          # ICMP 探测
+      privileged: false   # true 使用原始 ICMP socket，需管理员权限或 CAP_NET_RAW
+      port:               # TCP 建连探测端口；null 表示不测
+        - 443
+      timeout: 0.3
+    match_ip:             # include 维度之间 OR，任一 exclude 命中否决整体
+      ip_include:
+        - cloudflare
+        - fastly
+      ip_exclude:
+        - private
+      asn_include:
+        - 13335
+      asn_exclude:
+        - 64512
+    max_num: 2
+    threshold: 50         # 毫秒
 
-  # 最后一条不带 matcher，作为所有请求的兜底。
+  # 候选过滤：域名标签链与响应 IP 标签均命中时标记候选 invalid 并丢弃
+  # （查询类型固定为 A/AAAA/HTTPS；仅 ConcurrentResolver 的 actions 阶段生效）。
+  - name: drop-polluted
+    type: filter
+    filters:
+      - match_name:
+          # 命中排除标签的过滤项整体跳过，用于豁免真实解析就带这些标签的域名。
+          domain_exclude:
+            - facebook
+            - dropbox
+        match_ip:
+          ip_exclude:
+            - facebook
+            - twitter
+
+# 路由规则，严格按顺序执行：matcher 匹配 → before 动作 → resolver → after 动作。
+# matcher 中 domain_include/exclude 是 GeoSite 标签，query_types 是 DNS 类型文本。
+# 无 Geo 数据时 domain_include fail-closed；最后一条不带 matcher 作为兜底。
+routing:
+  - name: block-ads
+    matcher:
+      domain_include:
+        - category-ads-all
+        - category-ads
+      query_types:
+        - A
+        - AAAA
+        - HTTPS
+    before:
+      - block              # static 动作设置 stop，不再继续后续路由
+
+  - name: domestic
+    matcher:
+      domain_include:
+        - cn
+      domain_exclude:
+        - category-ads
+    resolver: direct-cn       # 叶子 Resolver 不产生候选/测速数据，
+    after:                    # 故此处不放 speedcheck/fallback（它们依赖 concurrent 采样）。
+      - tune-https
+
+  # 兜底路由：处理所有未被上方规则命中的请求。
   - name: default
-    resolver: mixed
+    resolver: race
     before:
       - access-log
+    after:
+      - speed              # on_response 择优
+      - fallback-map
+      - tune-https
