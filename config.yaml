@@ -168,12 +168,29 @@ resolvers:
       - replace
       - speedcheck
     timeout: 5
+  - name: default
+    type: concurrent
+    resolvers:
+      - isp
+      - dnspod
+      - 114dns
+      - hinet
+      - iij
+      - doh-test
+    wait_all: true
+    actions:
+      - replace
+      - speedcheck
+    timeout: 5
 
 actions:
   - name: block
     type: static
   - name: speedcheck
     type: speedcheck
+    match_ip:
+      ip_exclude:
+        - private
   - name: replace
     type: replace
     match_name:
@@ -237,6 +254,17 @@ actions:
           - "2607:f8b0:400e:c00::5a"
           - "2607:f8b0:400e:c0c::c8"
           - "2607:f8b0:400e:c06::c2"
+  - name: filter
+    type: filter
+    filters:
+      - match_name:
+          domain_exclude:
+            - facebook
+            - dropbox
+        match_ip:
+          ip_exclude:
+            - facebook
+            - twitter
 routing:
   - name: ads
     before:
@@ -258,13 +286,27 @@ routing:
     matcher:
       domain_include:
         - cn
+        - google-cn
+        - apple-cn
     after:
       - speedcheck
       - https
   #    resolver: doh-test
   - name: rule3
+    matcher:
+      domain_include:
+        - google
+        - gfw
     after:
+      - filter
       - speedcheck
       - fallback
       - https
     resolver: global
+  - name: default
+    after:
+      - filter
+      - speedcheck
+      - fallback
+      - https
+    resolver: default

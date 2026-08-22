@@ -133,12 +133,29 @@ class FallbackActionConfig(BaseActionConfig):
     )
 
 
+class FilterItem(StrictModel):
+    """Filter 映射配置。"""
+
+    match_name: RequestMatcher = Field(description="匹配的域名")
+    match_ip: ResponseIPMatcher = Field(description="匹配的IP地址")
+
+
+class FilterActionConfig(BaseActionConfig):
+    """Filter Action 配置。"""
+
+    type: Literal["filter"]
+    filters: list[FilterItem] = Field(
+        default_factory=list, description="Filter 映射列表"
+    )
+
+
 ActionConfig = Annotated[
     LogActionConfig
     | StaticActionConfig
     | ReplaceActionConfig
     | HTTPSActionConfig
     | FallbackActionConfig
-    | SpeedcheckConfig,
+    | SpeedcheckConfig
+    | FilterActionConfig,
     Field(discriminator="type"),
 ]

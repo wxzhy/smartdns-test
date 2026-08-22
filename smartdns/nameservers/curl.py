@@ -78,6 +78,7 @@ class CurlNameserver(BaseNameserver):
             ech_key = await self._client.get_ech_key(self.ech)
             if ech_key is not None:
                 self._curl.curl_options[CurlOpt.ECH] = f"ecl:{ech_key}"
+                logger.debug(f"Curl解析器 {self.name} 设置ECH密钥: {ech_key}")
             else:
                 logger.warning(f"Curl解析器 {self.name} 未能获取ECH密钥，使用默认设置")
         try:

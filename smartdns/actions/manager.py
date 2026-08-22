@@ -6,6 +6,7 @@ from anyio import CancelScope
 from loguru import logger
 
 from smartdns.actions.fallback import FallbackAction
+from smartdns.actions.filter import FilterAction
 from smartdns.actions.https import HTTPSAction
 from smartdns.actions.log import LogAction
 from smartdns.actions.replace import ReplaceAction
@@ -13,6 +14,7 @@ from smartdns.actions.speedcheck import SpeedcheckAction
 from smartdns.actions.static import StaticAction
 from smartdns.models.action import (
     FallbackActionConfig,
+    FilterActionConfig,
     HTTPSActionConfig,
     LogActionConfig,
     ReplaceActionConfig,
@@ -48,6 +50,8 @@ class ActionManager:
                         action = FallbackAction(config=action_config)
                     case SpeedcheckConfig():
                         action = SpeedcheckAction(config=action_config)
+                    case FilterActionConfig():
+                        action = FilterAction(config=action_config)
                     case _:
                         raise ValueError(f"不支持的操作类型: {action_config.type}")
                 self.actions[action.name] = action

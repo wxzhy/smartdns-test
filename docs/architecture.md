@@ -176,7 +176,7 @@ match(request)
 - `upstream`：实际产出响应的 Resolver 名称。
 - `ip_infos`：A、AAAA 或 HTTPS hint 中解析出的 IP、标签、ASN、RTT 和来源 Resolver。
 - `name_infos`：CNAME 链目标的标签信息。
-- `invalid`：供 Action 标记候选无效的扩展位；当前内置 Action 没有设置它。
+- `invalid`：供 Action 标记候选无效的扩展位；FilterAction 会在 on_resolver 阶段设置它，被标记的候选不参与竞速选择和候选收集。
 
 ### Context
 
@@ -222,7 +222,7 @@ TCP pool 使用非破坏性的 `MSG_PEEK` 健康检查，不会关闭被检查�
 
 ### 7.3 ConcurrentResolver
 
-`type: concurrent` 组合之前已经注册的 Resolver。每个直接子 Resolver 返回带 Answer 的 NOERROR 响应后，可按配置执行 Action 的 `on_resolver(context, response)`，用于收集测速结果或改写候选响应；否定/失败响应不会执行这些动作。最终结果再交给路由 `after` 动作。
+`type: concurrent` 组合之前已经注册的 Resolver。每个直接子 Resolver 返回带 Answer 的 NOERROR 响应后，可按配置执行 Action 的 `on_resolver(context, response)`，用于收集测速结果、改写候选响应或标记候选无效（标记后该候选被丢弃）；否定/失败响应不会执行这些动作。最终结果再交给路由 `after` 动作。
 
 配置意图是：
 
@@ -266,7 +266,7 @@ Action 基类有三个 hook：
 | Hook | 调用位置 | 当前内置实现 |
 |---|---|---|
 | `on_request` | Router 的 `before` | `static`、`log` |
-| `on_resolver` | ConcurrentResolver 每个直接子响应完成后 | `replace`、`speedcheck` |
+| `on_resolver` | ConcurrentResolver 每个直接子响应完成后 | `replace`、`speedcheck`、`filter` |
 | `on_response` | Router 的 `after` | `speedcheck`、`https`、`fallback` |
 
 Action 放在没有实现的阶段时是 no-op，不会报错。
@@ -300,6 +300,10 @@ ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使
 ### fallback
 
 当 `context.ip_infos` 存在且所有测速结果都不可用时，根据域名/CNAME 标签映射，用静态 IPv4/IPv6 地址替换当前响应。它依赖前面已经在 ConcurrentResolver 中执行过 `speedcheck.on_resolver`；若没有测速数据，Fallback 会直接跳过。
+
+### filter
+
+只在 ConcurrentResolver 的 `actions` 中执行，用于丢弃被污染或不合预期的候选。每条过滤项先以 `match_name` 匹配请求域名与当前候选 CNAME 链组成的标签链（仅 A/AAAA/HTTPS 查询生效），再用 `match_ip` 检查响应 IP；两项都命中时把候选标记为 `invalid`，ConcurrentResolver 会跳过被标记的候选。域名排除标签命中的过滤项直接跳过，不会标记。配置条目在启动时深拷贝，运行期不会修改配置对象。
 
 ## 10. 缓存与共享状态
 

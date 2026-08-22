@@ -60,6 +60,7 @@ class SpeedcheckAction(BaseAction):
             context.ip_infos.values(),
             key=lambda info: info.rtt if info.rtt is not None else float("inf"),
         )
+        logger.debug("Speedcheck Action {} 测速结果：{}", self.name, infos)
         best = infos[0]
         if best.rtt is None or best.rtt == float("inf") or best.resolver is None:
             return

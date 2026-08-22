@@ -345,6 +345,20 @@ match_ip:
 
 Fallback 依赖此前的 Speedcheck 采样；只有所有候选测速均失败时才替换。
 
+### filter
+
+```yaml
+- name: filter
+  type: filter
+  filters:
+    - match_name:
+        domain_exclude: [facebook, dropbox]
+      match_ip:
+        ip_exclude: [facebook, twitter]
+```
+
+必须放入 ConcurrentResolver 的 `actions`。每条过滤项先用 `match_name` 匹配请求域名与候选 CNAME 链标签（仅对 A/AAAA/HTTPS 查询生效），再用 `match_ip` 检查响应 IP 标签；两者都命中时该候选被标记为无效并从竞速结果中丢弃。`domain_exclude` 命中的过滤项整体跳过，常用于豁免真实解析结果就带这些标签的域名。
+
 ## 9. Routing
 
 ```yaml
