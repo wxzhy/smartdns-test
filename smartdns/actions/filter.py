@@ -36,6 +36,13 @@ class FilterAction(BaseAction):
         original = context.response
         context.response = response
         try:
+            # 返回类型和请求类型不符
+            if (
+                response.ans is not None
+                and response.ans.rdtype != context.request.rdtype
+            ):
+                response.invalid = True
+                return
             for item in self.map:
                 if not match_context(item.match_name, context):
                     continue

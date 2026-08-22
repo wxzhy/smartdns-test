@@ -136,6 +136,18 @@ async def test_cname_chain_without_exclude_marks_invalid() -> None:
     assert response.invalid is True
 
 
+async def test_answer_type_mismatch_marks_invalid() -> None:
+    # 应答记录类型与请求类型不符（如 AAAA 查询返回 A 记录）视为污染候选。
+    action = FilterAction(
+        _config(RequestMatcher(), ResponseIPMatcher(ip_exclude={"twitter"}))
+    )
+    response = _a_response()
+    context = Context(worker_id=0, request=_request("AAAA"))
+    await action.on_resolver(context, response)
+    assert response.invalid is True
+    assert context.response is None
+
+
 async def test_unsupported_query_type_is_skipped() -> None:
     action = FilterAction(
         _config(RequestMatcher(), ResponseIPMatcher(ip_exclude={"twitter"}))
