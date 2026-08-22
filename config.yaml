@@ -13,6 +13,7 @@ geodata:
   geoip: tags/output/geoip.metadb
   geosite: tags/output/geosite.trie
   asn: tags/output/asn.mmdb
+  ipset: tags/output/geoip.radix
 client:
   dns_cache_ttl: 300
   shuffle: true
@@ -196,7 +197,6 @@ actions:
     match_name:
       domain_exclude:
         - mozilla
-        - github
         - cn
         - cloudflare-cn
         - google-cn
@@ -220,6 +220,21 @@ actions:
           - "2606:4700:52::"
           - "2606:4700:57::"
           - "2606:4700:5a::"
+      - match_ip:
+          ip_include:
+            - github-raw
+        ipv4:
+          - 146.75.50.132
+          - 146.75.49.55
+          - 146.75.48.133
+          - 146.75.50.217
+          - 146.75.49.91
+        ipv6:
+          - "2a04:4e42:7c::133"
+          - "2a04:4e42:7c::311"
+          - "2a04:4e42:7c::347"
+          - "2a04:4e42:7c::644"
+          - "2a04:4e42:7c::729"
       - match_ip:
           ip_include:
             - fastly
