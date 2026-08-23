@@ -11,3 +11,12 @@ wheels/
 # Config files
 .config
 tags
+
+# IDE
+.idea/
+
+# 打包产物
+*.zip
+
+# fetch_ip.py 抓取的地址列表（可再生）
+utils/*.txt
