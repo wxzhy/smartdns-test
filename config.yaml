@@ -222,6 +222,21 @@ actions:
           - "2606:4700:5a::"
       - match_ip:
           ip_include:
+            - cloudfront
+        ipv4:
+          - 3.168.241.0
+          - 13.225.167.0
+          - 3.175.219.0
+          - 13.33.212.0
+          - 3.166.246.0
+        ipv6:
+          - "2600:9000:2755::"
+          - "2600:9000:28c2::"
+          - "2600:9000:203f::"
+          - "2600:9000:229f::"
+          - "2600:9000:2078::"
+      - match_ip:
+          ip_include:
             - github-raw
         ipv4:
           - 146.75.50.132
@@ -238,6 +253,8 @@ actions:
       - match_ip:
           ip_include:
             - fastly
+          ip_exclude:
+            - github
         ipv4_prefixlen: 22
         ipv6_prefixlen: 64
         ipv4:
@@ -280,6 +297,8 @@ actions:
           ip_exclude:
             - facebook
             - twitter
+          asn_exclude:
+            - 19679
 routing:
   - name: ads
     before:
