@@ -88,7 +88,7 @@ async def test_speedtest_cache_key_includes_all_probe_options(
     cache: MutableMapping[_ping.SpeedtestKey, float] = {}
     _ping.set_cache(cache)
     configs = [
-        PingConfig(ping=True, port={443}, timeout=0.3),
+        PingConfig(ping=True, privileged=False, port={443}, timeout=0.3),
         PingConfig(ping=False, port={443}, timeout=0.3),
         PingConfig(ping=True, port={80}, timeout=0.3),
         PingConfig(ping=True, port={443}, timeout=0.5),
