@@ -17,7 +17,10 @@ class FallbackAction(BaseAction):
 
     def __init__(self, config: FallbackActionConfig) -> None:
         super().__init__(config)
-        self.map: list[FallbackMap] = config.map
+        # 深拷贝配置条目后再限定查询类型，避免原地修改多 Worker 共享的配置对象。
+        self.map: list[FallbackMap] = [
+            item.model_copy(deep=True) for item in config.map
+        ]
         for item in self.map:
             item.match_name.query_types = {"A", "AAAA"}
 
