@@ -87,7 +87,7 @@ class CurlNameserver(BaseNameserver):
                     self.url,
                     params={"dns": encoded},
                     headers={"Host": self.host, "Accept": "application/dns-message"},
-                    timeout=int(timeout),
+                    timeout=timeout,
                     verify=self.verify,
                 )
             else:
@@ -99,7 +99,7 @@ class CurlNameserver(BaseNameserver):
                         "Content-Type": "application/dns-message",
                         "Accept": "application/dns-message",
                     },
-                    timeout=int(timeout),
+                    timeout=timeout,
                     verify=self.verify,
                 )
         except Exception:
