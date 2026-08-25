@@ -70,10 +70,13 @@ def replace_response_ip(
     rrset = RRset(answer.rrset.name, answer.rrset.rdclass, answer.rrset.rdtype)
     rrset.update_ttl(answer.rrset.ttl)
     for ip in ips:
-        if answer.rdtype == RdataType.A:
+        if answer.rdtype == RdataType.A and isinstance(ip, IPv4Address):
             rrset.add(A(rrset.rdclass, rrset.rdtype, str(ip)))
-        elif answer.rdtype == RdataType.AAAA:
+        elif answer.rdtype == RdataType.AAAA and isinstance(ip, IPv6Address):
             rrset.add(AAAA(rrset.rdclass, rrset.rdtype, str(ip)))
+    if not rrset:
+        # 记录类型与 IP 地址族不符时未产出任何记录，保留原应答。
+        return response
     return replace_answer_rrset(response, rrset)
 
 
