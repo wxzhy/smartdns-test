@@ -5,10 +5,73 @@
 """
 
 import asyncio
+from typing import cast
 
+import dns.asyncbackend
+import dns.message
 from generic_connection_pool.asyncio import ConnectionPool
 
+from smartdns.models.nameserver import TCPNameserverConfig
 from smartdns.nameservers._pool import TCPStreamConnectionManager
+from smartdns.nameservers.tcp import TCPNameserver
+
+
+def _dns_query():
+    return dns.message.make_query("example.com.", "A")
+
+
+def _dns_response():
+    return dns.message.make_response(_dns_query())
+
+
+class _SlowPool:
+    """伪连接池：acquire 阻塞指定时长后交出连接并记录查询时限。"""
+
+    def __init__(self, delay: float) -> None:
+        self._delay = delay
+        self.captured_timeouts: list[float] = []
+
+    def connection(self, endpoint, timeout: float):
+        pool = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                await asyncio.sleep(pool._delay)
+                return object()
+
+            async def __aexit__(self, *exc_info) -> None:
+                return None
+
+        return _Ctx()
+
+
+async def test_tcp_nameserver_query_uses_remaining_deadline(monkeypatch) -> None:
+    config = TCPNameserverConfig(
+        name="t", type="tcp", address="127.0.0.1", port=53, timeout=1.0, pool_size=1
+    )
+    nameserver = TCPNameserver(config)
+    pool = _SlowPool(delay=0.4)
+    nameserver._pool = cast("ConnectionPool", pool)
+
+    async def fake_query_on_stream(raw_sock, request, timeout, *args, **kwargs):
+        pool.captured_timeouts.append(timeout)
+        return _dns_response()
+
+    monkeypatch.setattr(nameserver, "_query_on_stream", fake_query_on_stream)
+
+    await nameserver.async_query(
+        _dns_query(),
+        1.0,
+        None,
+        0,
+        False,
+        cast("dns.asyncbackend.Backend", object()),
+    )
+
+    # 剩余时限 = 1.0 - acquire 延迟(≈0.4)，显著小于完整的 1.0。
+    assert len(pool.captured_timeouts) == 1
+    remaining = pool.captured_timeouts[0]
+    assert 0.1 <= remaining < 0.9
 
 
 async def _start_echo_server() -> tuple[asyncio.AbstractServer, int]:

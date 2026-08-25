@@ -1,3 +1,4 @@
+from time import monotonic
 from typing import TYPE_CHECKING
 
 import dns.asyncbackend
@@ -82,13 +83,17 @@ class TCPNameserver(BaseAddressNameserver):
         endpoint: TcpEndpoint = (self.address, self.port)
         try:
             if self._pool is not None:
+                # 连接获取（含新建）计入总时限；0.1 与配置最小超时一致，
+                # 避免 0 被 dns.asyncquery 当作立即超时。
+                deadline = monotonic() + effective_timeout
                 async with self._pool.connection(
                     endpoint, timeout=effective_timeout
                 ) as raw_sock:
+                    remaining = max(deadline - monotonic(), 0.1)
                     return await self._query_on_stream(
                         raw_sock,
                         request,
-                        effective_timeout,
+                        remaining,
                         one_rr_per_rrset,
                         ignore_trailing,
                     )
