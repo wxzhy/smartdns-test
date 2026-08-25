@@ -68,25 +68,32 @@ class HTTPClient:
             await self.resolver.stop()
 
     def _base_curl_options(self) -> dict[CurlOpt, object]:
-        """根据客户端配置构建基础 curl 选项（DOH / 静态 hosts / DNS 缓存 / ECH）。"""
+        """构建基础 curl 选项（DOH / DNS 缓存；RESOLVE 按上游端口注入）。"""
         opt: dict[CurlOpt, object] = {}
         if self.config.doh is not None:
             opt[CurlOpt.DOH_URL] = str(self.config.doh)
             opt[CurlOpt.DOH_SSL_VERIFYPEER] = (
                 "true" if self.config.doh_verify else "false"
             )
-        if self.config.hosts is not None:
-            resolve = []
-            for host, ips in self.config.hosts.items():
-                for ip in ips:
-                    if isinstance(ip, IPv6Address):
-                        resolve.append(f"{host}:443:[{ip}]")
-                    else:
-                        resolve.append(f"{host}:443:{ip}")
-            opt[CurlOpt.RESOLVE] = resolve
         opt[CurlOpt.DNS_CACHE_TIMEOUT] = self.config.dns_cache_ttl
         opt[CurlOpt.DNS_SHUFFLE_ADDRESSES] = 1 if self.config.shuffle else 0
         return opt
+
+    def resolve_entries(self, port: int) -> list[str]:
+        """为指定端口构建 hosts 的 curl RESOLVE 条目（host:port:ip）。"""
+        if not self.config.hosts:
+            return []
+        entries = []
+        for host in sorted(self.config.hosts):
+            for ip in sorted(
+                self.config.hosts[host],
+                key=lambda address: (address.version, int(address)),
+            ):
+                if isinstance(ip, IPv6Address):
+                    entries.append(f"{host}:{port}:[{ip}]")
+                else:
+                    entries.append(f"{host}:{port}:{ip}")
+        return entries
 
     def create_session(
         self, extra_options: dict[CurlOpt, object] | None = None

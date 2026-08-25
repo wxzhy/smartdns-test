@@ -25,6 +25,9 @@ class _FakeClient:
         self.sessions.append(session)
         return session
 
+    def resolve_entries(self, port: int) -> list[str]:
+        return []
+
 
 def _make_config(name: str, url: str, ech: str) -> CurlNameserverConfig:
     return CurlNameserverConfig(name=name, type="curl", url=url, ech=ech)

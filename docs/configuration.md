@@ -71,7 +71,7 @@ client:
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `max_clients` | 65536 | 每个 Worker 创建 curl session 时的最大客户端数 |
-| `hosts` | null | 转为 curl `RESOLVE` 的 443 端口静态映射 |
+| `hosts` | null | 转为 curl `RESOLVE` 的静态映射，按各 curl 上游 URL 的端口生效 |
 | `dns_cache_ttl` | 300 | curl DNS 缓存秒数 |
 | `shuffle` | true | 是否让 curl 打乱 DNS 地址 |
 | `doh` | null | curl 自身解析目标主机时使用的 DoH URL |

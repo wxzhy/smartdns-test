@@ -32,6 +32,10 @@ class CurlNameserver(BaseNameserver):
         options: dict[CurlOpt, object] | None = (
             {CurlOpt.ECH: "true"} if self.ech is True else None
         )
+        # hosts 映射按本上游 URL 的端口生成 RESOLVE 条目（默认 https 已规范化为 443）。
+        resolve = self._client.resolve_entries(self.port) if self.port else []
+        if resolve:
+            options = {**(options or {}), CurlOpt.RESOLVE: resolve}
         self._curl = self._client.create_session(options)
         logger.info(
             f"Curl解析器 {self.name} 已启动，目标: {self.url}, Host: {self.host}, "

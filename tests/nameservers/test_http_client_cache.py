@@ -1,18 +1,23 @@
-"""ECH 缓存只保存结果，并按事件循环隔离进行中的任务；缓存全局共享。"""
+"""HTTP 客户端的 ECH 缓存与 curl RESOLVE 配置回归测试。"""
 
+from ipaddress import IPv4Address, IPv6Address
 from typing import TYPE_CHECKING, cast
 
 import dns.message
 import pytest
 from anyio import Event, create_task_group, run, to_thread
 from cachetools import TTLCache
+from curl_cffi import CurlOpt
 from dns.name import from_text
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
+from pydantic.networks import HttpUrl
 
 from smartdns.models.http import HTTPClientConfig
+from smartdns.models.nameserver import CurlNameserverConfig
 from smartdns.nameservers.client import HTTPClient, set_ech_cache
+from smartdns.nameservers.curl import CurlNameserver
 
 if TYPE_CHECKING:
     from dns.message import QueryMessage
@@ -101,3 +106,51 @@ async def test_ech_cache_is_shared_between_clients() -> None:
     # 第二个客户端的解析器从未被调用，直接命中全局缓存。
     assert await second.get_ech_key("example.com") == "AAEC"
     assert resolver.calls == 1
+
+
+def _hosts_client() -> HTTPClient:
+    return HTTPClient(
+        HTTPClientConfig(
+            hosts={
+                "dns.example.com": {
+                    IPv4Address("192.0.2.1"),
+                    IPv6Address("2001:db8::1"),
+                }
+            }
+        )
+    )
+
+
+def test_resolve_entries_include_port_and_ipv6_brackets() -> None:
+    assert _hosts_client().resolve_entries(8443) == [
+        "dns.example.com:8443:192.0.2.1",
+        "dns.example.com:8443:[2001:db8::1]",
+    ]
+
+
+def test_resolve_entries_empty_without_hosts() -> None:
+    assert HTTPClient(HTTPClientConfig()).resolve_entries(443) == []
+
+
+async def test_curl_session_gets_resolve_for_its_own_port() -> None:
+    client = _hosts_client()
+    nameserver = CurlNameserver(
+        CurlNameserverConfig(
+            name="ns",
+            type="curl",
+            url=HttpUrl("https://dns.example.com:8443/dns-query"),
+            host="dns.example.com",
+            ech=False,
+        ),
+        client,
+    )
+
+    await nameserver.start()
+    try:
+        assert nameserver._curl is not None
+        assert nameserver._curl.curl_options[CurlOpt.RESOLVE] == [
+            "dns.example.com:8443:192.0.2.1",
+            "dns.example.com:8443:[2001:db8::1]",
+        ]
+    finally:
+        await nameserver.stop()
