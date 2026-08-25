@@ -108,14 +108,16 @@ class Master:
                 logger.warning(
                     f"Worker {worker_id} 请求 {request.qname} 返回 {result.rcode}"
                 )
-                # 负应答携带 ans（含 authority 区 SOA）时原样透传，供客户端负缓存。
-                if result.ans is not None:
-                    return request.make_answer(result.ans)
-                return request.make_error(result.rcode)
             if result.ans is not None:
-                if self._cache is not None:
+                # 负应答携带 ans（含 authority 区 SOA）时原样透传，供客户端负缓存；
+                # RFC 2308：NXDOMAIN 以 Answer.expiration（SOA minimum）为负缓存
+                # TTL。SERVFAIL/REFUSED 等瞬态失败即使带 ans 也不缓存。
+                cacheable = result.rcode in (Rcode.NOERROR, Rcode.NXDOMAIN)
+                if cacheable and self._cache is not None:
                     self._cache.cache_set(request, result.ans)
                 return request.make_answer(result.ans)
+            if result.rcode != Rcode.NOERROR:
+                return request.make_error(result.rcode)
             return None
         except Exception:
             logger.exception(f"分发请求到 Worker {worker_id} 失败")
