@@ -108,6 +108,9 @@ class Master:
                 logger.warning(
                     f"Worker {worker_id} 请求 {request.qname} 返回 {result.rcode}"
                 )
+                # 负应答携带 ans（含 authority 区 SOA）时原样透传，供客户端负缓存。
+                if result.ans is not None:
+                    return request.make_answer(result.ans)
                 return request.make_error(result.rcode)
             if result.ans is not None:
                 if self._cache is not None:

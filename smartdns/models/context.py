@@ -40,9 +40,9 @@ class Request:
         )
 
     def make_answer(self, ans: Answer) -> Message:
-        """创建响应对象"""
+        """创建响应对象；rcode 跟随上游应答（NXDOMAIN 等负应答保留原语义）。"""
         answer = make_response(self.msg, True, our_payload=1232, pad=0)
-        answer.set_rcode(Rcode.NOERROR)
+        answer.set_rcode(ans.response.rcode())
         answer.answer = ans.response.answer
         answer.authority = ans.response.authority
         answer.additional = ans.response.additional
@@ -104,10 +104,12 @@ class Response:
 
     @classmethod
     def from_answer(cls, answer: Answer, upstream: str) -> Response:
-        """从dns.resolver.Answer对象创建Response对象"""
+        """从dns.resolver.Answer对象创建Response对象。
+
+        非 NOERROR 的负应答同样保留 ans（含 authority 区 SOA），
+        供上游透传给客户端做负缓存。
+        """
         rcode = answer.response.rcode()
-        if rcode != Rcode.NOERROR:
-            return cls.from_rcode(rcode, upstream)
         response = cls(rcode, answer, upstream)
         response.name_list, response.name_infos = [], []
         # 处理CNAME链

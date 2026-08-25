@@ -108,6 +108,21 @@ def _answer_response(upstream: str, ip: str = "192.0.2.1") -> Response:
     return Response.from_answer(answer, upstream=upstream)
 
 
+def _nxdomain_response(upstream: str) -> Response:
+    message = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NXDOMAIN\nflags QR AA RA\n"
+        ";QUESTION\nexample.com. IN A\n;AUTHORITY\n"
+        "example.com. 3600 IN SOA ns.example.com. hostmaster.example.com. 1 2 3 4 300\n"
+    )
+    answer = Answer(
+        from_text("example.com."),
+        RdataType.A,
+        RdataClass.IN,
+        cast("QueryMessage", message),
+    )
+    return Response.from_answer(answer, upstream=upstream)
+
+
 async def test_returns_answer_noerror_over_negative_without_context() -> None:
     manager = _FakeManager(
         [
@@ -142,6 +157,23 @@ async def test_prefers_nxdomain_over_servfail() -> None:
     )
     result = await _make(["a", "b"], manager).query(_context().request)
     assert result.rcode == Rcode.NXDOMAIN
+
+
+async def test_nxdomain_with_answer_passes_through() -> None:
+    # 带 ans（含 authority 区 SOA）的 NXDOMAIN 候选被选中时应原样透传。
+    manager = _FakeManager(
+        [
+            _FakeResolver("nx", _nxdomain_response("nx")),
+            _FakeResolver("sf", Response.from_rcode(Rcode.SERVFAIL, upstream="sf")),
+        ]
+    )
+    context = _context()
+    result = await _make(["nx", "sf"], manager, wait_all=True).query(
+        context.request, context
+    )
+    assert result.rcode == Rcode.NXDOMAIN
+    assert result.ans is not None
+    assert result.ans.response.authority
 
 
 async def test_no_available_upstreams_returns_servfail() -> None:

@@ -1,15 +1,17 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from dns.asyncresolver import Resolver
 from dns.edns import ECSOption
 from dns.rcode import Rcode
-from dns.resolver import NXDOMAIN
+from dns.resolver import NXDOMAIN, Answer
 from loguru import logger
 
 from smartdns.models.context import Request, Response
 from smartdns.resolvers.base import BaseResolver
 
 if TYPE_CHECKING:
+    from dns.message import QueryMessage
+
     from smartdns.models.context import Context
     from smartdns.models.resolver import PlainResolverConfig
     from smartdns.nameservers.base import BaseNameserver
@@ -65,8 +67,31 @@ class PlainResolver(BaseResolver, Resolver):
                 lifetime=self.lifetime,
             )
             return Response.from_answer(answer, upstream=self.name)
-        except NXDOMAIN:
+        except NXDOMAIN as error:
+            answer = self._nxdomain_answer(error, request)
+            if answer is not None:
+                return Response.from_answer(answer, upstream=self.name)
             return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
         except Exception:
             logger.exception(f"PlainResolver {self.name} 解析请求失败")
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
+
+    def _nxdomain_answer(self, error: NXDOMAIN, request: Request) -> Answer | None:
+        """从 NXDOMAIN 异常中提取携带 SOA 的应答报文。
+
+        dnspython 把各次尝试的响应报文放在异常 kwargs 的 responses
+        （qname -> Message）；authority 区的 SOA 供客户端负缓存使用。
+        """
+        responses = error.kwargs.get("responses") or {}
+        message = responses.get(request.qname)
+        if message is None and responses:
+            message = next(reversed(list(responses.values())))
+        if message is None:
+            return None
+        return Answer(
+            request.qname,
+            request.rdtype,
+            request.rdclass,
+            cast("QueryMessage", message),
+            str(self.nameservers[0]) if self.nameservers else None,
+        )
