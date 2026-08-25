@@ -3,6 +3,7 @@ from __future__ import annotations
 from ipaddress import ip_network
 
 from dns.edns import ECSOption
+from dns.exception import FormError
 from dns.message import Message, make_response
 from dns.name import Name
 from dns.rcode import Rcode
@@ -59,6 +60,9 @@ class Request:
         cls, msg: Message, listener: str, remote_address: IPvAnyAddress | None = None
     ) -> Request:
         """从dns.message.Message对象创建Request对象"""
+        if not msg.question:
+            # 残缺报文（QDCOUNT=0）无法构造查询上下文；监听器应在入口预检丢弃。
+            raise FormError("DNS message has no question")
         question = msg.question[0]
         qname = question.name
         rdtype = question.rdtype

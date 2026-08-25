@@ -3,6 +3,8 @@
 from typing import TYPE_CHECKING, cast
 
 import dns.message
+import pytest
+from dns.exception import FormError
 from dns.name import from_text
 from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
@@ -66,3 +68,10 @@ def test_make_answer_keeps_noerror_regression() -> None:
     message = request.make_answer(_noerror_answer())
     assert message.rcode() == Rcode.NOERROR
     assert message.answer
+
+
+def test_from_message_rejects_empty_question() -> None:
+    msg = dns.message.make_query("example.com.", "A")
+    msg.question = []
+    with pytest.raises(FormError):
+        Request.from_message(msg, "test")

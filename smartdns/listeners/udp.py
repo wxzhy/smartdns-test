@@ -83,6 +83,9 @@ class UDPListener(BaseListener):
 
             async def process(msg, client) -> None:
                 try:
+                    if not msg.question:
+                        logger.debug("UDP监听器 {} 丢弃无 question 报文", self.name)
+                        return
                     with fail_after(self.timeout):
                         request = Request.from_message(
                             msg=msg,
