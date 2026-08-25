@@ -52,7 +52,7 @@ class ConcurrentResolver(BaseResolver):
         request: Request,
         context: Context | None,
     ) -> Response | None:
-        """执行单个直接上游，嵌套解析器使用独立 Context。"""
+        """执行单个直接上游，嵌套解析器使用独立 Context 并回传中间结果。"""
         child_context = (
             Context(
                 worker_id=context.worker_id,
@@ -65,6 +65,8 @@ class ConcurrentResolver(BaseResolver):
         )
         try:
             result = await resolver.query(request, child_context)
+            if context is not None and child_context is not None:
+                self._merge_child_results(context, child_context)
             if result.rcode == Rcode.NOERROR and result.ans is not None:
                 for action in self._actions:
                     if action is None or context is None:
@@ -80,6 +82,22 @@ class ConcurrentResolver(BaseResolver):
                 resolver.name,
             )
             return None
+
+    @staticmethod
+    def _merge_child_results(context: Context, child: Context) -> None:
+        """把嵌套解析器写入子上下文的候选与测速结果合并回父上下文。
+
+        子上下文按上游名索引候选、按 IP 索引测速结果，同键后写覆盖；
+        外层动作（speedcheck 择优等）因此能看见内层已收集的数据。
+        """
+        if child.candidates:
+            if context.candidates is None:
+                context.candidates = {}
+            context.candidates.update(child.candidates)
+        if child.ip_infos:
+            if context.ip_infos is None:
+                context.ip_infos = {}
+            context.ip_infos.update(child.ip_infos)
 
     async def query(self, request: Request, context: Context | None = None) -> Response:
         """在总超时内返回最快成功应答，并保留所有已完成候选。"""
