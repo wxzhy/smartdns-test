@@ -31,7 +31,7 @@ class Router:
         if config.after:
             for action_name in config.after:
                 action = self._actions.get(action_name)
-                if action:
+                if action is not None:
                     self.after.append(action)
         if self._upstream:
             self.resolver = self._resolvers.get(self._upstream)
