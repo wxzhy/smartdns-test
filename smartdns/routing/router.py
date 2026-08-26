@@ -37,9 +37,11 @@ class Router:
             self.resolver = self._resolvers.get(self._upstream)
             if self.resolver is None:
                 logger.warning(
-                    f"路由 {self.config.name} 的上游解析器 {self._upstream} 不存在"
+                    "路由 {} 的上游解析器 {} 不存在",
+                    self.config.name,
+                    self._upstream,
                 )
-        logger.info(f"启动路由 {self.config.name}，上游: {self._upstream}")
+        logger.info("启动路由 {}，上游: {}", self.config.name, self._upstream)
 
     def match(self, context: Context) -> bool:
         """判断请求是否匹配本路由规则。"""

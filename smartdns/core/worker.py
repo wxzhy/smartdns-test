@@ -37,7 +37,7 @@ class Worker:
     async def start(self) -> None:
         """启动 Worker 服务"""
         patch_loop()
-        logger.info(f"Worker {self.worker_id} 启动")
+        logger.info("Worker {} 启动", self.worker_id)
         try:
             self._client = HTTPClient(config=self.config.client)
             await self._client.start()
@@ -64,7 +64,7 @@ class Worker:
 
     async def stop(self) -> None:
         """停止 Worker：按依赖逆序停止各管理器并释放 HTTP 客户端。"""
-        logger.info(f"Worker {self.worker_id} 停止")
+        logger.info("Worker {} 停止", self.worker_id)
         components = (
             ("Resolver", self._resolvers, "stop_all"),
             ("Action", self._actions, "stop_all"),
@@ -92,7 +92,7 @@ class Worker:
         await self.process(ctx)
         if ctx.response is not None:
             return ctx.response
-        logger.debug(f"Worker {self.worker_id} 无法处理请求: {request.qname}")
+        logger.debug("Worker {} 无法处理请求: {}", self.worker_id, request.qname)
         return _servfail()
 
     async def process(self, context: Context) -> None:
@@ -103,5 +103,5 @@ class Worker:
                     return
             context.response = _servfail()
         except Exception:
-            logger.exception(f"Worker {self.worker_id} 处理请求上下文失败")
+            logger.exception("Worker {} 处理请求上下文失败", self.worker_id)
             context.response = _servfail()

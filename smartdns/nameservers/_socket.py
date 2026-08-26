@@ -24,15 +24,9 @@ class AnyioDatagramSocket(DatagramSocket):
     async def sendto(self, what, destination, timeout):
         try:
             with fail_after(timeout):
-                if destination is None:
-                    # 重复发送数据包以增加成功率
-                    for _ in range(self._repeat + 1):
-                        await self._sock.send(what)
-                else:
-                    for _ in range(self._repeat + 1):
-                        # UDP socket已经连接，不需要sendto
-                        # await self._sock.sendto(what, destination[0], destination[1])
-                        await self._sock.send(what)
+                # UDP socket 已连接，destination 仅用于兼容 dnspython 接口。
+                for _ in range(self._repeat + 1):
+                    await self._sock.send(what)
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err
         return len(what)
@@ -63,7 +57,7 @@ class AnyioDatagramSocket(DatagramSocket):
         return self._sock.extra(SocketAttribute.local_address, None)
 
     async def getpeercert(self, timeout):
-        raise NotImplementedError
+        return None
 
 
 class AnyioStreamSocket(StreamSocket):

@@ -4,7 +4,7 @@ from asyncio import create_task
 from typing import TYPE_CHECKING
 
 import pytest
-from anyio import Event
+from anyio import CancelScope, Event, sleep
 from anyio.lowlevel import checkpoint
 
 from smartdns.actions import _ping
@@ -67,6 +67,42 @@ async def test_measure_uses_configured_ping_privilege(monkeypatch) -> None:
     config = PingConfig(ping=True, privileged=True, timeout=0.4)
     assert await _ping._measure("192.0.2.1", config) == 5.0
     assert calls == [("192.0.2.1", 0.4, True)]
+
+
+async def test_measure_returns_result_despite_losing_probe_race(monkeypatch) -> None:
+    """先到的有效结果不应被输掉任务的关流异常吞掉。"""
+    probes_started = Event()
+
+    async def fast_ping(ip: str, timeout: float, privileged: bool) -> float:
+        probes_started.set()
+        await sleep(0.01)
+        return 3.0
+
+    # 两个探测（ping + tcping）都指向可控 fake：ping 先完成。
+    config = PingConfig(ping=True, privileged=False, timeout=0.5)
+
+    async def tcping(ip: str, port: int, timeout: float) -> float | None:
+        probes_started.set()
+        # 屏蔽取消，确保胜者取消 task group 后该探测仍会尝试回写结果。
+        with CancelScope(shield=True):
+            await sleep(0.02)
+        return 4.0
+
+    monkeypatch.setattr(_ping, "ping", fast_ping)
+    monkeypatch.setattr(_ping, "tcping", tcping)
+
+    result = await _ping._measure("192.0.2.1", config)
+    assert result == 3.0
+
+
+async def test_measure_returns_inf_when_all_probes_fail(monkeypatch) -> None:
+    async def failing_ping(ip: str, timeout: float, privileged: bool) -> None:
+        return None
+
+    monkeypatch.setattr(_ping, "ping", failing_ping)
+
+    config = PingConfig(ping=True, privileged=False, timeout=0.3)
+    assert await _ping._measure("192.0.2.1", config) == float("inf")
 
 
 async def test_speedtest_cache_key_includes_all_probe_options(

@@ -79,7 +79,7 @@
 - `Master` 启动 `worker_count` 个 `Worker`，每个 Worker 跑在**独立的 `BlockingPortal`（独立事件循环 + uvloop）**里。
 - `Master` 自己的事件循环只负责**监听器收包**和**随机分发**到 Worker；真正解析在 Worker 循环里完成。
 - 跨循环调用通过 `asyncio.wrap_future(portal.start_task_soon(...))` 桥接。
-- Worker 各自持有上游连接/会话；跨线程读取进程级 GeoManager。Master Answer 缓存按监听器、客户端地址和 ECS 隔离，缓存读写及 Action 改写均采用 copy-on-write。
+- Worker 各自持有上游连接/会话；跨线程读取进程级 GeoManager。Master Answer 缓存按查询三元组、监听器和 ECS 隔离（不包含客户端地址），缓存读写及 Action 改写均采用 copy-on-write。
 
 ---
 
@@ -97,7 +97,7 @@
    - **短路**：一旦某条路由产出最终应答（含 NXDOMAIN 等权威否定应答），后续路由不再执行。
 5. **回写**：`Master` 把最终 `Message` 回给监听器，监听器发回客户端。
 
-> Master 缓存键包含查询三元组、监听器、客户端地址和入站 ECS，避免客户端相关路由结果交叉复用。
+> Master 缓存键包含查询三元组、监听器和入站 ECS；客户端地址不入键，因为当前上游查询不转发客户端地址，避免按客户端拆键造成命中率损失。
 
 ---
 

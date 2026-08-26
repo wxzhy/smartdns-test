@@ -41,20 +41,20 @@ class PlainResolver(BaseResolver, Resolver):
             if ns is not None:
                 upstreams.append(ns)
             else:
-                logger.warning(f"Nameserver {name} 不存在")
+                logger.warning("Nameserver {} 不存在", name)
         self.nameservers = upstreams
 
     async def start(self):
         """启动解析器"""
 
         logger.info(
-            f"PlainResolver {self.name} 启动成功，上游数: {len(self.nameservers)}"
+            "PlainResolver {} 启动成功，上游数: {}", self.name, len(self.nameservers)
         )
 
     async def stop(self):
         """停止解析器"""
         self.nameservers = []
-        logger.info(f"PlainResolver {self.name} 停止成功")
+        logger.info("PlainResolver {} 停止成功", self.name)
 
     async def query(self, request: Request, context: Context | None = None) -> Response:
         """解析域名"""
@@ -73,7 +73,7 @@ class PlainResolver(BaseResolver, Resolver):
                 return Response.from_answer(answer, upstream=self.name)
             return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
         except Exception:
-            logger.exception(f"PlainResolver {self.name} 解析请求失败")
+            logger.exception("PlainResolver {} 解析请求失败", self.name)
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
     def _nxdomain_answer(self, error: NXDOMAIN, request: Request) -> Answer | None:

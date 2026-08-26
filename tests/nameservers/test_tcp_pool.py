@@ -9,6 +9,7 @@ from typing import cast
 
 import dns.asyncbackend
 import dns.message
+import pytest
 from generic_connection_pool.asyncio import ConnectionPool
 
 from smartdns.models.nameserver import TCPNameserverConfig
@@ -72,6 +73,31 @@ async def test_tcp_nameserver_query_uses_remaining_deadline(monkeypatch) -> None
     assert len(pool.captured_timeouts) == 1
     remaining = pool.captured_timeouts[0]
     assert 0.1 <= remaining < 0.9
+
+
+async def test_tcp_nameserver_connect_times_out_without_pool(monkeypatch) -> None:
+    """无池路径：黑洞地址建连在配置超时内被取消，而非悬挂到 OS 级超时。"""
+    config = TCPNameserverConfig(
+        name="t", type="tcp", address="192.0.2.1", port=53, timeout=0.3, pool_size=0
+    )
+    nameserver = TCPNameserver(config)
+
+    async def hanging_connect(host: str, port: int) -> object:
+        await asyncio.sleep(30)
+        raise AssertionError("建连应已被超时取消")
+
+    monkeypatch.setattr("smartdns.nameservers.tcp.connect_tcp", hanging_connect)
+
+    # 传入 timeout=0（已到期），应回退到配置的 0.3 秒而不是被当作"未设置"。
+    with pytest.raises(TimeoutError):
+        await nameserver.async_query(
+            _dns_query(),
+            0,
+            None,
+            0,
+            False,
+            cast("dns.asyncbackend.Backend", object()),
+        )
 
 
 async def _start_echo_server() -> tuple[asyncio.AbstractServer, int]:

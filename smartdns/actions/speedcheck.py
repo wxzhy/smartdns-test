@@ -1,6 +1,8 @@
+from threading import BoundedSemaphore
 from typing import TYPE_CHECKING
 
 from anyio import create_task_group
+from anyio.lowlevel import checkpoint
 from dns.rdatatype import RdataType
 from loguru import logger
 
@@ -10,14 +12,38 @@ from smartdns.actions.base import BaseAction
 from smartdns.routing.matcher import match_response
 
 if TYPE_CHECKING:
-    from smartdns.models.action import SpeedcheckConfig
+    from smartdns.models.action import SpeedcheckActionConfig
     from smartdns.models.context import Context, Response
+
+
+class _GlobalMeasureLimit:
+    """在多个 Worker 事件循环之间共享的可取消并发限制。"""
+
+    def __init__(self, value: int) -> None:
+        self._semaphore = BoundedSemaphore(value)
+
+    async def acquire(self) -> None:
+        while not self._semaphore.acquire(blocking=False):
+            await checkpoint()
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+    async def __aenter__(self) -> _GlobalMeasureLimit:
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        self.release()
+
+
+_MEASURE_LIMIT = _GlobalMeasureLimit(128)
 
 
 class SpeedcheckAction(BaseAction):
     """对候选 IP 测速，并用最佳候选的复制结果作为最终响应。"""
 
-    def __init__(self, config: SpeedcheckConfig) -> None:
+    def __init__(self, config: SpeedcheckActionConfig) -> None:
         super().__init__(config)
         self._speedtest = config.ping_config
         self._matcher = config.match_ip
@@ -45,7 +71,10 @@ class SpeedcheckAction(BaseAction):
 
         async def measure(info) -> None:
             try:
-                info.rtt = await speedtest(info.ip, self._speedtest)
+                # Worker 运行在多个独立事件循环/线程；使用线程级信号量而非
+                # event-loop 绑定的 AnyIO Semaphore，才能提供进程级上限。
+                async with _MEASURE_LIMIT:
+                    info.rtt = await speedtest(info.ip, self._speedtest)
             except Exception:
                 info.rtt = float("inf")
 

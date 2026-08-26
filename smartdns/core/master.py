@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from asyncio import wrap_future
 from contextlib import ExitStack
 from random import randint
@@ -14,8 +16,10 @@ from loguru import logger
 from smartdns.actions._ping import set_cache
 from smartdns.core.cache import TTLCache
 from smartdns.listeners.manager import ListenerManager
+from smartdns.models.context import Request, Response
 from smartdns.nameservers.client import set_ech_cache
 from smartdns.routing.manager import init_geo_manager
+from smartdns.utils.cache_async import cached
 
 from .worker import Worker
 
@@ -26,7 +30,6 @@ if TYPE_CHECKING:
 
     from smartdns.actions._ping import SpeedtestKey
     from smartdns.models.config import Config
-    from smartdns.models.context import Request, Response
 
 
 class Master:
@@ -63,7 +66,7 @@ class Master:
                     self.portals.append(portal)
                     self.workers.append(worker)
                     await wrap_future(portal.start_task_soon(worker.start))
-                logger.info(f"已启动 {self.worker_count} 个 Worker，开始启动监听器")
+                logger.info("已启动 {} 个 Worker，开始启动监听器", self.worker_count)
                 self.listener_manager = ListenerManager(config=self.config.listeners)
                 await self.listener_manager.start_all(handler=self.dispatch)
             finally:
@@ -88,25 +91,52 @@ class Master:
             try:
                 await wrap_future(portal.start_task_soon(worker.stop))
             except Exception:
-                logger.exception(f"停止 Worker {worker.worker_id} 失败")
+                logger.exception("停止 Worker {} 失败", worker.worker_id)
 
     async def dispatch(self, request: Request) -> Message | None:
         """分发请求到 Worker 并返回响应 Message。"""
         if self._cache is not None:
             cached = self._cache.cache_get(request)
             if cached is not None:
-                logger.debug(f"缓存命中: {request.qname}")
+                logger.debug("缓存命中: {}", request.qname)
                 return request.make_answer(cached)
-        worker_id = randint(0, self.worker_count - 1)
-        portal = self.portals[worker_id]
-        worker = self.workers[worker_id]
+        if self._cache is None:
+            response = await self._query_worker(request)
+        else:
+            # 同键 in-flight 合并：cached 按主事件循环隔离进行中的 Task；
+            # 各请求以自己的报文 ID 重建应答（DNS 应答 ID 必须匹配请求）。
+            response = await _query_singleflight(
+                self, self._cache._key(request), request
+            )
+        if response.ans is not None:
+            return request.make_answer(response.ans)
+        if response.rcode != Rcode.NOERROR:
+            return request.make_error(response.rcode)
+        return None
+
+    async def _query_worker(self, request: Request) -> Response:
+        """把请求交给随机 Worker；可缓存的结果写入缓存。
+
+        异常统一转为 SERVFAIL 响应，避免经 singleflight 传播给等待者。
+        """
+        worker_id = -1
         try:
+            worker_id = randint(0, self.worker_count - 1)
+            # 索引在 try 内访问：停机竞态窗口（workers/portals 已清空）统一走
+            # SERVFAIL 分支，而不是向监听器抛 IndexError。
+            worker = self.workers[worker_id]
+            portal = self.portals[worker_id]
             result: Response = await wrap_future(
                 portal.start_task_soon(worker.handle, request)
             )
-            if result.rcode != Rcode.NOERROR:
+            if result.rcode in (Rcode.SERVFAIL, Rcode.REFUSED):
                 logger.warning(
-                    f"Worker {worker_id} 请求 {request.qname} 返回 {result.rcode}"
+                    "Worker {} 请求 {} 返回 {}", worker_id, request.qname, result.rcode
+                )
+            elif result.rcode != Rcode.NOERROR:
+                # NXDOMAIN 等权威否定应答属正常路径，降为 debug 避免日志噪音。
+                logger.debug(
+                    "Worker {} 请求 {} 返回 {}", worker_id, request.qname, result.rcode
                 )
             if result.ans is not None:
                 # 负应答携带 ans（含 authority 区 SOA）时原样透传，供客户端负缓存；
@@ -115,10 +145,13 @@ class Master:
                 cacheable = result.rcode in (Rcode.NOERROR, Rcode.NXDOMAIN)
                 if cacheable and self._cache is not None:
                     self._cache.cache_set(request, result.ans)
-                return request.make_answer(result.ans)
-            if result.rcode != Rcode.NOERROR:
-                return request.make_error(result.rcode)
-            return None
+            return result
         except Exception:
-            logger.exception(f"分发请求到 Worker {worker_id} 失败")
-            return request.make_error(Rcode.SERVFAIL)
+            logger.exception("分发请求到 Worker {} 失败", worker_id)
+            return Response.from_rcode(Rcode.SERVFAIL, upstream="")
+
+
+@cached(None, key=lambda master, key, request: (master, key))
+async def _query_singleflight(master: Master, key: tuple, request: Request) -> Response:
+    """按事件循环合并 Master 的同键查询；持久缓存仍由 TTLCache 管理。"""
+    return await master._query_worker(request)

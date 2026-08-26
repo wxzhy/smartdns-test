@@ -24,7 +24,7 @@ class StaticAction(BaseAction):
         self.ipv6 = config.ipv6
 
     async def start(self) -> None:
-        logger.info(f"启动静态返回 Action: {self.name}")
+        logger.info("启动静态返回 Action: {}", self.name)
 
     async def on_request(self, context: Context) -> None:
         request = context.request
@@ -41,7 +41,7 @@ class StaticAction(BaseAction):
             for ip in self.ipv6:
                 rrset.add(AAAA(rdclass, rdtype, ip))
         else:
-            logger.debug(f"静态返回 Action {self.name} 不匹配请求类型 {rdtype}")
+            logger.debug("静态返回 Action {} 不匹配请求类型 {}", self.name, rdtype)
         if rrset:
             message.answer.append(rrset)
         answer = Answer(name, rdtype, rdclass, cast("QueryMessage", message))

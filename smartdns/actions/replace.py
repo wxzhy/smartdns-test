@@ -34,7 +34,12 @@ class ReplaceAction(BaseAction):
         )
 
     async def on_resolver(self, context: Context, response: Response) -> None:
-        logger.debug(f"Replace Action {self.name} on_resolver: {response}")
+        logger.debug(
+            "Replace Action {} on_resolver: rcode={}, upstream={}",
+            self.name,
+            response.rcode,
+            response.upstream,
+        )
         original = context.response
         context.response = response
         try:

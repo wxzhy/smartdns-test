@@ -87,6 +87,10 @@ async def _measure(ip: str, config: PingConfig) -> float:
         return float("inf")
 
     send, receive = create_memory_object_stream[float | None](len(probes))
+    # 首个有效结果：先取消并退出 task group，再在组外关流返回；
+    # 组内关流会让未及取消的探测任务向已关闭的流发送而抛
+    # ClosedResourceError，吞掉已取得的结果。
+    result: float | None = None
 
     async def run(probe: Callable[[], Awaitable[float | None]]) -> None:
         try:
@@ -98,15 +102,15 @@ async def _measure(ip: str, config: PingConfig) -> float:
         for probe in probes:
             tg.start_soon(run, probe)
         for _ in probes:
-            result = await receive.receive()
-            if result is not None:
+            received = await receive.receive()
+            if received is not None:
+                result = received
                 tg.cancel_scope.cancel()
-                await send.aclose()
-                await receive.aclose()
-                return result
+                break
+
     await send.aclose()
     await receive.aclose()
-    return float("inf")
+    return result if result is not None else float("inf")
 
 
 @cached(_get_cache, key=_speedtest_key, lock=_cache_lock)

@@ -29,8 +29,8 @@ class TCPStreamConnectionManager(BaseConnectionManager[TcpEndpoint, SocketStream
         raw = conn.extra(SocketAttribute.raw_socket, None)
         if raw is None:
             return False
-        # 直接获取底层socket
-        probe = raw._sock  # ty: ignore[unresolved-attribute]
+        # asyncio 后端返回 TransportSocket，其他后端可能直接返回标准 socket。
+        probe = getattr(raw, "_sock", raw)
         try:
             # 对端关闭时返回 b""；无数据时抛 BlockingIOError（仍存活）。
             return probe.recv(1, socket.MSG_PEEK) != b""

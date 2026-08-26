@@ -109,7 +109,7 @@ class AioDNSResolver(BaseResolver):
         except NXDOMAIN:
             return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
         except Exception:
-            logger.exception(f"AioDNSResolver {self.name} 解析请求失败")
+            logger.exception("AioDNSResolver {} 解析请求失败", self.name)
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
     async def resolve(

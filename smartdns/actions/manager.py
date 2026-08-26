@@ -18,7 +18,7 @@ from smartdns.models.action import (
     HTTPSActionConfig,
     LogActionConfig,
     ReplaceActionConfig,
-    SpeedcheckConfig,
+    SpeedcheckActionConfig,
     StaticActionConfig,
 )
 
@@ -48,7 +48,7 @@ class ActionManager:
                         action = HTTPSAction(config=action_config, client=self._client)
                     case FallbackActionConfig():
                         action = FallbackAction(config=action_config)
-                    case SpeedcheckConfig():
+                    case SpeedcheckActionConfig():
                         action = SpeedcheckAction(config=action_config)
                     case FilterActionConfig():
                         action = FilterAction(config=action_config)

@@ -50,7 +50,9 @@ class TCPListener(BaseListener):
             local_host=self.host, local_port=self.port, reuse_port=self.reuse_port
         )
         self.handler = handler
-        logger.info(f"TCP监听器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
+        logger.info(
+            "TCP监听器 {} 已启动，监听地址: {}:{}", self.name, self.host, self.port
+        )
         limiter = Semaphore(self._max_connections)
         listener = self._listener
         assert listener is not None
@@ -89,7 +91,7 @@ class TCPListener(BaseListener):
         if self._listener is not None:
             await self._listener.aclose()
             self._listener = None
-            logger.info(f"TCP监听器 {self.name} 已停止")
+            logger.info("TCP监听器 {} 已停止", self.name)
 
     async def handle_connection(self, stream: SocketStream):
         """处理传入的TCP连接"""
@@ -100,7 +102,7 @@ class TCPListener(BaseListener):
             anyio_stream = AnyioStreamSocket(stream)
             peer = await anyio_stream.getpeername()
             client_address = peer[0] if peer is not None else None
-            logger.debug(f"接收到来自 {client_address} 的TCP连接")
+            logger.debug("接收到来自 {} 的TCP连接", client_address)
             try:
                 while True:
                     # 等待客户端下一个查询的空闲超时。
@@ -128,7 +130,7 @@ class TCPListener(BaseListener):
                 # 客户端正常关闭连接（读到 EOF），非错误路径。
                 pass
             except TimeoutError:
-                logger.warning(f"TCP监听器 {self.name} 请求处理超时")
+                logger.warning("TCP监听器 {} 请求处理超时", self.name)
             except Exception as error:
                 logger.warning(
                     "TCP监听器 {} 处理连接失败: {}: {}",

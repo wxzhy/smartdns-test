@@ -53,7 +53,7 @@ class UDPListener(BaseListener):
             if platform == "win32":
                 sock.setsockopt(SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
                 if self.reuse_port:
-                    logger.warning(f"UDP监听器 {self.name}: Windows 忽略 reuse_port")
+                    logger.warning("UDP监听器 {}: Windows 忽略 reuse_port", self.name)
             else:
                 sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
                 if self.reuse_port:
@@ -75,8 +75,16 @@ class UDPListener(BaseListener):
         self.handler = handler
         # 套接字在 start 时创建/绑定（而非 __init__），避免构造副作用与泄漏。
         self._sock = self._create_socket()
-        self._listener = await UDPSocket.from_socket(self._sock)
-        logger.info(f"UDP监听器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
+        try:
+            self._listener = await UDPSocket.from_socket(self._sock)
+        except BaseException:
+            # from_socket 失败时不会替我们接管原始 socket，必须主动关闭。
+            self._sock.close()
+            self._sock = None
+            raise
+        logger.info(
+            "UDP监听器 {} 已启动，监听地址: {}:{}", self.name, self.host, self.port
+        )
         async with self._listener:
             anyio_socket = AnyioDatagramSocket(self._listener)
             limiter = Semaphore(256)
@@ -141,4 +149,4 @@ class UDPListener(BaseListener):
         if self._sock is not None:
             self._sock.close()
             self._sock = None
-        logger.info(f"UDP监听器 {self.name} 已停止")
+        logger.info("UDP监听器 {} 已停止", self.name)

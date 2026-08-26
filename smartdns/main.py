@@ -33,8 +33,11 @@ def start(
         logger.exception("配置文件加载失败")
         raise typer.Exit(1) from None
     logger.info(
-        f"配置加载成功：{len(cfg.listeners)} 监听器 / {len(cfg.nameservers)} 上游 / "
-        f"{len(cfg.resolvers)} 解析器 / {len(cfg.routing)} 路由"
+        "配置加载成功：{} 监听器 / {} 上游 / {} 解析器 / {} 路由",
+        len(cfg.listeners),
+        len(cfg.nameservers),
+        len(cfg.resolvers),
+        len(cfg.routing),
     )
     run(_serve, cfg, backend_options={"use_uvloop": True})
 

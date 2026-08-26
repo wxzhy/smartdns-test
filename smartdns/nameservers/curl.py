@@ -38,8 +38,12 @@ class CurlNameserver(BaseNameserver):
             options = {**(options or {}), CurlOpt.RESOLVE: resolve}
         self._curl = self._client.create_session(options)
         logger.info(
-            f"Curl解析器 {self.name} 已启动，目标: {self.url}, Host: {self.host}, "
-            f"want_get: {self.want_get}, ech: {self.ech}"
+            "Curl解析器 {} 已启动，目标: {}, Host: {}, want_get: {}, ech: {}",
+            self.name,
+            self.url,
+            self.host,
+            self.want_get,
+            self.ech,
         )
 
     async def stop(self):
@@ -82,9 +86,12 @@ class CurlNameserver(BaseNameserver):
             ech_key = await self._client.get_ech_key(self.ech)
             if ech_key is not None:
                 self._curl.curl_options[CurlOpt.ECH] = f"ecl:{ech_key}"
-                logger.debug(f"Curl解析器 {self.name} 设置ECH密钥: {ech_key}")
+                # ECH 密钥属于敏感数据，日志只记录已配置状态，不打印密钥内容。
+                logger.debug("Curl解析器 {} 已设置 ECH 密钥", self.name)
             else:
-                logger.warning(f"Curl解析器 {self.name} 未能获取ECH密钥，使用默认设置")
+                logger.warning(
+                    "Curl解析器 {} 未能获取 ECH 密钥，使用默认设置", self.name
+                )
         try:
             if self.want_get:
                 result = await self._curl.get(
@@ -107,7 +114,7 @@ class CurlNameserver(BaseNameserver):
                     verify=self.verify,
                 )
         except Exception:
-            logger.exception(f"Curl解析器 {self.name} 请求失败")
+            logger.exception("Curl解析器 {} 请求失败", self.name)
             raise
         if result.status_code != 200:
             raise ValueError(

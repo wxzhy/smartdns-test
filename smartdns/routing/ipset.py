@@ -21,7 +21,7 @@ class IPSet:
             with path.open("rb") as f:
                 # radix 为本地可信构建产物（utils/convert.py），故用 pickle 反序列化。
                 self._radix = load(f)
-            logger.info(f"从{path}加载IP列表成功")
+            logger.info("从{}加载IP列表成功", path)
 
     def lookup(self, entry: str | IPvAnyNetwork | IPvAnyAddress) -> set[str]:
         """查找IP对应的标签"""

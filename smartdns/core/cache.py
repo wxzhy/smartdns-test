@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import OrderedDict
 from threading import Lock
 from time import time
@@ -19,12 +21,11 @@ type CacheKey = tuple[
     RdataClass,
     str,
     str | None,
-    str | None,
 ]
 
 
 class TTLCache:
-    """按客户端上下文隔离、线程安全且 copy-on-write 的 Answer LRU 缓存。"""
+    """按查询/监听器/ECS 维度隔离、线程安全且 copy-on-write 的 Answer LRU 缓存。"""
 
     def __init__(self, max_size: int = 10000) -> None:
         self.max_size = max_size
@@ -59,11 +60,12 @@ class TTLCache:
 
     @staticmethod
     def _key(request: Request) -> CacheKey:
+        # 客户端地址不入键：上游不转发客户端 ECS（plain 用固定配置 ECS，aiodns
+        # 忽略），同一查询对任意客户端结果一致，按客户端分键只会摊薄命中率。
         return (
             request.qname,
             request.rdtype,
             request.rdclass,
             request.listener,
-            str(request.remote_address) if request.remote_address is not None else None,
             str(request.ecs) if request.ecs is not None else None,
         )

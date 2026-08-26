@@ -40,7 +40,7 @@ class GeoIP:
             case {"country": {"iso_code": str(code)}}:
                 return {code}
             case _:
-                logger.warning(f"GeoIP 记录形状未识别: {record!r}")
+                logger.warning("GeoIP 记录形状未识别: {!r}", record)
                 return set()
 
     def lookup(self, ip: str | IPvAnyAddress) -> tuple[set[str], int | None]:

@@ -18,11 +18,14 @@ class LogAction(BaseAction):
         self.text = config.text
 
     async def start(self) -> None:
-        logger.info(f"启动 Log Action {self.name}: {self.text}")
+        logger.info("启动 Log Action {}: {}", self.name, self.text)
 
     async def on_request(self, context: Context) -> None:
         request = context.request
         logger.info(
-            f"[{self.text}] {request.qname} {to_text(request.rdtype)} "
-            f"from {request.remote_address}"
+            "[{}] {} {} from {}",
+            self.text,
+            request.qname,
+            to_text(request.rdtype),
+            request.remote_address,
         )

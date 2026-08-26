@@ -132,12 +132,12 @@ Master.dispatch()
 Master 在进入 Worker 前查询全局 LRU/TTL 缓存。缓存键是：
 
 ```text
-(qname, rdtype, rdclass)
+(qname, rdtype, rdclass, listener, ecs)
 ```
 
-命中时会按剩余有效期刷新 answer、authority 和 additional 中 RRset 的 TTL，然后基于原始请求构造响应。未命中时使用随机策略选择一个 Worker。
+命中时会按剩余有效期刷新 answer、authority 和 additional 中 RRset 的 TTL，然后基于原始请求构造响应。未命中时使用随机策略选择一个 Worker；同一 Master 事件循环内的同缓存键并发请求会合并为一次 Worker 查询，等待者再用各自的 DNS 请求 ID 构造响应。
 
-Worker 返回非 NOERROR 时，Master 只按该 RCODE 构造错误响应；返回正常 Answer 时才写缓存。
+Worker 返回带 `Answer` 的 NOERROR 或 NXDOMAIN 时，Master 会原样透传并写缓存；NXDOMAIN 的 authority 区 SOA 与负缓存 TTL 因而得以保留。没有 `Answer` 的错误响应只按 RCODE 构造，SERVFAIL/REFUSED 等瞬态失败不缓存。NXDOMAIN 仅记 debug，SERVFAIL/REFUSED 记 warning。
 
 ### 4.3 Worker 与 Router
 
@@ -313,7 +313,7 @@ ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使
 2. 全局 ECHConfig 缓存：Master 创建 100 项、300 秒的 TTLCache 并通过 `set_ech_cache` 注入，所有 Worker 的 HTTPClient 共享；键为域名规范化文本，不含实例标识。
 3. 测速缓存：Master 创建 10000 项、1800 秒的 TLRUCache，保存跨 Worker 可共享的数值结果。
 
-Master Answer 缓存键包含 `(qname, type, class, listener, client address, ECS)`，客户端相关路由结果不会交叉复用。写入与读取均复制 Answer，读取副本按剩余存活时间刷新所有 section 的 TTL。
+Master Answer 缓存键包含 `(qname, type, class, listener, ECS)`；客户端地址不入键，因为当前上游查询不转发客户端地址。写入与读取均复制 Answer，读取副本按剩余存活时间刷新所有 section 的 TTL。同一 Master 事件循环内，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中仍只保存最终 `Answer`，不会保存 Task/Future。
 
 ECHConfig 与测速函数统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task。两类缓存均为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。Answer 缓存仍由 `core.cache.TTLCache` 独立管理。
 

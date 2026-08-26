@@ -36,7 +36,7 @@ client:
   doh: https://dns.google/dns-query
   # 上述 DoH URL 的证书验证。
   doh_verify: true
-  # 静态主机映射，转为 curl RESOLVE（固定 443 端口）。
+  # 静态主机映射，转为 curl RESOLVE；按各 curl 上游 URL 的端口生效。
   hosts:
     dns.example.com:
       - 192.0.2.53

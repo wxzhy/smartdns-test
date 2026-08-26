@@ -1,9 +1,10 @@
+from time import monotonic
 from typing import TYPE_CHECKING
 
 import dns.asyncbackend
 import dns.asyncquery
 import dns.message
-from anyio import connect_tcp, create_connected_udp_socket
+from anyio import connect_tcp, create_connected_udp_socket, fail_after
 from loguru import logger
 
 from smartdns.nameservers._socket import AnyioDatagramSocket, AnyioStreamSocket
@@ -28,12 +29,13 @@ class UDPNameserver(BaseAddressNameserver):
 
     async def start(self):
         """启动UDP解析器"""
-        # 此时不创建socket
-        logger.info(f"UDP解析器 {self.name} 已启动，监听地址: {self.host}:{self.port}")
+        logger.info(
+            "UDP解析器 {} 已启动，监听地址: {}:{}", self.name, self.host, self.port
+        )
 
     async def stop(self):
         """停止UDP解析器"""
-        logger.info(f"UDP解析器 {self.name} 已停止")
+        logger.info("UDP解析器 {} 已停止", self.name)
 
     async def async_query(
         self,
@@ -47,15 +49,21 @@ class UDPNameserver(BaseAddressNameserver):
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
         try:
-            effective_timeout = timeout or self.timeout
+            # 传入 timeout 为剩余 lifetime；0 表示已到期，不回退到完整配置超时。
+            effective_timeout = (
+                timeout if timeout is not None and timeout > 0 else self.timeout
+            )
             if max_size:
                 # dnspython 在 UDP 响应带 TC 时会用同一 Nameserver 再调用一次，
-                # 并通过 max_size=True 要求改走 TCP。
-                async with await connect_tcp(self.host, self.port) as raw_stream:
+                # 并通过 max_size=True 要求改走 TCP。建连计入超时，避免黑洞地址悬挂。
+                deadline = monotonic() + effective_timeout
+                with fail_after(effective_timeout):
+                    raw_stream = await connect_tcp(self.host, self.port)
+                async with raw_stream:
                     return await dns.asyncquery.tcp(
                         request,
                         where=self.address,
-                        timeout=effective_timeout,
+                        timeout=max(deadline - monotonic(), 0.1),
                         port=self.port,
                         sock=AnyioStreamSocket(raw_stream),
                         one_rr_per_rrset=one_rr_per_rrset,
@@ -79,5 +87,5 @@ class UDPNameserver(BaseAddressNameserver):
                     raise_on_truncation=True,
                 )
         except Exception:
-            logger.exception(f"UDP解析器 {self.name} 查询失败")
+            logger.exception("UDP解析器 {} 查询失败", self.name)
             raise

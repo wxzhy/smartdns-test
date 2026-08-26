@@ -19,7 +19,7 @@ class GeoSite:
         if path.exists():
             self._trie = BytesTrie()
             self._trie.mmap(str(path))
-            logger.info(f"从{path}加载域名列表成功，条目数: {len(self._trie)}")
+            logger.info("从{}加载域名列表成功，条目数: {}", path, len(self._trie))
 
     @staticmethod
     def normalize(domain: str | Name) -> str:

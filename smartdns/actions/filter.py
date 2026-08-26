@@ -27,11 +27,16 @@ class FilterAction(BaseAction):
             item.match_name.query_types = {"A", "AAAA", "HTTPS"}
 
     async def start(self) -> None:
-        logger.info(f"Filter Action {self.name} 已启动，映射数={len(self.map)}")
+        logger.info("Filter Action {} 已启动，映射数={}", self.name, len(self.map))
 
     async def on_resolver(self, context: Context, response: Response) -> None:
         """转发到 resolver 之后调用，把命中排除标签的候选标记为 invalid。"""
-        logger.debug(f"Filter Action {self.name} on_resolver: {response}")
+        logger.debug(
+            "Filter Action {} on_resolver: rcode={}, upstream={}",
+            self.name,
+            response.rcode,
+            response.upstream,
+        )
         # 临时挂载当前候选，让 match_context 匹配其 CNAME 链（同 ReplaceAction）。
         original = context.response
         context.response = response

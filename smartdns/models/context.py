@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ipaddress import ip_network
+from typing import Any
 
 from dns.edns import ECSOption
 from dns.exception import FormError
@@ -149,7 +150,7 @@ class Response:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class Context:
     """worker 处理期间贯穿所有 hook 的全局上下文。"""
 
@@ -163,4 +164,6 @@ class Context:
     stop: bool = False
     is_subquery: bool = False
     subquery: Context | None = None
-    ext: dict = Field(default_factory=dict, description="扩展字段，用于存储额外信息")
+    ext: dict[str, Any] = Field(
+        default_factory=dict, description="扩展字段，用于存储额外信息"
+    )

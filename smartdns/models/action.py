@@ -55,7 +55,6 @@ class ReplaceActionConfig(BaseActionConfig):
     """替换IP Action 配置。"""
 
     type: Literal["replace"]
-    # exclude: set[str] | None = Field(default=None, description="不进行替换的域名列表")
     match_name: RequestMatcher = Field(description="替换IP操作的请求匹配器")
     replace_map: list[ReplaceActionMap] = Field(
         default_factory=list, description="替换映射列表"
@@ -73,29 +72,24 @@ class HTTPSActionConfig(BaseActionConfig):
         default=True, description="是否移除 HTTPS ALPN 中的 h3 参数"
     )
     add_ech: bool = Field(default=True, description="是否添加 HTTPS 中的 ech 参数")
-    # exclude: set[str] | None = Field(default=None, description="不进行添加的域名列表")
     match_name: RequestMatcher = Field(description="匹配的域名")
     match_ip: ResponseIPMatcher = Field(description="匹配的IP地址")
-    # tag: set[str] = Field(description="匹配的标签")
     ech_domain: str = Field(
         default="crypto.cloudflare.com",
-        description="ECH 域名，表示使用请求的域名",
+        description="用于查询 ECHConfig 的域名",
     )
 
 
 class FallbackMap(StrictModel):
     """Fallback 映射配置。"""
 
-    # domain_include: set[str] = Field(description="Fallback 映射的标签")
-    # ip_include: set[str] = Field(description="Fallback 映射的IP地址")
     match_name: RequestMatcher = Field(description="匹配的域名")
     ipv4: set[IPv4Address] | None = Field(
         default=None,
         description="静态返回的 IPv4 地址",
     )
     ipv6: set[IPv6Address] | None = Field(
-        default_factory=set,
-        description="静态返回的 IPv6 地址",
+        default=None, description="静态返回的 IPv6 地址"
     )
 
 
@@ -112,7 +106,7 @@ class PingConfig(StrictModel):
     timeout: float = Field(default=0.3, ge=0.1, description="测速超时时间（秒）")
 
 
-class SpeedcheckConfig(BaseActionConfig):
+class SpeedcheckActionConfig(BaseActionConfig):
     """Speedcheck 配置。"""
 
     type: Literal["speedcheck"]
@@ -155,7 +149,7 @@ ActionConfig = Annotated[
     | ReplaceActionConfig
     | HTTPSActionConfig
     | FallbackActionConfig
-    | SpeedcheckConfig
+    | SpeedcheckActionConfig
     | FilterActionConfig,
     Field(discriminator="type"),
 ]

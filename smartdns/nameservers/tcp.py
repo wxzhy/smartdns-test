@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 import dns.asyncbackend
 import dns.asyncquery
 import dns.message
-from anyio import connect_tcp
+from anyio import connect_tcp, fail_after
 from generic_connection_pool.asyncio import ConnectionPool
 from loguru import logger
 
@@ -41,7 +41,7 @@ class TCPNameserver(BaseAddressNameserver):
                 max_size=self._pool_size,
                 total_max_size=self._pool_size,
             )
-        logger.info(f"TCP 上游 {self.name} 已启动，目标: {self.host}:{self.port}")
+        logger.info("TCP 上游 {} 已启动，目标: {}:{}", self.name, self.host, self.port)
 
     async def stop(self):
         """停止 TCP 上游，关闭连接池。"""
@@ -79,7 +79,10 @@ class TCPNameserver(BaseAddressNameserver):
         one_rr_per_rrset: bool = False,
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
-        effective_timeout = timeout or self.timeout
+        # 传入 timeout 为剩余 lifetime；0 表示已到期，不回退到完整配置超时。
+        effective_timeout = (
+            timeout if timeout is not None and timeout > 0 else self.timeout
+        )
         endpoint: TcpEndpoint = (self.address, self.port)
         try:
             if self._pool is not None:
@@ -97,14 +100,20 @@ class TCPNameserver(BaseAddressNameserver):
                         one_rr_per_rrset,
                         ignore_trailing,
                     )
-            async with await connect_tcp(self.host, self.port) as raw_sock:
+            # 无池路径：建连与查询均计入 effective_timeout，黑洞地址不会挂到 OS 级超时。
+            deadline = monotonic() + effective_timeout
+            with fail_after(effective_timeout):
+                raw_sock = await connect_tcp(self.host, self.port)
+            try:
                 return await self._query_on_stream(
                     raw_sock,
                     request,
-                    effective_timeout,
+                    max(deadline - monotonic(), 0.1),
                     one_rr_per_rrset,
                     ignore_trailing,
                 )
+            finally:
+                await raw_sock.aclose()
         except Exception:
-            logger.exception(f"TCP 上游 {self.name} 查询失败")
+            logger.exception("TCP 上游 {} 查询失败", self.name)
             raise
