@@ -3,6 +3,7 @@ from __future__ import annotations
 from asyncio import wrap_future
 from contextlib import ExitStack
 from random import randint
+from time import time
 from typing import TYPE_CHECKING, cast
 
 from aiofastnet import patch_loop
@@ -13,13 +14,13 @@ from cachetools import TTLCache as CachetoolsTTLCache
 from dns.rcode import Rcode
 from loguru import logger
 
+from smartdns.actions._helper import clone_answer
 from smartdns.actions._ping import set_cache
-from smartdns.core.cache import TTLCache
 from smartdns.listeners.manager import ListenerManager
 from smartdns.models.context import Request, Response
 from smartdns.nameservers.client import set_ech_cache
 from smartdns.routing.manager import init_geo_manager
-from smartdns.utils.cache_async import cached
+from smartdns.utils.cache_async import answer_expires, cached
 
 from .worker import Worker
 
@@ -27,9 +28,39 @@ if TYPE_CHECKING:
     from collections.abc import MutableMapping
 
     from dns.message import Message
+    from dns.name import Name
+    from dns.rdataclass import RdataClass
+    from dns.rdatatype import RdataType
+    from dns.resolver import Answer
 
     from smartdns.actions._ping import SpeedtestKey
     from smartdns.models.config import Config
+
+type CacheKey = tuple[Name, RdataType, RdataClass, str, str | None]
+
+
+def _cache_key(request: Request) -> CacheKey:
+    # 客户端地址不入键：上游不转发客户端 ECS（plain 用固定配置 ECS，aiodns
+    # 忽略），同一查询对任意客户端结果一致，按客户端分键只会摊薄命中率。
+    return (
+        request.qname,
+        request.rdtype,
+        request.rdclass,
+        request.listener,
+        str(request.ecs) if request.ecs is not None else None,
+    )
+
+
+class _UncacheableResponseError(Exception):
+    """不可缓存的查询结果（无 ans 或瞬态失败 rcode），经异常通道回传 dispatch。
+
+    cached() 只存储正常返回值；不可缓存结果借异常绕过持久缓存，
+    经 in-flight 合并的等待者各自捕获并降级，语义与异常上抛不同。
+    """
+
+    def __init__(self, response: Response) -> None:
+        super().__init__("uncacheable response")
+        self.response = response
 
 
 class Master:
@@ -39,9 +70,19 @@ class Master:
         self.worker_count = config.worker_count
         self.workers: list[Worker] = []
         self.portals: list[BlockingPortal] = []
+        # 应答缓存：持久层为 ttu=Answer.expiration 的 TLRUCache（cache_size=0
+        # 关闭），读取、写入与同键 in-flight 合并由 cached() 统一处理；dispatch
+        # 仅运行于 Master 主循环，合并范围覆盖全部监听器的同键并发请求。
         self._cache = (
-            TTLCache(max_size=config.cache_size) if config.cache_size > 0 else None
+            TLRUCache(maxsize=config.cache_size, ttu=answer_expires, timer=time)
+            if config.cache_size > 0
+            else None
         )
+        if self._cache is not None:
+            cache = cast("MutableMapping[CacheKey, Answer]", self._cache)
+            self._query_cached = cached(cache, key=_cache_key)(self._query_answer)
+        else:
+            self._query_cached = self._query_answer
         self.listener_manager: ListenerManager | None = None
 
     async def start(self) -> None:
@@ -95,19 +136,20 @@ class Master:
 
     async def dispatch(self, request: Request) -> Message | None:
         """分发请求到 Worker 并返回响应 Message。"""
-        if self._cache is not None:
-            cached = self._cache.cache_get(request)
-            if cached is not None:
-                logger.debug("缓存命中: {}", request.qname)
-                return request.make_answer(cached)
         if self._cache is None:
-            response = await self._query_worker(request)
-        else:
-            # 同键 in-flight 合并：cached 按主事件循环隔离进行中的 Task；
-            # 各请求以自己的报文 ID 重建应答（DNS 应答 ID 必须匹配请求）。
-            response = await _query_singleflight(
-                self, self._cache._key(request), request
-            )
+            return self._to_client_message(request, await self._query_worker(request))
+        try:
+            answer = await self._query_cached(request)
+        except _UncacheableResponseError as error:
+            return self._to_client_message(request, error.response)
+        # 复制回放：命中与未命中统一按剩余生存期刷新各 section TTL，
+        # 缓存内原始 Answer 不外泄给调用方。
+        remaining = max(0, int(answer.expiration - time()))
+        return request.make_answer(clone_answer(answer, remaining_ttl=remaining))
+
+    @staticmethod
+    def _to_client_message(request: Request, response: Response) -> Message | None:
+        """按最终 Response 构造回给监听器的 Message；无应答内容时返回 None。"""
         if response.ans is not None:
             return request.make_answer(response.ans)
         if response.rcode != Rcode.NOERROR:
@@ -115,9 +157,9 @@ class Master:
         return None
 
     async def _query_worker(self, request: Request) -> Response:
-        """把请求交给随机 Worker；可缓存的结果写入缓存。
+        """把请求交给随机 Worker。
 
-        异常统一转为 SERVFAIL 响应，避免经 singleflight 传播给等待者。
+        异常统一转为 SERVFAIL 响应，避免经 in-flight 合并传播给等待者。
         """
         worker_id = -1
         try:
@@ -138,20 +180,22 @@ class Master:
                 logger.debug(
                     "Worker {} 请求 {} 返回 {}", worker_id, request.qname, result.rcode
                 )
-            if result.ans is not None:
-                # 负应答携带 ans（含 authority 区 SOA）时原样透传，供客户端负缓存；
-                # RFC 2308：NXDOMAIN 以 Answer.expiration（SOA minimum）为负缓存
-                # TTL。SERVFAIL/REFUSED 等瞬态失败即使带 ans 也不缓存。
-                cacheable = result.rcode in (Rcode.NOERROR, Rcode.NXDOMAIN)
-                if cacheable and self._cache is not None:
-                    self._cache.cache_set(request, result.ans)
             return result
         except Exception:
             logger.exception("分发请求到 Worker {} 失败", worker_id)
             return Response.from_rcode(Rcode.SERVFAIL, upstream="")
 
+    async def _query_answer(self, request: Request) -> Answer:
+        """缓存入口：可缓存结果正常返回（由 cached() 落库），其余经异常通道回传。
 
-@cached(None, key=lambda master, key, request: (master, key))
-async def _query_singleflight(master: Master, key: tuple, request: Request) -> Response:
-    """按事件循环合并 Master 的同键查询；持久缓存仍由 TTLCache 管理。"""
-    return await master._query_worker(request)
+        负应答携带 ans（含 authority 区 SOA）时按 RFC 2308 以 Answer.expiration
+        （SOA minimum）为负缓存 TTL；SERVFAIL/REFUSED 等瞬态失败即使带 ans
+        也不缓存。
+        """
+        response = await self._query_worker(request)
+        if response.ans is None or response.rcode not in (
+            Rcode.NOERROR,
+            Rcode.NXDOMAIN,
+        ):
+            raise _UncacheableResponseError(response)
+        return response.ans

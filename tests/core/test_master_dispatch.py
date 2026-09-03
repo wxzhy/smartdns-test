@@ -14,7 +14,6 @@ from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
-from smartdns.core.cache import TTLCache
 from smartdns.core.master import Master
 from smartdns.models.context import Request, Response
 
@@ -44,10 +43,14 @@ def _request(client: str, qname: str = "example.com.") -> Request:
 
 
 class _FakeMaster(Master):
-    """不启动真实 Worker/portal 的最小 Master 桩。"""
+    """不启动真实 Worker/portal 的最小 Master 桩。
+
+    缓存路径走真实 cached() 装饰的 _query_cached，桩只替换 _query_worker；
+    _query_answer 的可缓存性判定与 TTL 衰减因此保持生产语义。
+    """
 
     def __init__(self, responses: list[Response]) -> None:
-        config = SimpleNamespace(worker_count=1, cache_size=0)
+        config = SimpleNamespace(worker_count=1, cache_size=10)
         super().__init__(cast("Config", config))
         self._responses = list(responses)
         self.worker_count = 1
@@ -61,17 +64,17 @@ class _FakeMaster(Master):
         self.started.set()
         if self.wait_for_release:
             await self.release.wait()
-        response = self._responses.pop(0)
-        if response.ans is not None and self._cache is not None:
-            self._cache.cache_set(request, response.ans)
-        return response
+        return (
+            self._responses.pop(0)
+            if self._responses
+            else Response.from_rcode(Rcode.SERVFAIL, upstream="")
+        )
 
 
 async def test_dispatch_deduplicates_same_key_concurrent_requests() -> None:
     """缓存开启时，并发同键请求只查询一次 Worker，各自应答 ID 匹配各自请求。"""
     response = Response.from_answer(_answer(), upstream="upstream")
     master = _FakeMaster([response])
-    master._cache = TTLCache(max_size=10)
     master.wait_for_release = True
 
     first = _request("192.0.2.1")
@@ -91,8 +94,6 @@ async def test_dispatch_deduplicates_same_key_concurrent_requests() -> None:
     # 单飞：两个并发请求共享一次 Worker 查询的结果。
     assert master.calls == 1
     assert len(master._responses) == 0
-    # 结果已写入缓存，后续请求直接命中。
-    assert master._cache.cache_get(first) is not None
 
 
 async def _gather(func, *requests: Request):
@@ -102,8 +103,9 @@ async def _gather(func, *requests: Request):
 
 
 async def test_dispatch_error_response_builds_error_answer() -> None:
-    master = _FakeMaster([Response.from_rcode(Rcode.SERVFAIL, upstream="")])
+    master = _FakeMaster([])
     master._cache = None  # type: ignore[assignment]
+    master._query_cached = master._query_answer  # type: ignore[assignment]
     request = _request("192.0.2.1")
     result = await master.dispatch(request)
     assert result is not None

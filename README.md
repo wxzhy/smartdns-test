@@ -33,7 +33,7 @@
                        ┌──────────────────────────────────────────────┐
                        │                    Master                     │
                        │  ListenerManager  +  N 个 Worker（独立事件循环）│
-                       │                +  全局 TTLCache               │
+                       │                +  全局 Answer 缓存             │
                        └───────────────┬──────────────────────────────┘
                                        │ dispatch(request)  随机选 worker
             ┌──────────────────────────┼──────────────────────────┐
@@ -65,7 +65,7 @@
 | 层 | 目录 | 职责 |
 |---|---|---|
 | **入口** | `smartdns/main.py` | Typer CLI，加载 `config.yaml`，启动 Master |
-| **核心** | `smartdns/core/` | `Master`（监听器+worker 调度+缓存）、`Worker`（单请求处理链）、`cache.py`（带 TTL 刷新的 LRU） |
+| **核心** | `smartdns/core/` | `Master`（监听器+worker 调度+缓存）、`Worker`（单请求处理链）；缓存统一走 `cached()` 装饰器 + cachetools |
 | **监听器** | `smartdns/listeners/` | 对外收发 DNS 报文（UDP/TCP），把 `dns.message` 包成 `Request` |
 | **上游服务器** | `smartdns/nameservers/` | 对单个上游 DNS 服务器的底层查询（UDP/TCP/curl-DoH） |
 | **解析器** | `smartdns/resolvers/` | 上层解析策略（直连 / dnspython / 并发择优），聚合多个上游服务器 |
@@ -86,7 +86,7 @@
 ## 请求处理流程
 
 1. **监听器** 收到一个 DNS 报文 → `Request.from_message()`，顺带查好请求方的 `IPInfo`（国家/ASN）和被查域名的 `NameInfo`（GeoSite 标签）。
-2. **Master.dispatch()**：先查全局 `TTLCache`，命中直接回；否则随机选一个 Worker，把 `Request` 投递过去。
+2. **Master.dispatch()**：先查全局应答缓存（`cached()` + TLRUCache，按应答 TTL 过期并合并同键并发），命中直接回；否则随机选一个 Worker，把 `Request` 投递过去。
 3. **Worker.handle()**：构造贯穿全流程的 `Context`，进入 `process()`。
 4. **路由表顺序匹配**：`Worker._rules` 按 `config.yaml` 中 `routing` 的顺序逐条尝试 `Router.query()`。
    - **匹配**：`Router.match()` 按域名的 `domain_include / domain_exclude / query_types` 判断（fail-closed）。
@@ -168,8 +168,8 @@
 
 | `type` | 类 | 说明 |
 |---|---|---|
-| `aiodns` | `AioDNSResolver` | 基于 `aiodns`/pycares 的异步解析，内置完整记录类型转换（A/AAAA/MX/TXT/CAA/CNAME/HTTPS/NAPTR/NS/PTR/SOA/SRV/TLSA/URI）；长 TXT 按 255 字节上限重新分段。把 pycares 的 `DNSResult` 重新组装成 `dns.resolver.Answer`。支持 EDNS、TCP 模式、tries、轮询 |
-| `plain` | `PlainResolver` | 继承 `dnspython.Resolver`，把配置里的上游**名字**解析成 `Nameserver` 实例挂在 `resolver.nameservers` 上，由 dnspython 自行调度。支持固定 ECS（EDNS Client Subnet）和 `lifetime` |
+| `aiodns` | `AioDNSResolver` | 基于 `aiodns`/pycares 的异步解析，内置完整记录类型转换（A/AAAA/MX/TXT/CAA/CNAME/HTTPS/NAPTR/NS/PTR/SOA/SRV/TLSA/URI）；长 TXT 按 255 字节上限重新分段。把 pycares 的 `DNSResult` 重新组装成 `dns.resolver.Answer`。支持 EDNS、TCP 模式、tries、轮询；NODATA 空应答按 `nodata_ttl` 写入负缓存 |
+| `plain` | `PlainResolver` | 继承 `dnspython.Resolver`，把配置里的上游**名字**解析成 `Nameserver` 实例挂在 `resolver.nameservers` 上，由 dnspython 自行调度。支持固定 ECS（EDNS Client Subnet）和 `lifetime`；应答缓存经 `cached()` 实现（按应答自身 TTL 过期，同名解析器跨 Worker 共享），不用 dnspython 的 Resolver.cache |
 | `concurrent` | `ConcurrentResolver` | 按完成顺序消费结果；`wait_all=false` 在首个带 Answer 的 NOERROR 后取消其余查询，`wait_all=true` 在整体超时内收集候选供 after 动作挑选 |
 
 ---

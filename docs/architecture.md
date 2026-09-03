@@ -23,8 +23,7 @@ smartdns/
 ├── main.py                 CLI、配置加载、Master 启动
 ├── core/
 │   ├── master.py           监听器、全局缓存、Worker 调度与停机
-│   ├── worker.py           单请求路由处理链与组件生命周期
-│   └── cache.py            基于 dnspython LRUCache 的 TTL 缓存
+│   └── worker.py           单请求路由处理链与组件生命周期
 ├── listeners/              面向客户端的 UDP/TCP DNS 监听
 ├── nameservers/            单个底层上游：UDP、TCP、curl DoH
 ├── resolvers/              解析策略：aiodns、plain、concurrent
@@ -129,15 +128,15 @@ Master.dispatch()
 
 ### 4.2 Master 缓存与调度
 
-Master 在进入 Worker 前查询全局 LRU/TTL 缓存。缓存键是：
+Master 的应答缓存经 `cached()` 装饰 `_query_answer()` 实现：持久层是 `cachetools.TLRUCache`（ttu 取 `Answer.expiration`，即应答自身 TTL），读取、写入与同键 in-flight 合并由装饰器统一处理。缓存键是：
 
 ```text
 (qname, rdtype, rdclass, listener, ecs)
 ```
 
-命中时会按剩余有效期刷新 answer、authority 和 additional 中 RRset 的 TTL，然后基于原始请求构造响应。未命中时使用随机策略选择一个 Worker；同一 Master 事件循环内的同缓存键并发请求会合并为一次 Worker 查询，等待者再用各自的 DNS 请求 ID 构造响应。
+命中时会按剩余有效期刷新 answer、authority 和 additional 中 RRset 的 TTL（复制回放，缓存内原件不外泄），然后基于原始请求构造响应。未命中时使用随机策略选择一个 Worker；dispatch 仅运行于 Master 主循环，同缓存键并发请求会合并为一次 Worker 查询，等待者再用各自的 DNS 请求 ID 构造响应。
 
-Worker 返回带 `Answer` 的 NOERROR 或 NXDOMAIN 时，Master 会原样透传并写缓存；NXDOMAIN 的 authority 区 SOA 与负缓存 TTL 因而得以保留。没有 `Answer` 的错误响应只按 RCODE 构造，SERVFAIL/REFUSED 等瞬态失败不缓存。NXDOMAIN 仅记 debug，SERVFAIL/REFUSED 记 warning。
+Worker 返回带 `Answer` 的 NOERROR 或 NXDOMAIN 时，Master 会原样透传并写缓存；NXDOMAIN 的 authority 区 SOA 与负缓存 TTL 因而得以保留。没有 `Answer` 的错误响应（含 SERVFAIL/REFUSED 等瞬态失败）经异常通道回传、只按 RCODE 构造，不进缓存。NXDOMAIN 仅记 debug，SERVFAIL/REFUSED 记 warning。
 
 ### 4.3 Worker 与 Router
 
@@ -218,7 +217,9 @@ TCP pool 使用非破坏性的 `MSG_PEEK` 健康检查，不会关闭被检查�
 
 `type: plain` 继承 dnspython 异步 Resolver，并把配置里的 Nameserver 名称解析成自定义 UDP/TCP/curl 对象。它支持轮询、EDNS、固定 ECS、单次尝试 `timeout` 和查询总时限 `lifetime`。
 
-`BaseResolver` 写入的 `timeout` 会覆盖 dnspython Resolver 的同名属性，作为单次上游尝试时限；`query()` 还显式传入 `lifetime` 作为整个解析过程的总时限。`cache_size` 当前没有创建 Resolver 缓存。
+`BaseResolver` 写入的 `timeout` 会覆盖 dnspython Resolver 的同名属性，作为单次上游尝试时限；`query()` 还显式传入 `lifetime` 作为整个解析过程的总时限。
+
+应答缓存不走 dnspython 的 Resolver.cache，而是经 `cached()` 装饰 `_resolve_answer()` 实现：持久层是按解析器名注册、跨 Worker 线程共享的 `cachetools.TLRUCache`（ttu 取 `Answer.expiration`，负应答即 SOA TTL），同一事件循环内的同键并发由装饰器的 in-flight 表合并为一次上游查询；携带 SOA 的 NXDOMAIN 转为可缓存对象，无 SOA 的仍抛出、由 `query()` 转为不缓存的 NXDOMAIN 响应。`cache_size: 0` 关闭缓存。
 
 ### 7.3 ConcurrentResolver
 
@@ -307,15 +308,16 @@ ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使
 
 ## 10. 缓存与共享状态
 
-项目中有三类缓存设计：
+项目中有四类缓存设计：
 
-1. Master DNS Answer 缓存：容量由顶层 `cache_size` 控制，`0` 关闭，过期时间取 Answer 自身 expiration。
+1. Master DNS Answer 缓存：`cached()` 装饰的 `TLRUCache`（ttu 取 Answer 自身 expiration），容量由顶层 `cache_size` 控制，`0` 关闭；同键并发经 in-flight 表合并。
 2. 全局 ECHConfig 缓存：Master 创建 100 项、300 秒的 TTLCache 并通过 `set_ech_cache` 注入，所有 Worker 的 HTTPClient 共享；键为域名规范化文本，不含实例标识。
 3. 测速缓存：Master 创建 10000 项、1800 秒的 TLRUCache，保存跨 Worker 可共享的数值结果。
+4. PlainResolver 应答缓存：按解析器名注册、跨 Worker 线程共享的 TLRUCache（容量为该解析器的 `cache_size`），条目按应答自身 TTL 过期；同事件循环内同键并发经 `cached()` in-flight 表合并。
 
-Master Answer 缓存键包含 `(qname, type, class, listener, ECS)`；客户端地址不入键，因为当前上游查询不转发客户端地址。写入与读取均复制 Answer，读取副本按剩余存活时间刷新所有 section 的 TTL。同一 Master 事件循环内，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中仍只保存最终 `Answer`，不会保存 Task/Future。
+Master Answer 缓存键包含 `(qname, type, class, listener, ECS)`；客户端地址不入键，因为当前上游查询不转发客户端地址。写入与读取均复制 Answer，读取副本按剩余存活时间刷新所有 section 的 TTL。dispatch 仅运行于 Master 主循环，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中仍只保存最终 `Answer`，不会保存 Task/Future。
 
-ECHConfig 与测速函数统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task。两类缓存均为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。Answer 缓存仍由 `core.cache.TTLCache` 独立管理。
+ECHConfig、测速与两类 Answer 缓存统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task。ECHConfig 与测速缓存为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。
 
 ## 11. 配置与启动顺序约束
 
@@ -361,7 +363,7 @@ uv run python -m utils.gws --domain domains.txt --ip ips.txt --output output.jso
 ## 13. 已知边界
 
 - 当前只实现标准 UDP/TCP DNS Listener；HTTP/DoH Listener 配置会被拒绝。
-- `AioDNSResolverConfig.ecs`、Resolver 级 `cache_size` 仍是保留字段，当前解析路径不使用。
+- `AioDNSResolverConfig.ecs` 与其 `cache_size` 仍是保留字段，当前解析路径不使用；plain 的 `cache_size` 已激活为应答缓存容量。
 - UDP `use_tricks` 的报文特征过滤属于兼容性策略，不等同于完整的 DNS 投毒检测。
 
 ## 14. 验证现状

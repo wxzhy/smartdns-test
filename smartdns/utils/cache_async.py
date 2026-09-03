@@ -25,6 +25,17 @@ def _consume_task_exception(task: Task[Any]) -> None:
         task.exception()
 
 
+def answer_expires(key: object, value: Any, now: float) -> float:
+    """Answer 值缓存的 TLRUCache ttu：条目过期时刻取 Answer 自身 expiration
+    （DNS TTL；负应答为 SOA TTL）。
+
+    TTL=0 的应答 expiration 即当前时刻，而 TLRUCache 对"插入即过期"的条目
+    走删除分支、对不存在的键抛 KeyError，会打穿 cached() 的写入路径；
+    故钳制最小 1ms 生存期，让这类条目正常落库后立即过期。
+    """
+    return max(value.expiration, now + 0.001)
+
+
 def cached[KT, VT](
     cache: (
         MutableMapping[KT, VT] | Callable[[], MutableMapping[KT, VT] | None] | None
