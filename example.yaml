@@ -55,6 +55,7 @@ client:
     rotate: true
     edns: true
     tcp: false
+    nodata_ttl: 300     # 空应答（NODATA，如 IPv4-only 域名查 AAAA）的缓存秒数
     # ecs: 203.0.113.0/24   # 保留字段，当前 aiodns 路径未使用
     # cache_size: 10000     # 保留字段，当前 aiodns 路径未使用
 
@@ -118,6 +119,7 @@ resolvers:
     rotate: true        # 轮询上游地址
     edns: true
     tcp: false          # true 时强制走 TCP
+    nodata_ttl: 300     # 空应答（NODATA，如 IPv4-only 域名查 AAAA）的缓存秒数
     # ecs: 203.0.113.0/24   # 保留字段，当前未使用
     # cache_size: 10000     # 保留字段，当前未使用
   # plain：nameservers 引用前面 nameservers[].name，可混用 UDP/TCP/curl。
@@ -133,7 +135,7 @@ resolvers:
     rotate: true
     edns: true
     ecs: 203.0.113.0/24     # 携带固定的 EDNS Client Subnet 选项
-    # cache_size: 10000     # 保留字段，当前未使用
+    cache_size: 10000       # 应答缓存容量（按应答自身 TTL 过期，同名解析器跨 Worker 共享）；0 关闭
   # concurrent：并发查询多个 Resolver，按完成顺序收集候选。
   # actions 在每个直接子 Resolver 返回带 Answer 的 NOERROR 后调用（on_resolver），
   # 这是 replace/speedcheck/filter 唯一生效的位置；路由 after 只触发 on_response。

@@ -1,21 +1,61 @@
+from threading import Lock
+from time import time
 from typing import TYPE_CHECKING, cast
 
+from cachetools import TLRUCache
 from dns.asyncresolver import Resolver
 from dns.edns import ECSOption
 from dns.rcode import Rcode
 from dns.resolver import NXDOMAIN, Answer
 from loguru import logger
 
+from smartdns.actions._helper import clone_answer
 from smartdns.models.context import Request, Response
 from smartdns.resolvers.base import BaseResolver
+from smartdns.utils.cache_async import answer_expires, cached
 
 if TYPE_CHECKING:
+    from collections.abc import MutableMapping
+
     from dns.message import QueryMessage
+    from dns.name import Name
+    from dns.rdataclass import RdataClass
+    from dns.rdatatype import RdataType
 
     from smartdns.models.context import Context
     from smartdns.models.resolver import PlainResolverConfig
     from smartdns.nameservers.base import BaseNameserver
     from smartdns.nameservers.manager import NameserverManager
+
+type ResolverCacheKey = tuple[Name, RdataType, RdataClass]
+
+_resolver_caches: dict[str, TLRUCache] = {}
+_cache_lock = Lock()
+
+
+def _get_or_create_resolver_cache(
+    name: str, maxsize: int
+) -> MutableMapping[ResolverCacheKey, Answer]:
+    """按解析器名取线程间共享的应答缓存。
+
+    各 Worker 用同一份配置构造同名 PlainResolver，以名字注册才能保证
+    它们读写同一个 cachetools 实例；容量取该解析器自己的 cache_size。
+    timer 用墙钟时间，与 Answer.expiration 的计时基准一致。
+    """
+    with _cache_lock:
+        cache = _resolver_caches.get(name)
+        if cache is None:
+            cache = TLRUCache(maxsize=maxsize, ttu=answer_expires, timer=time)
+            _resolver_caches[name] = cache
+        # ttu 回调的 key 形参是 object（cachetools 协议），实例被推断为
+        # TLRUCache[object, Answer, float]，这里按实际键类型收窄。
+        return cast("MutableMapping[ResolverCacheKey, Answer]", cache)
+
+
+def _reset_resolver_caches() -> None:
+    """清空缓存注册表；供测试在用例间隔离同名解析器的共享缓存。"""
+    with _cache_lock:
+        _resolver_caches.clear()
 
 
 class PlainResolver(BaseResolver, Resolver):
@@ -43,12 +83,25 @@ class PlainResolver(BaseResolver, Resolver):
             else:
                 logger.warning("Nameserver {} 不存在", name)
         self.nameservers = upstreams
+        # 应答缓存：cache_size>0 时经 cached() 装饰。持久层是同名解析器
+        # （各 Worker 的实例）共享的 TLRUCache；同事件循环内的同键并发
+        # 由装饰器的 in-flight 表合并为一次上游查询。
+        if config.cache_size > 0:
+            self._resolve_cached = cached(
+                _get_or_create_resolver_cache(config.name, config.cache_size),
+                lock=_cache_lock,
+            )(self._resolve_answer)
+        else:
+            self._resolve_cached = self._resolve_answer
 
     async def start(self):
         """启动解析器"""
 
         logger.info(
-            "PlainResolver {} 启动成功，上游数: {}", self.name, len(self.nameservers)
+            "PlainResolver {} 启动成功，上游数: {}，缓存容量: {}",
+            self.name,
+            len(self.nameservers),
+            self.config.cache_size,
         )
 
     async def stop(self):
@@ -59,39 +112,57 @@ class PlainResolver(BaseResolver, Resolver):
     async def query(self, request: Request, context: Context | None = None) -> Response:
         """解析域名"""
         try:
-            answer = await self.resolve(
-                request.qname,
-                request.rdtype,
-                request.rdclass,
-                raise_on_no_answer=False,
-                lifetime=self.lifetime,
+            answer = await self._resolve_cached(
+                request.qname, request.rdtype, request.rdclass
             )
-            return Response.from_answer(answer, upstream=self.name)
-        except NXDOMAIN as error:
-            answer = self._nxdomain_answer(error, request)
-            if answer is not None:
-                return Response.from_answer(answer, upstream=self.name)
+            # 复制回放：命中时 RRset TTL 须按剩余生存期衰减，缓存内原始
+            # Answer 不外泄给调用方。
+            remaining = max(0, int(answer.expiration - time()))
+            return Response.from_answer(
+                clone_answer(answer, remaining_ttl=remaining), upstream=self.name
+            )
+        except NXDOMAIN:
             return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
         except Exception:
             logger.exception("PlainResolver {} 解析请求失败", self.name)
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
-    def _nxdomain_answer(self, error: NXDOMAIN, request: Request) -> Answer | None:
+    async def _resolve_answer(
+        self, qname: Name, rdtype: RdataType, rdclass: RdataClass
+    ) -> Answer:
+        """单次上游解析；NXDOMAIN 携带权威 SOA 时转为可缓存的负应答对象。"""
+        try:
+            return await self.resolve(
+                qname,
+                rdtype,
+                rdclass,
+                raise_on_no_answer=False,
+                lifetime=self.lifetime,
+            )
+        except NXDOMAIN as error:
+            answer = self._nxdomain_answer(error, qname, rdtype, rdclass)
+            if answer is not None:
+                return answer
+            raise
+
+    def _nxdomain_answer(
+        self, error: NXDOMAIN, qname: Name, rdtype: RdataType, rdclass: RdataClass
+    ) -> Answer | None:
         """从 NXDOMAIN 异常中提取携带 SOA 的应答报文。
 
         dnspython 把各次尝试的响应报文放在异常 kwargs 的 responses
         （qname -> Message）；authority 区的 SOA 供客户端负缓存使用。
         """
         responses = error.kwargs.get("responses") or {}
-        message = responses.get(request.qname)
+        message = responses.get(qname)
         if message is None and responses:
             message = next(reversed(list(responses.values())))
         if message is None:
             return None
         return Answer(
-            request.qname,
-            request.rdtype,
-            request.rdclass,
+            qname,
+            rdtype,
+            rdclass,
             cast("QueryMessage", message),
             str(self.nameservers[0]) if self.nameservers else None,
         )

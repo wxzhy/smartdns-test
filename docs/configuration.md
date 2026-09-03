@@ -188,9 +188,12 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
   edns: true
   tcp: false
   tries: 3
+  nodata_ttl: 300
 ```
 
 `nameservers` 只接受 IP 地址；误填 Nameserver 名称会在配置加载时失败。`ecs` 和 `cache_size` 是保留字段，当前 AioDNS 路径不使用。
+
+`nodata_ttl` 是空应答（NODATA，如 IPv4-only 域名查 AAAA）写入 Master 缓存的秒数：pycares 的 ENODATA 不携带 SOA，无记录可压 TTL，需显式指定负缓存时长，0 表示不缓存。
 
 ### plain
 
@@ -205,7 +208,7 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
   lifetime: 5
 ```
 
-`nameservers` 填前面 `nameservers[].name`。`lifetime` 是实际查询总时限；`cache_size` 当前未使用。
+`nameservers` 填前面 `nameservers[].name`。`lifetime` 是实际查询总时限。`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：条目按应答自身 TTL 过期（负应答取 authority 区 SOA），持久层是同名解析器跨 Worker 共享的 cachetools 实例，同一事件循环内的同键并发查询经 `cached()` 合并为一次上游查询。
 
 所有 PlainResolver 引用都会在配置加载时校验，不存在的名称不会延迟到运行期跳过。
 
