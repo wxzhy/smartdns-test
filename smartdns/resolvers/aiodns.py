@@ -1,3 +1,4 @@
+from time import time
 from typing import TYPE_CHECKING, cast
 
 import dns.rdataclass
@@ -77,6 +78,7 @@ class AioDNSResolver(BaseResolver):
         self.tcp = config.tcp
         self.rotate = config.rotate
         self.tries = config.tries
+        self.nodata_ttl = config.nodata_ttl
         self.nameservers = [str(address) for address in config.nameservers]
         self._resolver: DNSResolver | None = None
 
@@ -137,7 +139,12 @@ class AioDNSResolver(BaseResolver):
             if code == ARES_ENODATA:
                 # 空数据（NODATA）：返回空的 NOERROR 应答。
                 message = self.make_response(message)
-                return self.make_answer(key, message)
+                answer = self.make_answer(key, message)
+                # pycares 的 ENODATA 不携带 SOA，空报文无记录可压 TTL，
+                # Answer.expiration 会取 dnspython 的 MAX_TTL（约 136 年），
+                # 导致 Master 缓存中的 NODATA 永不过期；显式设置负缓存 TTL。
+                answer.expiration = time() + self.nodata_ttl
+                return answer
             if code == ARES_ENOTFOUND:
                 # 域名不存在：抛 NXDOMAIN，交由 query() 转为 NXDOMAIN 响应。
                 raise NXDOMAIN(qnames=[qname]) from e

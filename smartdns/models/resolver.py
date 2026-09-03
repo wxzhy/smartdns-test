@@ -18,7 +18,11 @@ class PlainResolverConfig(BaseResolverConfig):
 
     type: Literal["plain"]
     nameservers: list[str] = Field(description="上游 nameserver 名称列表")
-    cache_size: int = Field(default=10000, ge=0, description="缓存大小")
+    cache_size: int = Field(
+        default=10000,
+        ge=0,
+        description="应答缓存容量（按应答自身 TTL 过期，跨 Worker 共享）；0 表示关闭",
+    )
     rotate: bool = Field(default=True, description="是否轮询上游nameserver")
     edns: bool = Field(default=True, description="是否启用EDNS")
     ecs: IPvAnyNetwork | None = Field(
@@ -41,6 +45,11 @@ class AioDNSResolverConfig(BaseResolverConfig):
     )
     tcp: bool = Field(default=False, description="是否启用TCP")
     tries: int = Field(default=5, ge=1, description="请求尝试次数")
+    nodata_ttl: int = Field(
+        default=300,
+        ge=0,
+        description="空应答（NODATA）的缓存 TTL，单位秒，0 表示不缓存",
+    )
 
 
 class ConcurrentResolverConfig(BaseResolverConfig):

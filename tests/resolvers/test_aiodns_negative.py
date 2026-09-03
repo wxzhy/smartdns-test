@@ -6,6 +6,8 @@ error + raise，被 query() 吞成 SERVFAIL，客户端拿不到正确的 NXDOMA
 ENODATA → 空的 NOERROR 应答（NODATA）。
 """
 
+from time import time
+
 import pytest
 from aiodns.error import ARES_ENODATA, ARES_ENOTFOUND, DNSError
 from dns.name import from_text
@@ -48,3 +50,32 @@ async def test_enodata_returns_empty_noerror() -> None:
     )
     assert answer.response.rcode() == Rcode.NOERROR
     assert answer.rrset is None
+
+
+async def test_enodata_expiration_uses_nodata_ttl() -> None:
+    """空报文无记录可压 TTL，expiration 必须显式取 nodata_ttl 而非 MAX_TTL。
+
+    修复前：Answer.expiration = now + MAX_TTL（约 136 年），
+    Master 缓存中的 NODATA 条目永不过期（IPv4-only 域名后来启用
+    IPv6 后仍永远返回空应答）。
+    """
+    before = time()
+    resolver = _make(ARES_ENODATA)
+    answer = await resolver.resolve(
+        from_text("empty.example."), RdataType.AAAA, RdataClass.IN
+    )
+    # 默认 nodata_ttl=300；MAX_TTL 距今约 136 年，远大于 360 秒。
+    assert answer.expiration - before <= 360
+
+
+async def test_enodata_ttl_zero_disables_cache_window() -> None:
+    config = AioDNSResolverConfig(
+        name="a", type="aiodns", nameservers=["1.1.1.1"], nodata_ttl=0
+    )
+    resolver = AioDNSResolver(config)
+    resolver._resolver = _FakeCares(ARES_ENODATA)  # ty: ignore[invalid-assignment]
+    answer = await resolver.resolve(
+        from_text("empty.example."), RdataType.A, RdataClass.IN
+    )
+    # nodata_ttl=0 时 expiration 为当前时刻，写入 TTLCache 后立即过期。
+    assert answer.expiration <= time()
