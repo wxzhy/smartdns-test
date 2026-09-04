@@ -191,9 +191,11 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
   nodata_ttl: 300
 ```
 
-`nameservers` 只接受 IP 地址；误填 Nameserver 名称会在配置加载时失败。`ecs` 和 `cache_size` 是保留字段，当前 AioDNS 路径不使用。
+`nameservers` 只接受 IP 地址；误填 Nameserver 名称会在配置加载时失败。aiodns 不支持 ECS（pycares 无法注入 EDNS Client Subnet 选项），需要固定 ECS 时请使用 plain 解析器。
 
-`nodata_ttl` 是空应答（NODATA，如 IPv4-only 域名查 AAAA）写入 Master 缓存的秒数：pycares 的 ENODATA 不携带 SOA，无记录可压 TTL，需显式指定负缓存时长，0 表示不缓存。
+`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：缓存挂在 `resolve()` 边界，路由路径与 `client.resolver` 的 ECH 引导查询共用；条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），持久层为同名解析器跨 Worker 共享的 `AnswerCache` 实例。注意：与顶层 aiodns 解析器同名的 `client.resolver`（如均叫 `114dns`）会共享同一份缓存。
+
+`nodata_ttl` 是空应答（NODATA，如 IPv4-only 域名查 AAAA）写入缓存的秒数：pycares 的 ENODATA 不携带 SOA，无记录可压 TTL，需显式指定负缓存时长，0 表示不缓存。
 
 ### plain
 

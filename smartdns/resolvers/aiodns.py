@@ -55,6 +55,7 @@ from pycares import (
 
 from smartdns.models.context import Request, Response
 from smartdns.resolvers.base import BaseResolver
+from smartdns.utils.cache_async import AnswerCache
 
 if TYPE_CHECKING:
     from smartdns.models.context import Context
@@ -81,6 +82,15 @@ class AioDNSResolver(BaseResolver):
         self.nodata_ttl = config.nodata_ttl
         self.nameservers = [str(address) for address in config.nameservers]
         self._resolver: DNSResolver | None = None
+        # 应答缓存（AnswerCache）：按解析器名跨 Worker 线程共享，
+        # cache_size=0 关闭。挂在 resolve() 边界，query() 与 HTTPClient
+        # 的 ECH 引导查询共用同一缓存。
+        if config.cache_size > 0:
+            self._cache: AnswerCache[CacheKey, Answer] | None = AnswerCache.shared(
+                config.name, config.cache_size
+            )
+        else:
+            self._cache = None
 
     async def start(self):
         """启动解析器"""
@@ -120,7 +130,22 @@ class AioDNSResolver(BaseResolver):
         rdtype: RdataType = RdataType.A,
         rdclass: RdataClass = RdataClass.IN,
     ) -> Answer:
-        """解析域名"""
+        """解析域名；缓存开启时经 AnswerCache（同键并发合并为一次上游查询）。"""
+        cache = self._cache
+        if cache is None:
+            return await self._resolve_once(qname, rdtype, rdclass)
+        return await cache.fetch(
+            (qname, rdtype, rdclass),
+            lambda: self._resolve_once(qname, rdtype, rdclass),
+        )
+
+    async def _resolve_once(
+        self,
+        qname: Name,
+        rdtype: RdataType = RdataType.A,
+        rdclass: RdataClass = RdataClass.IN,
+    ) -> Answer:
+        """单次上游解析，不经过缓存。"""
         if self._resolver is None:
             raise RuntimeError("解析器未启动")
         key: CacheKey = (qname, rdtype, rdclass)

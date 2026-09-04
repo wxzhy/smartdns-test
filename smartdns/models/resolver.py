@@ -37,12 +37,13 @@ class AioDNSResolverConfig(BaseResolverConfig):
     type: Literal["aiodns"]
     nameservers: list[IPvAnyAddress] = Field(description="上游 DNS 服务器地址列表")
     port: int = Field(default=53, ge=1, le=65535, description="上游nameserver端口")
-    cache_size: int = Field(default=0, ge=0, description="缓存大小")
+    cache_size: int = Field(
+        default=10000,
+        ge=0,
+        description="应答缓存容量（按应答自身 TTL 过期，跨 Worker 共享）；0 表示关闭",
+    )
     rotate: bool = Field(default=True, description="是否轮询上游nameserver")
     edns: bool = Field(default=True, description="是否启用EDNS")
-    ecs: IPvAnyNetwork | None = Field(
-        default=None, description="是否启用ECS，指定ECS网段"
-    )
     tcp: bool = Field(default=False, description="是否启用TCP")
     tries: int = Field(default=5, ge=1, description="请求尝试次数")
     nodata_ttl: int = Field(

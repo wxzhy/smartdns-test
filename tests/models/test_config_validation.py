@@ -64,3 +64,18 @@ def test_aiodns_nameserver_must_be_an_ip_address() -> None:
                 }
             ]
         )
+
+
+def test_aiodns_ecs_field_is_rejected() -> None:
+    """aiodns 不支持 ECS（pycares 无法注入该选项），字段已删除；误配应报错。"""
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        Config(
+            resolvers=[
+                {
+                    "name": "direct",
+                    "type": "aiodns",
+                    "nameservers": ["1.1.1.1"],
+                    "ecs": "203.0.113.0/24",
+                }
+            ]
+        )
