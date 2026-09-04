@@ -47,6 +47,7 @@ def convert(geodata_path: Path, tag_path: Path, output_path: Path) -> None:
             for raw_line in tag_file.read_text(encoding="ascii").splitlines():
                 line = raw_line.strip()
                 if line and not line.startswith("#"):
+                    sites[tag_file.stem.lower()].add(line)
                     normalized_sites[tag_file.stem.lower()].add(normalize(line))
 
     geoip_path = tag_path / "geoip"

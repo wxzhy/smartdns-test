@@ -1,0 +1,404 @@
+#worker_count: 1
+listeners:
+  - name: TCP
+    type: tcp
+    port: 5335
+    timeout: 5
+  - name: UDP
+    type: udp
+    host: "::"
+    port: 5335
+    timeout: 5
+geodata:
+  geoip: tags/output/geoip.metadb
+  geosite: tags/output/geosite.trie
+  asn: tags/output/asn.mmdb
+  ipset: tags/output/geoip.radix
+client:
+  dns_cache_ttl: 300
+  shuffle: true
+  resolver:
+    name: 114dns
+    type: aiodns
+    nameservers:
+      - 114.114.114.114
+      - 114.114.115.115
+      # - test-udp
+    timeout: 1
+    tries: 4
+  hosts:
+    dns.cloudflare.com:
+      - 172.64.145.0
+      - 172.64.146.0
+      - 104.18.38.0
+      - 104.18.39.0
+      - "2606:4700:10::"
+      - "2606:4700:20::"
+    dns.nextdns.io:
+      - 172.64.145.0
+      - 172.64.146.0
+      - 104.18.38.0
+      - 104.18.39.0
+      - "2606:4700:10::"
+      - "2606:4700:20::"
+    www.baidu.com:
+      - "2001:300::5"
+      - "2001:300::6"
+      - 103.2.57.5
+      - 103.2.57.6
+    www.sina.com:
+      - "2001:b000:168::1"
+      - "2001:b000:168::2"
+      - 168.95.1.1
+      - 168.95.192.1
+
+nameservers:
+  - name: test-tcp
+    type: tcp
+    address: 8.8.8.8
+    port: 53
+    use_tricks: true
+    timeout: 5
+  - name: google-1
+    type: udp
+    address: 8.8.8.8
+    port: 53
+    repeat: 0
+    use_tricks: true
+    timeout: 3
+  - name: google-2
+    type: udp
+    address: 8.8.4.4
+    port: 53
+    repeat: 0
+    use_tricks: true
+    timeout: 3
+  - name: google-3
+    type: udp
+    address: 216.239.34.34
+    port: 53
+    repeat: 0
+    use_tricks: true
+    timeout: 3
+  - name: google-4
+    type: udp
+    address: 216.239.36.36
+    port: 53
+    repeat: 0
+    use_tricks: true
+    timeout: 3
+  - name: curl-doh
+    type: curl
+    url: https://jxl61mtx82.cloudflare-gateway.com/dns-query
+    host: jxl61mtx82.cloudflare-gateway.com
+    want_get: false
+    verify: true
+    ech: crypto.cloudflare.com
+  - name: nextdns
+    type: curl
+    url: https://dns.nextdns.io/394f12
+    host: dns.nextdns.io
+    want_get: false
+    verify: true
+    ech: crypto.cloudflare.com
+  - name: iij
+    type: curl
+    url: https://www.baidu.com/dns-query
+    host: public.dns.iij.jp
+    want_get: false
+    verify: false
+  - name: hinet
+    type: curl
+    url: https://www.sina.com/dns-query
+    host: dns.hinet.net
+    want_get: false
+    verify: false
+resolvers:
+  - name: 114dns
+    type: aiodns
+    nameservers:
+      - 114.114.114.114
+      - 114.114.115.115
+      # - test-udp
+    timeout: 1
+    tries: 4
+  - name: dnspod
+    type: aiodns
+    nameservers:
+      - 119.29.29.29
+      - 119.28.28.28
+      # - test-udp
+    timeout: 1
+    tries: 4
+  - name: trafficroute
+    type: aiodns
+    nameservers:
+      - 180.184.1.1
+      - 180.184.2.2
+      # - test-udp
+  - name: telecom
+    type: aiodns
+    nameservers:
+      - 218.2.2.2
+      - 218.4.4.4
+    timeout: 1
+    tries: 4
+  - name: unicom
+    type: aiodns
+    nameservers:
+      - 221.6.4.66
+      - 221.6.4.67
+    timeout: 1
+    tries: 4
+  - name: cmcc
+    type: aiodns
+    nameservers:
+      - 221.131.143.69
+      - 221.131.143.70
+    timeout: 1
+    tries: 4
+  - name: opennic
+    type: aiodns
+    nameservers:
+      - 95.216.99.249
+      - 65.21.1.106
+      - 2a01:4f9:2b:1305::2
+      - 2a01:4f9:c011:83d::1
+      # - test-udp
+    tcp: true
+    timeout: 2
+    tries: 4
+  - name: doh-test
+    type: plain
+    nameservers:
+      - curl-doh
+  - name: nextdns
+    type: plain
+    nameservers:
+      - nextdns
+  - name: hinet
+    type: plain
+    nameservers:
+      - hinet
+  - name: iij
+    type: plain
+    nameservers:
+      - iij
+  - name: google-cn
+    type: plain
+    nameservers:
+      - curl-doh
+    ecs: 58.215.177.0/24
+    timeout: 3
+    lifetime: 5
+  - name: cn
+    type: concurrent
+    resolvers:
+      - telecom
+      - unicom
+      - cmcc
+      - dnspod
+      - 114dns
+    timeout: 2
+    wait_all: true
+    actions:
+      - speedcheck
+  - name: global
+    type: concurrent
+    resolvers:
+      - hinet
+      - iij
+      - doh-test
+      - nextdns
+    wait_all: true
+    actions:
+      - replace
+      - speedcheck
+    timeout: 5
+  - name: default
+    type: concurrent
+    resolvers:
+      - telecom
+      - unicom
+      - cmcc
+      - dnspod
+      - 114dns
+      - hinet
+      - iij
+      - doh-test
+      - nextdns
+    wait_all: true
+    actions:
+      - replace
+      - speedcheck
+    timeout: 5
+
+actions:
+  - name: block
+    type: static
+  - name: speedcheck
+    type: speedcheck
+    match_ip:
+      ip_exclude:
+        - private
+  - name: replace
+    type: replace
+    match_name:
+      domain_exclude:
+        - mozilla
+        - cn
+        - cloudflare-cn
+        - google-cn
+        - category-ntp
+        - category-stun
+        - category-ads
+        - cloudflare-cn
+      query_types:
+        - A
+        - AAAA
+    replace_map:
+      - match_ip:
+          ip_include:
+            - cloudflare
+        ipv4:
+          - 172.64.145.0
+          - 172.64.146.0
+          - 104.18.38.0
+          - 104.18.39.0
+        ipv6:
+          - "2606:4700:10::"
+          - "2606:4700:20::"
+      - match_ip:
+          ip_include:
+            - cloudfront
+        ipv4:
+          - 3.168.241.0
+          - 13.225.167.0
+          - 3.175.219.0
+          - 13.33.212.0
+          - 3.166.246.0
+        ipv6:
+          - "2600:9000:2755::"
+          - "2600:9000:28c2::"
+          - "2600:9000:203f::"
+          - "2600:9000:229f::"
+          - "2600:9000:2078::"
+      - match_ip:
+          ip_include:
+            - github-raw
+        ipv4:
+          - 146.75.50.132
+          - 146.75.49.55
+          - 146.75.48.133
+          - 146.75.50.217
+          - 146.75.49.91
+        ipv6:
+          - "2a04:4e42:7c::133"
+          - "2a04:4e42:7c::311"
+          - "2a04:4e42:7c::347"
+          - "2a04:4e42:7c::644"
+          - "2a04:4e42:7c::729"
+      - match_ip:
+          ip_include:
+            - fastly
+          ip_exclude:
+            - github
+        ipv4_prefixlen: 22
+        ipv6_prefixlen: 64
+        ipv4:
+          - 146.75.48.0
+        ipv6:
+          - "2a04:4e42:200::"
+          - "2a04:4e42:400::"
+          - "2a04:4e42:600::"
+  - name: https
+    type: https
+    match_name:
+      domain_exclude:
+        - cn
+    match_ip:
+      ip_include:
+        - cloudflare
+    ech_domain: crypto.cloudflare.com
+  - name: fallback
+    type: fallback
+    map:
+      - match_name:
+          domain_include:
+            - google
+          domain_exclude:
+            - google-cn
+            - googlefcm
+            - category-ntp
+            - category-stun
+        ipv6:
+          - "2607:f8b0:4023:c0b::ca"
+          - "2607:f8b0:4023:c0d::c3"
+          - "2607:f8b0:4023:c03::c4"
+          - "2607:f8b0:4023:c06::5a"
+          - "2607:f8b0:4023:c0b::c4"
+          - "2607:f8b0:4023:c06::ca"
+  - name: filter
+    type: filter
+    filters:
+      - match_name:
+          domain_exclude:
+            - facebook
+            - dropbox
+        match_ip:
+          ip_exclude:
+            - facebook
+            - twitter
+          asn_exclude:
+            - 19679
+routing:
+  - name: ads
+    before:
+      - block
+    resolver: cn
+    matcher:
+      domain_include:
+        - category-ads-all
+        - category-ads
+        - ads
+  - name: google
+    matcher:
+      domain_include:
+        - google-cn
+    resolver: google-cn
+    after:
+      - https
+  - name: rule1
+    resolver: cn
+    matcher:
+      domain_include:
+        - cn
+        - google-cn
+        - apple-cn
+    after:
+      - speedcheck
+      - https
+  #    resolver: doh-test
+  - name: rule3
+    matcher:
+      domain_include:
+        - google
+        - gfw
+    after:
+      - filter
+      - speedcheck
+      - fallback
+      - https
+    resolver: global
+  - name: opennic
+    matcher:
+      domain_include:
+        - tld-opennic
+    resolver: opennic
+  - name: default
+    after:
+      - filter
+      - speedcheck
+      - fallback
+      - https
+    resolver: default
