@@ -211,7 +211,7 @@ TCP pool 使用非破坏性的 `MSG_PEEK` 健康检查，不会关闭被检查�
 
 已转换的记录类型包括 A、AAAA、CAA、CNAME、HTTPS、MX、NAPTR、NS、PTR、SOA、SRV、TLSA、TXT 和 URI。pycares 会丢失 TXT 的原始 character-string 分段边界，因此长 TXT 会按每段最多 255 字节重新分段后编码。ARES_ENODATA 映射为空 NOERROR，ARES_ENOTFOUND 映射为 NXDOMAIN，其他异常映射为 SERVFAIL。
 
-模型中存在 `ecs` 和 `cache_size` 字段，但当前 AioDNSResolver 实现没有使用它们。
+应答缓存经 `AnswerCache` 挂在 `resolve()` 边界（`cache_size` 默认 10000，`0` 关闭）：`query()` 路径与 HTTPClient 的 ECH 引导查询共用同一份按名共享缓存，条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），同事件循环内同键并发合并为一次 pycares 查询。
 
 ### 7.2 PlainResolver
 
@@ -310,14 +310,16 @@ ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使
 
 项目中有四类缓存设计：
 
-1. Master DNS Answer 缓存：`cached()` 装饰的 `TLRUCache`（ttu 取 Answer 自身 expiration），容量由顶层 `cache_size` 控制，`0` 关闭；同键并发经 in-flight 表合并。
+1. Master DNS Answer 缓存：`AnswerCache` 直建实例（跨线程锁 + TLRUCache，ttu 取 Answer 自身 expiration），容量由顶层 `cache_size` 控制，`0` 关闭；`fetch` 的同键 in-flight 合并覆盖全部监听器。
 2. 全局 ECHConfig 缓存：Master 创建 100 项、300 秒的 TTLCache 并通过 `set_ech_cache` 注入，所有 Worker 的 HTTPClient 共享；键为域名规范化文本，不含实例标识。
 3. 测速缓存：Master 创建 10000 项、1800 秒的 TLRUCache，保存跨 Worker 可共享的数值结果。
-4. PlainResolver 应答缓存：按解析器名注册、跨 Worker 线程共享的 TLRUCache（容量为该解析器的 `cache_size`），条目按应答自身 TTL 过期；同事件循环内同键并发经 `cached()` in-flight 表合并。
+4. Resolver 应答缓存：plain 与 aiodns 各自的 `cache_size` 控制容量，经 `AnswerCache.shared` 按解析器名注册、跨 Worker 线程共享；aiodns 挂在 `resolve()` 边界（ECH 引导查询亦受益），plain 挂在 `query()` 出口前。
+
+`AnswerCache`（`utils/cache_async.py`）是三类 Answer 缓存的统一载体：存储层为线程锁串行化的 TLRUCache（墙钟计时、按应答自身 TTL 过期），实现 MutableMapping 协议，对外提供 `read`/`write` 异步读写与 `fetch(key, fn)`（未命中执行 fn 并写入，同键并发经 `cached()` in-flight 表合并为一次执行）。
 
 Master Answer 缓存键包含 `(qname, type, class, listener, ECS)`；客户端地址不入键，因为当前上游查询不转发客户端地址。写入与读取均复制 Answer，读取副本按剩余存活时间刷新所有 section 的 TTL。dispatch 仅运行于 Master 主循环，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中仍只保存最终 `Answer`，不会保存 Task/Future。
 
-ECHConfig、测速与两类 Answer 缓存统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task。ECHConfig 与测速缓存为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。
+ECHConfig、测速与 AnswerCache.fetch 统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task（跨循环首次填充可能各执行一次，锁内 setdefault 保证只落一份）。ECHConfig 与测速缓存为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。
 
 ## 11. 配置与启动顺序约束
 
@@ -363,7 +365,7 @@ uv run python -m utils.gws --domain domains.txt --ip ips.txt --output output.jso
 ## 13. 已知边界
 
 - 当前只实现标准 UDP/TCP DNS Listener；HTTP/DoH Listener 配置会被拒绝。
-- `AioDNSResolverConfig.ecs` 与其 `cache_size` 仍是保留字段，当前解析路径不使用；plain 的 `cache_size` 已激活为应答缓存容量。
+- aiodns 不支持 ECS（pycares 无法注入 EDNS Client Subnet 选项），需要固定 ECS 时使用 plain 解析器；Resolver 级 `cache_size` 已激活为应答缓存容量。
 - UDP `use_tricks` 的报文特征过滤属于兼容性策略，不等同于完整的 DNS 投毒检测。
 
 ## 14. 验证现状

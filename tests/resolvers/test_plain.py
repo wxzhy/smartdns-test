@@ -13,10 +13,8 @@ from dns.resolver import NXDOMAIN, Answer
 from smartdns.models.context import Request, Response
 from smartdns.models.resolver import PlainResolverConfig
 from smartdns.nameservers.manager import NameserverManager
-from smartdns.resolvers.plain import (
-    PlainResolver,
-    _get_or_create_resolver_cache,
-)
+from smartdns.resolvers.plain import PlainResolver
+from smartdns.utils.cache_async import AnswerCache
 
 if TYPE_CHECKING:
     import pytest
@@ -160,11 +158,11 @@ async def test_query_merges_concurrent_same_key(
 
 
 def test_resolver_cache_is_shared_by_name() -> None:
-    """同名解析器实例（各 Worker 场景）经名字注册表共享同一 cachetools 实例。"""
-    first = _get_or_create_resolver_cache("shared-probe", 5)
-    second = _get_or_create_resolver_cache("shared-probe", 999)
+    """同名解析器实例（各 Worker 场景）经名字注册表共享同一 AnswerCache。"""
+    first = AnswerCache.shared("shared-probe", 5)
+    second = AnswerCache.shared("shared-probe", 999)
     assert first is second
-    third = _get_or_create_resolver_cache("other", 5)
+    third = AnswerCache.shared("other", 5)
     assert first is not third
 
 

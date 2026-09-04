@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 from asyncio import Task, current_task, get_running_loop, shield
+from collections.abc import Iterator
 from collections.abc import MutableMapping as MutableMappingABC
 from functools import update_wrapper
 from inspect import iscoroutinefunction
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from time import time
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 
+from cachetools import TLRUCache
 from cachetools.keys import hashkey
 from loguru import logger
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, MutableMapping
     from contextlib import AbstractContextManager
+
+    type TTU = Callable[[object, Any, float], float]
 
 
 class IdentityFunction[T](Protocol):
@@ -34,6 +39,101 @@ def answer_expires(key: object, value: Any, now: float) -> float:
     故钳制最小 1ms 生存期，让这类条目正常落库后立即过期。
     """
     return max(value.expiration, now + 0.001)
+
+
+async def _fetch_through[KT, VT](key: KT, fetch: Callable[[], Awaitable[VT]]) -> VT:
+    """AnswerCache.fetch 的中转协程；键由装饰器的 key 函数截取，此处透传。"""
+    return await fetch()
+
+
+class AnswerCache[KT, VT](MutableMappingABC[KT, VT]):
+    """跨线程共享、按 Answer 自身 TTL 过期的异步应答缓存。
+
+    存储层为 TLRUCache（ttu=answer_expires，墙钟计时）；实现 MutableMapping
+    协议以兼容 cached() 的 isinstance 检查，全部操作经内部线程锁串行化，
+    可被多个 Worker 事件循环（线程）同时读写。
+
+    - ``read``/``write``：异步直读直写。
+    - ``fetch``：未命中时执行 fetch_fn 并写入；同键并发经 cached() 的
+      in-flight 表合并为一次执行（按事件循环隔离，跨循环首次填充可能
+      各执行一次，落库由锁内 setdefault 保证只保留一份）。
+    - ``shared``：按名字注册的共享实例，各 Worker 用同一份配置构造的
+      同名 Resolver 经此取到同一缓存对象。
+    """
+
+    _shared: ClassVar[dict[str, AnswerCache[Any, Any]]] = {}
+    _shared_lock = Lock()
+
+    def __init__(self, maxsize: int, ttu: TTU = answer_expires) -> None:
+        self._store = TLRUCache(maxsize=maxsize, ttu=ttu, timer=time)
+        self._lock = Lock()
+        # key 函数忽略 fetch_fn 本身，同键并发合并到首个 fetch_fn。
+        self._fetch_merged = cached(self, key=lambda cache_key, fetch: cache_key)(
+            _fetch_through
+        )
+
+    # -- MutableMapping 协议（cached() 亦经这些方法读写）--
+
+    def __getitem__(self, key: KT) -> VT:
+        with self._lock:
+            return self._store[key]
+
+    def __setitem__(self, key: KT, value: VT) -> None:
+        with self._lock:
+            self._store[key] = value
+
+    def __delitem__(self, key: KT) -> None:
+        with self._lock:
+            del self._store[key]
+
+    def __iter__(self) -> Iterator[KT]:
+        with self._lock:
+            # TLRUCache 无键类型参数（键形参为 object），按容器声明收窄。
+            return cast("Iterator[KT]", iter(list(self._store)))
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._store)
+
+    def setdefault(self, key: KT, default: VT) -> VT:
+        # 整体在锁内完成，保证并发首写只落一份（cached() 的 store 依赖此语义）。
+        with self._lock:
+            return self._store.setdefault(key, default)
+
+    # -- 异步读写 API --
+
+    async def read(self, key: KT) -> VT | None:
+        """读取缓存；未命中或已过期返回 None。"""
+        try:
+            return self[key]
+        except KeyError:
+            return None
+
+    async def write(self, key: KT, value: VT) -> None:
+        """写入缓存。"""
+        self[key] = value
+
+    async def fetch(self, key: KT, fetch_fn: Callable[[], Awaitable[VT]]) -> VT:
+        """读缓存；未命中时执行 fetch_fn（同键并发合并）并写入后返回。"""
+        return await self._fetch_merged(key, fetch_fn)
+
+    # -- 按名共享注册表 --
+
+    @classmethod
+    def shared(cls, name: str, maxsize: int) -> AnswerCache[KT, VT]:
+        """取或建按名字注册的共享缓存；同名返回同一实例。"""
+        with cls._shared_lock:
+            cache = cls._shared.get(name)
+            if cache is None:
+                cache = cls(maxsize=maxsize)
+                cls._shared[name] = cache
+            return cast("AnswerCache[KT, VT]", cache)
+
+    @classmethod
+    def reset_shared(cls) -> None:
+        """清空共享注册表；供测试在用例间隔离同名缓存。"""
+        with cls._shared_lock:
+            cls._shared.clear()
 
 
 def cached[KT, VT](

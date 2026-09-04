@@ -65,7 +65,7 @@
 | 层 | 目录 | 职责 |
 |---|---|---|
 | **入口** | `smartdns/main.py` | Typer CLI，加载 `config.yaml`，启动 Master |
-| **核心** | `smartdns/core/` | `Master`（监听器+worker 调度+缓存）、`Worker`（单请求处理链）；缓存统一走 `cached()` 装饰器 + cachetools |
+| **核心** | `smartdns/core/` | `Master`（监听器+worker 调度+缓存）、`Worker`（单请求处理链）；Answer 缓存统一为 `utils.cache_async.AnswerCache`（跨线程共享 + async 读写 + 同键合并） |
 | **监听器** | `smartdns/listeners/` | 对外收发 DNS 报文（UDP/TCP），把 `dns.message` 包成 `Request` |
 | **上游服务器** | `smartdns/nameservers/` | 对单个上游 DNS 服务器的底层查询（UDP/TCP/curl-DoH） |
 | **解析器** | `smartdns/resolvers/` | 上层解析策略（直连 / dnspython / 并发择优），聚合多个上游服务器 |
@@ -168,8 +168,8 @@
 
 | `type` | 类 | 说明 |
 |---|---|---|
-| `aiodns` | `AioDNSResolver` | 基于 `aiodns`/pycares 的异步解析，内置完整记录类型转换（A/AAAA/MX/TXT/CAA/CNAME/HTTPS/NAPTR/NS/PTR/SOA/SRV/TLSA/URI）；长 TXT 按 255 字节上限重新分段。把 pycares 的 `DNSResult` 重新组装成 `dns.resolver.Answer`。支持 EDNS、TCP 模式、tries、轮询；NODATA 空应答按 `nodata_ttl` 写入负缓存 |
-| `plain` | `PlainResolver` | 继承 `dnspython.Resolver`，把配置里的上游**名字**解析成 `Nameserver` 实例挂在 `resolver.nameservers` 上，由 dnspython 自行调度。支持固定 ECS（EDNS Client Subnet）和 `lifetime`；应答缓存经 `cached()` 实现（按应答自身 TTL 过期，同名解析器跨 Worker 共享），不用 dnspython 的 Resolver.cache |
+| `aiodns` | `AioDNSResolver` | 基于 `aiodns`/pycares 的异步解析，内置完整记录类型转换（A/AAAA/MX/TXT/CAA/CNAME/HTTPS/NAPTR/NS/PTR/SOA/SRV/TLSA/URI）；长 TXT 按 255 字节上限重新分段。把 pycares 的 `DNSResult` 重新组装成 `dns.resolver.Answer`。支持 EDNS、TCP 模式、tries、轮询；NODATA 空应答按 `nodata_ttl` 写入负缓存；`resolve()` 边界带 `AnswerCache` 应答缓存（`cache_size`，0 关闭） |
+| `plain` | `PlainResolver` | 继承 `dnspython.Resolver`，把配置里的上游**名字**解析成 `Nameserver` 实例挂在 `resolver.nameservers` 上，由 dnspython 自行调度。支持固定 ECS（EDNS Client Subnet）和 `lifetime`；应答缓存为 `AnswerCache`（`cache_size` 容量，按应答自身 TTL 过期，同名解析器跨 Worker 共享），不用 dnspython 的 Resolver.cache |
 | `concurrent` | `ConcurrentResolver` | 按完成顺序消费结果；`wait_all=false` 在首个带 Answer 的 NOERROR 后取消其余查询，`wait_all=true` 在整体超时内收集候选供 after 动作挑选 |
 
 ---

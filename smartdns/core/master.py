@@ -20,7 +20,7 @@ from smartdns.listeners.manager import ListenerManager
 from smartdns.models.context import Request, Response
 from smartdns.nameservers.client import set_ech_cache
 from smartdns.routing.manager import init_geo_manager
-from smartdns.utils.cache_async import answer_expires, cached
+from smartdns.utils.cache_async import AnswerCache
 
 from .worker import Worker
 
@@ -70,19 +70,12 @@ class Master:
         self.worker_count = config.worker_count
         self.workers: list[Worker] = []
         self.portals: list[BlockingPortal] = []
-        # 应答缓存：持久层为 ttu=Answer.expiration 的 TLRUCache（cache_size=0
-        # 关闭），读取、写入与同键 in-flight 合并由 cached() 统一处理；dispatch
-        # 仅运行于 Master 主循环，合并范围覆盖全部监听器的同键并发请求。
-        self._cache = (
-            TLRUCache(maxsize=config.cache_size, ttu=answer_expires, timer=time)
-            if config.cache_size > 0
-            else None
+        # 应答缓存（AnswerCache）：跨线程共享、按应答自身 TTL 过期，cache_size=0
+        # 关闭；fetch 的同键 in-flight 合并在 dispatch（Master 主循环）上执行，
+        # 覆盖全部监听器的同键并发请求。
+        self._cache: AnswerCache[CacheKey, Answer] | None = (
+            AnswerCache(maxsize=config.cache_size) if config.cache_size > 0 else None
         )
-        if self._cache is not None:
-            cache = cast("MutableMapping[CacheKey, Answer]", self._cache)
-            self._query_cached = cached(cache, key=_cache_key)(self._query_answer)
-        else:
-            self._query_cached = self._query_answer
         self.listener_manager: ListenerManager | None = None
 
     async def start(self) -> None:
@@ -136,10 +129,13 @@ class Master:
 
     async def dispatch(self, request: Request) -> Message | None:
         """分发请求到 Worker 并返回响应 Message。"""
-        if self._cache is None:
+        cache = self._cache
+        if cache is None:
             return self._to_client_message(request, await self._query_worker(request))
         try:
-            answer = await self._query_cached(request)
+            answer = await cache.fetch(
+                _cache_key(request), lambda: self._query_answer(request)
+            )
         except _UncacheableResponseError as error:
             return self._to_client_message(request, error.response)
         # 复制回放：命中与未命中统一按剩余生存期刷新各 section TTL，
@@ -186,7 +182,8 @@ class Master:
             return Response.from_rcode(Rcode.SERVFAIL, upstream="")
 
     async def _query_answer(self, request: Request) -> Answer:
-        """缓存入口：可缓存结果正常返回（由 cached() 落库），其余经异常通道回传。
+        """缓存取数函数：可缓存结果正常返回（由 AnswerCache.fetch 落库），
+        其余经异常通道回传 dispatch。
 
         负应答携带 ans（含 authority 区 SOA）时按 RFC 2308 以 Answer.expiration
         （SOA minimum）为负缓存 TTL；SERVFAIL/REFUSED 等瞬态失败即使带 ans

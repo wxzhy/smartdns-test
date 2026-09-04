@@ -104,8 +104,7 @@ async def _gather(func, *requests: Request):
 
 async def test_dispatch_error_response_builds_error_answer() -> None:
     master = _FakeMaster([])
-    master._cache = None  # type: ignore[assignment]
-    master._query_cached = master._query_answer  # type: ignore[assignment]
+    master._cache = None
     request = _request("192.0.2.1")
     result = await master.dispatch(request)
     assert result is not None

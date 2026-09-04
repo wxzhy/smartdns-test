@@ -1,8 +1,6 @@
-from threading import Lock
 from time import time
 from typing import TYPE_CHECKING, cast
 
-from cachetools import TLRUCache
 from dns.asyncresolver import Resolver
 from dns.edns import ECSOption
 from dns.rcode import Rcode
@@ -12,11 +10,9 @@ from loguru import logger
 from smartdns.actions._helper import clone_answer
 from smartdns.models.context import Request, Response
 from smartdns.resolvers.base import BaseResolver
-from smartdns.utils.cache_async import answer_expires, cached
+from smartdns.utils.cache_async import AnswerCache
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-
     from dns.message import QueryMessage
     from dns.name import Name
     from dns.rdataclass import RdataClass
@@ -28,34 +24,6 @@ if TYPE_CHECKING:
     from smartdns.nameservers.manager import NameserverManager
 
 type ResolverCacheKey = tuple[Name, RdataType, RdataClass]
-
-_resolver_caches: dict[str, TLRUCache] = {}
-_cache_lock = Lock()
-
-
-def _get_or_create_resolver_cache(
-    name: str, maxsize: int
-) -> MutableMapping[ResolverCacheKey, Answer]:
-    """按解析器名取线程间共享的应答缓存。
-
-    各 Worker 用同一份配置构造同名 PlainResolver，以名字注册才能保证
-    它们读写同一个 cachetools 实例；容量取该解析器自己的 cache_size。
-    timer 用墙钟时间，与 Answer.expiration 的计时基准一致。
-    """
-    with _cache_lock:
-        cache = _resolver_caches.get(name)
-        if cache is None:
-            cache = TLRUCache(maxsize=maxsize, ttu=answer_expires, timer=time)
-            _resolver_caches[name] = cache
-        # ttu 回调的 key 形参是 object（cachetools 协议），实例被推断为
-        # TLRUCache[object, Answer, float]，这里按实际键类型收窄。
-        return cast("MutableMapping[ResolverCacheKey, Answer]", cache)
-
-
-def _reset_resolver_caches() -> None:
-    """清空缓存注册表；供测试在用例间隔离同名解析器的共享缓存。"""
-    with _cache_lock:
-        _resolver_caches.clear()
 
 
 class PlainResolver(BaseResolver, Resolver):
@@ -83,16 +51,14 @@ class PlainResolver(BaseResolver, Resolver):
             else:
                 logger.warning("Nameserver {} 不存在", name)
         self.nameservers = upstreams
-        # 应答缓存：cache_size>0 时经 cached() 装饰。持久层是同名解析器
-        # （各 Worker 的实例）共享的 TLRUCache；同事件循环内的同键并发
-        # 由装饰器的 in-flight 表合并为一次上游查询。
+        # 应答缓存（AnswerCache）：按解析器名跨 Worker 线程共享，
+        # cache_size=0 关闭；fetch 的同键 in-flight 合并按事件循环隔离。
         if config.cache_size > 0:
-            self._resolve_cached = cached(
-                _get_or_create_resolver_cache(config.name, config.cache_size),
-                lock=_cache_lock,
-            )(self._resolve_answer)
+            self._cache: AnswerCache[ResolverCacheKey, Answer] | None = (
+                AnswerCache.shared(config.name, config.cache_size)
+            )
         else:
-            self._resolve_cached = self._resolve_answer
+            self._cache = None
 
     async def start(self):
         """启动解析器"""
@@ -112,9 +78,17 @@ class PlainResolver(BaseResolver, Resolver):
     async def query(self, request: Request, context: Context | None = None) -> Response:
         """解析域名"""
         try:
-            answer = await self._resolve_cached(
-                request.qname, request.rdtype, request.rdclass
-            )
+            if self._cache is None:
+                answer = await self._resolve_answer(
+                    request.qname, request.rdtype, request.rdclass
+                )
+            else:
+                answer = await self._cache.fetch(
+                    (request.qname, request.rdtype, request.rdclass),
+                    lambda: self._resolve_answer(
+                        request.qname, request.rdtype, request.rdclass
+                    ),
+                )
             # 复制回放：命中时 RRset TTL 须按剩余生存期衰减，缓存内原始
             # Answer 不外泄给调用方。
             remaining = max(0, int(answer.expiration - time()))
