@@ -1,7 +1,7 @@
 # SmartDNS 完整参考配置。
 #
 # 覆盖全部配置模型：顶层选项、geodata、client（HTTP 客户端）、listeners（UDP/TCP）、
-# nameservers（UDP/TCP/curl DoH）、resolvers（aiodns/plain/concurrent）、七种 Action
+# nameservers（UDP/TCP/TLS/curl DoH）、resolvers（aiodns/plain/concurrent）、七种 Action
 # （log/static/replace/https/fallback/speedcheck/filter）以及路由规则的全部字段。
 #
 # 除注释掉的 geodata 外不依赖本地文件，复制后即可通过 Config 模型加载：
@@ -93,6 +93,18 @@ nameservers:
     timeout: 5
     pool_size: 4
     use_tricks: false
+  # TLS (DoT) 上游：fingerprint 为 utls 指纹预设（chrome:131/142/146/148/150/stable），
+  # 缺省为标准 ClientHello；server_name 是 SNI 与证书验证锚点（IP 地址不发送 SNI，
+  # 开启 verify 时必须显式配置才能启动）；pool_size 同 TCP。
+  - name: tls-cloudflare
+    type: tls
+    address: 1.1.1.1
+    port: 853
+    timeout: 5
+    server_name: cloudflare-dns.com
+    fingerprint: chrome:stable
+    verify: true
+    pool_size: 4
   # curl DoH 上游：ech 为 true 时启用 curl 自动 ECH；false 不设置 ECH；
   # 字符串时先经 client.resolver 查询该域名的 HTTPS 记录并提取 ECHConfig。
   - name: doh-cloudflare

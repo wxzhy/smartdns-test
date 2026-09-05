@@ -149,6 +149,30 @@ UDP 回包会遵循客户端声明的 EDNS payload；没有 EDNS 时上限为 51
 - 连接池健康检查只做非破坏性 `MSG_PEEK`，不会关闭可复用连接。
 - `use_tricks` 启用尽力而为的 OOB 前缀发送；实现不会切换 AnyIO 底层 socket 的阻塞状态，后端不支持或发送失败时会回退为完整报文的普通异步发送。
 
+### TLS（DoT）
+
+```yaml
+- name: tls-cloudflare
+  type: tls
+  address: 1.1.1.1
+  port: 853
+  timeout: 5
+  server_name: cloudflare-dns.com
+  fingerprint: chrome:stable
+  verify: true
+  pool_size: 4
+```
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `port` | 853 | DoT 标准端口 |
+| `server_name` | 域名地址取地址本身；IP 为空 | TLS SNI 与证书验证锚点；IP 地址不发 SNI（RFC 6066） |
+| `fingerprint` | null | utls 指纹预设（`chrome:131/142/146/148/150/stable`），伪装浏览器 ClientHello；缺省为标准 ClientHello |
+| `verify` | true | 证书校验；`address` 为 IP 且未配 `server_name` 时开启校验会在启动时报错 |
+| `pool_size` | 0 | 同 TCP：0 表示每次查询新建连接并握手，大于 0 时按 Worker 创建连接池复用握手完成的加密连接 |
+
+分帧与 DNS over TCP 相同（2 字节长度前缀），收发复用 `dns.asyncquery.tcp`。握手由内置的 utls（BoringSSL）驱动，连接池健康检查为非破坏性 `MSG_PEEK`（peek 到 TLS 密文视为存活）。
+
 ### curl DoH
 
 ```yaml
@@ -393,7 +417,7 @@ routing:
 
 ## 10. 示例配置的两种运行模式
 
-`example.yaml` 是覆盖全部组件类型的完整参考配置：UDP/TCP 监听、三种 Nameserver（UDP/TCP/curl DoH）、三种 Resolver（aiodns/plain/concurrent）、七种 Action 与完整路由链。除注释掉的 `geodata` 外不依赖本地文件，复制后即可通过配置模型加载；无 Geo 数据时，带 `domain_include` 的路由 fail-closed，请求由末尾兜底路由处理。
+`example.yaml` 是覆盖全部组件类型的完整参考配置：UDP/TCP 监听、四种 Nameserver（UDP/TCP/TLS/curl DoH）、三种 Resolver（aiodns/plain/concurrent）、七种 Action 与完整路由链。除注释掉的 `geodata` 外不依赖本地文件，复制后即可通过配置模型加载；无 Geo 数据时，带 `domain_include` 的路由 fail-closed，请求由末尾兜底路由处理。
 
 若要启用标签分流：
 

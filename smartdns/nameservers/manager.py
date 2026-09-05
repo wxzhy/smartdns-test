@@ -7,10 +7,12 @@ from smartdns.models.nameserver import (
     CurlNameserverConfig,
     NameserverConfig,
     TCPNameserverConfig,
+    TLSNameserverConfig,
     UDPNameserverConfig,
 )
 from smartdns.nameservers.curl import CurlNameserver
 from smartdns.nameservers.tcp import TCPNameserver
+from smartdns.nameservers.tls import TLSNameserver
 from smartdns.nameservers.udp import UDPNameserver
 
 if TYPE_CHECKING:
@@ -30,6 +32,8 @@ class NameserverManager:
                 match config:
                     case TCPNameserverConfig():
                         nameserver: BaseNameserver = TCPNameserver(config=config)
+                    case TLSNameserverConfig():
+                        nameserver = TLSNameserver(config=config)
                     case UDPNameserverConfig():
                         nameserver = UDPNameserver(config=config)
                     case CurlNameserverConfig():

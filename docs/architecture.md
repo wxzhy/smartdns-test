@@ -13,6 +13,7 @@ SmartDNS 是一个以标签路由为核心的异步 DNS 代理。它接收客户
 - dnspython 负责 DNS 报文、Resolver 和上游接口。
 - aiodns/pycares 提供直连 DNS 解析器。
 - curl-cffi 提供 DoH、浏览器指纹和 ECH 相关能力。
+- utls（BoringSSL）提供 DNS-over-TLS 握手与 ClientHello 指纹伪装。
 - Pydantic Settings 负责 YAML 配置加载与字段校验。
 - MaxMind、MARISA-Trie 和 py-radix 提供 IP、ASN、域名及自定义网段标签查询。
 
@@ -25,7 +26,7 @@ smartdns/
 │   ├── master.py           监听器、全局缓存、Worker 调度与停机
 │   └── worker.py           单请求路由处理链与组件生命周期
 ├── listeners/              面向客户端的 UDP/TCP DNS 监听
-├── nameservers/            单个底层上游：UDP、TCP、curl DoH
+├── nameservers/            单个底层上游：UDP、TCP、TLS、curl DoH
 ├── resolvers/              解析策略：aiodns、plain、concurrent
 ├── routing/                路由、匹配与 Geo 数据查询
 ├── actions/                请求前及响应后的加工动作
@@ -198,11 +199,14 @@ Nameserver 代表 dnspython 可调用的一台底层上游，只被 `plain` Reso
 |---|---|---|
 | `udp` | `UDPNameserver` | 每次查询创建 connected UDP socket；`repeat` 控制重复发包次数；`use_tricks` 最多多收几次并按报文特征过滤明显异常包；上游返回 `TC=1` 时由 dnspython 触发对同一地址的 TCP 重试 |
 | `tcp` | `TCPNameserver` | 普通 DNS over TCP；`pool_size > 0` 时使用连接池复用连接；`use_tricks` 尝试非阻塞 OOB 前缀发送，失败时回退完整报文的普通异步发送 |
+| `tls` | `TLSNameserver` | DNS over TLS：utls/BoringSSL 握手可配 `fingerprint` 伪装 ClientHello；`pool_size > 0` 时用连接池复用握手完成的加密连接，健康检查沿用底层 TCP socket 的 `MSG_PEEK`；分帧与 DNS over TCP 相同，复用 `dns.asyncquery.tcp` |
 | `curl` | `CurlNameserver` | 使用独占的 curl-cffi AsyncSession 发送 DoH GET/POST；可改 Host、证书验证并请求 ECH 配置 |
 
 curl 会话由各 CurlNameserver 独占，避免不同 DoH 上游共享并修改同一个 ECH 会话配置。`client.hosts` 会转换为 curl `RESOLVE`，仅为这些 HTTP 请求提供静态主机映射。
 
 TCP pool 使用非破坏性的 `MSG_PEEK` 健康检查，不会关闭被检查的底层 socket；查询失败的连接由连接池按异常路径回收。
+
+TLS 上游的握手与加密流由 `smartdns.nameservers._tls` 自行驱动：anyio 的 `TLSStream` 会把 hostname 经 IDNA 编码成 bytes 传给 `wrap_bio`，而 utls 只接受 `str`，因此不能用 `TLSStream` 直接包装。`server_name` 是 SNI 与证书验证锚点——域名地址默认取地址本身，IP 地址不发送 SNI（RFC 6066）；`verify: true` 且无法确定锚点时启动报错。`fingerprint` 接受 utls 预设名（如 `chrome:stable`）伪装 ClientHello。池内连接 `aclose` 不做 close_notify，省一次关闭往返。
 
 `curl.ech` 的语义为：字符串值通过 `client.resolver` 查询指定域名的 HTTPS 记录并提取 ECHConfig；`true` 启用 curl 自动 ECH；`false` 不为该 Nameserver 设置 ECH 选项。
 

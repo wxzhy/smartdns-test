@@ -36,6 +36,25 @@ class TCPNameserverConfig(AddressNameserverConfig):
     use_tricks: bool = Field(default=False, description="是否使用发送技巧")
 
 
+class TLSNameserverConfig(AddressNameserverConfig):
+    """TLS (DNS over TLS) Nameserver 配置。"""
+
+    type: Literal["tls"]
+    port: int = Field(
+        default=853, ge=1, le=65535, description="目标端口，默认 DoT 标准端口 853"
+    )
+    server_name: str | None = Field(
+        default=None,
+        description="TLS SNI 与证书验证锚点；域名地址缺省取自身，IP 不发送 SNI",
+    )
+    fingerprint: str | None = Field(
+        default=None,
+        description="utls TLS 指纹预设（如 chrome:stable）；缺省为标准 ClientHello",
+    )
+    verify: bool = Field(default=True, description="是否验证 TLS 证书")
+    pool_size: int = Field(default=0, ge=0, description="连接池大小")
+
+
 class CurlNameserverConfig(BaseNameserverConfig):
     """Curl Nameserver 配置。"""
 
@@ -50,6 +69,9 @@ class CurlNameserverConfig(BaseNameserverConfig):
 
 
 NameserverConfig = Annotated[
-    UDPNameserverConfig | TCPNameserverConfig | CurlNameserverConfig,
+    UDPNameserverConfig
+    | TCPNameserverConfig
+    | TLSNameserverConfig
+    | CurlNameserverConfig,
     Field(discriminator="type"),
 ]
