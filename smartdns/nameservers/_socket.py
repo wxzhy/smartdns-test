@@ -4,6 +4,7 @@ from anyio import EndOfStream, fail_after
 from anyio.abc import SocketAttribute
 from dns._asyncbackend import DatagramSocket, StreamSocket
 from dns.exception import Timeout
+from dns.inet import low_level_address_tuple
 
 # 以下方法中名为 `timeout` 的参数是 dnspython 后端 Socket ABC 接口签名的一部分，
 # 无法重命名，因此对 ASYNC109 规则在各方法上单独禁用。
@@ -19,7 +20,12 @@ class AnyioDatagramSocket(DatagramSocket):
         )
         self._repeat = repeat
         self._use_tricks = use_tricks
-        self._addr = sock.extra(SocketAttribute.remote_address, None)
+        # anyio 将 IPv6 对端地址规约为 (host, port) 二元组，而 dnspython 校验
+        # 应答来源的 _matches_destination 期望低层四元组 (host, port, flowinfo,
+        # scope_id)；不转换时 IPv6 上游的应答会被 ignore_unexpected 静默丢弃，
+        # 表现为已收到应答仍按超时上报。
+        remote = sock.extra(SocketAttribute.remote_address, None)
+        self._addr = low_level_address_tuple(remote) if remote is not None else None
 
     async def sendto(self, what, destination, timeout):
         try:
@@ -51,7 +57,7 @@ class AnyioDatagramSocket(DatagramSocket):
         await self._sock.aclose()
 
     async def getpeername(self):
-        return self._sock.extra(SocketAttribute.remote_address, None)
+        return self._addr
 
     async def getsockname(self):
         return self._sock.extra(SocketAttribute.local_address, None)
