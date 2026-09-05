@@ -1,5 +1,6 @@
 """Request/Response 负应答保留与 rcode 透传测试。"""
 
+from ipaddress import IPv4Address
 from typing import TYPE_CHECKING, cast
 
 import dns.message
@@ -11,7 +12,7 @@ from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
-from smartdns.models.context import Request, Response
+from smartdns.models.context import Context, Request, Response
 
 if TYPE_CHECKING:
     from dns.message import QueryMessage
@@ -75,3 +76,35 @@ def test_from_message_rejects_empty_question() -> None:
     msg.question = []
     with pytest.raises(FormError):
         Request.from_message(msg, "test")
+
+
+def test_for_subquery_derives_request_from_context() -> None:
+    request = Request.from_message(
+        dns.message.make_query("example.com.", "A"),
+        "test",
+        IPv4Address("192.0.2.7"),
+    )
+    context = Context(worker_id=3, request=request)
+    sub = Context.for_subquery(context)
+    assert sub.worker_id == 3
+    assert sub.is_subquery is True
+    assert sub.response is None
+    # 默认沿用原查询目标、监听器与客户端地址，并重新计算标签信息。
+    assert sub.request.qname == request.qname
+    assert sub.request.rdtype == RdataType.A
+    assert sub.request.rdclass == RdataClass.IN
+    assert sub.request.listener == "test"
+    assert sub.request.remote_address == IPv4Address("192.0.2.7")
+    assert sub.request.name_info is not None
+
+
+def test_for_subquery_allows_qname_and_rdtype_overrides() -> None:
+    request = Request.from_message(dns.message.make_query("example.com.", "A"), "test")
+    context = Context(worker_id=0, request=request)
+    sub = Context.for_subquery(
+        context, qname=from_text("other.example."), rdtype=RdataType.HTTPS
+    )
+    assert sub.request.qname == from_text("other.example.")
+    assert sub.request.rdtype == RdataType.HTTPS
+    assert sub.request.rdclass == RdataClass.IN
+    assert sub.request.listener == "test"

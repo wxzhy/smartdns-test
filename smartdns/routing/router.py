@@ -3,12 +3,13 @@ from typing import TYPE_CHECKING
 from dns.rcode import Rcode
 from loguru import logger
 
+from smartdns.models.context import Context, Response
 from smartdns.routing.matcher import match_request
 
 if TYPE_CHECKING:
     from smartdns.actions.manager import ActionManager
-    from smartdns.models.context import Context
     from smartdns.models.rule import Rule
+    from smartdns.resolvers.base import BaseResolver
     from smartdns.resolvers.manager import ResolverManager
 
 
@@ -51,7 +52,7 @@ class Router:
         return match_request(matcher, context.request)
 
     async def query(self, context: Context) -> bool:
-        """按规则处理请求：before 动作 → resolver → after 动作。
+        """按规则处理请求：before 动作 → resolver → after 动作 → 子查询。
 
         返回 True 表示本路由已产出最终应答（停止后续路由）；
         返回 False 表示本路由未处理（交由后续路由）。
@@ -75,4 +76,32 @@ class Router:
             await action.on_response(context)
             if context.stop:
                 return True
+        if context.subquery is not None:
+            if self.resolver is None:
+                logger.debug("路由 {} 无上游解析器，忽略子查询", self.config.name)
+            else:
+                await self._run_subquery(context, context.subquery, self.resolver)
         return True
+
+    async def _run_subquery(
+        self, context: Context, subquery: Context, resolver: BaseResolver
+    ) -> None:
+        """执行 on_response 阶段设置的子查询，并把结果交给 after 动作。
+
+        以 context=None 调用 resolver，ConcurrentResolver 会因此跳过
+        on_resolver 动作与候选收集，子查询不重复外层的加工逻辑；
+        只执行一轮，on_subquery 中再设置 context.subquery 不会再次触发。
+        """
+        try:
+            subquery.response = await resolver.query(subquery.request, None)
+        except Exception:
+            logger.warning(
+                "路由 {} 的子查询 {} 失败", self.config.name, subquery.request.qname
+            )
+            subquery.response = Response.from_rcode(
+                Rcode.SERVFAIL, upstream=self._upstream or ""
+            )
+        for action in self.after:
+            await action.on_subquery(context, subquery.response)
+            if context.stop:
+                break

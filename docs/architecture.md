@@ -147,6 +147,7 @@ match(request)
   └─► before actions
         └─► resolver.query()
               └─► after actions
+                    └─► 子查询（on_response 设置了 subquery 时）→ on_subquery
 ```
 
 关键短路规则：
@@ -185,6 +186,8 @@ match(request)
 - `candidates`：ConcurrentResolver 收集的候选响应，按 upstream 名称索引。
 - `ip_infos`：跨候选聚合的测速信息。
 - `stop`：动作触发的路由短路标志。
+- `is_subquery`：内部查询标记；ConcurrentResolver 打在其嵌套解析器的子上下文上。
+- `subquery`：on_response 阶段由 Action 设置的子查询上下文；Router 在 after 动作之后以当前 resolver 执行它，并回调 on_subquery。
 - `ext`：扩展数据槽。
 
 ## 6. Nameserver：底层单上游
@@ -269,6 +272,7 @@ Action 基类有三个 hook：
 | `on_request` | Router 的 `before` | `static`、`log` |
 | `on_resolver` | ConcurrentResolver 每个直接子响应完成后 | `replace`、`speedcheck`、`filter` |
 | `on_response` | Router 的 `after` | `speedcheck`、`https`、`fallback` |
+| `on_subquery` | Router 的 after 动作之后、子查询完成时 | 无 |
 
 Action 放在没有实现的阶段时是 no-op，不会报错。
 
@@ -296,6 +300,8 @@ ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使
 
 仅处理 HTTPS RR。它按配置移除 ipv4hint/ipv6hint，并从 ALPN 中只移除 `h3`（保留其他协议，若只剩 h3 则删除整个 ALPN 参数）；之后根据域名和响应 IP 标签决定是否查询 `ech_domain` 并注入 ECH。
 
+`match_ip` 的判定依赖 hint 派生的 IP 标签。当 `match_ip` 配置了判定条件、`match_name` 命中且记录不带任何 hint（响应无 IP 标签）时，Action 改为在 on_response 阶段设置 A 记录子查询（请求 qname，当前路由 resolver 执行，不占用即得），在 on_subquery 阶段用 A 应答自带的 IP 标签完成 match_ip 判定，再统一执行清理与 ECH 注入。A 应答无 IP（否定应答）时按 include 不匹配处理——不注入 ECH，清理照常；子查询槽位被其他动作占用时退回 on_response 内联处理（空标签判定）。副作用：无 hint 域名的清理延迟到子查询阶段，其后的 after 动作在 on_response 看到未清理响应；after 链中后续动作设置 `stop` 会跳过子查询，延迟重写不执行。
+
 `add_ech: false` 会跳过 ECH 查询和注入，但仍允许 hint/ALPN 清理。字段名必须写 `ech_domain`；误写为 `ech` 会在严格配置校验阶段报错。HTTPS、Replace、Speedcheck 和 Fallback 都通过重建 Answer/RRset 实现 copy-on-write，不修改共享候选或缓存对象。
 
 ### fallback
@@ -305,6 +311,16 @@ ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使
 ### filter
 
 只在 ConcurrentResolver 的 `actions` 中执行，用于丢弃被污染或不合预期的候选。每条过滤项先以 `match_name` 匹配请求域名与当前候选 CNAME 链组成的标签链（仅 A/AAAA/HTTPS 查询生效），再用 `match_ip` 检查响应 IP；两项都命中时把候选标记为 `invalid`，ConcurrentResolver 会跳过被标记的候选。域名排除标签命中的过滤项直接跳过，不会标记。配置条目在启动时深拷贝，运行期不会修改配置对象。
+
+### 子查询（on_subquery）
+
+on_response 阶段的动作可以把 `Context.for_subquery(context, qname=None, rdtype=None)` 的返回值赋给 `context.subquery` 来发起一次子查询；新请求默认沿用原查询的 qname/rdtype/rdclass、监听器与客户端地址，传入 qname/rdtype 可查询其他目标。
+
+Router 在 after 动作循环结束后检查 `context.subquery`：已设置且路由配置了 resolver 时，以 `resolver.query(subquery.request, None)` 执行一次查询。`context=None` 使 ConcurrentResolver 跳过其 `actions`（on_resolver）与候选写回，子查询不重复外层加工；嵌套解析器现有的 `is_subquery` 打标行为不受影响。
+
+查询完成后，Router 按配置顺序对全部 after 动作调用 `on_subquery(context, response)`，`response` 为子查询响应（同时写入 `context.subquery.response`）；某动作设置 `context.stop` 会中断后续回调。子查询结果不自动替换 `context.response`，是否改写最终响应由动作自行决定。
+
+边界：主响应非 NOERROR 时 after 动作本就被跳过，因此不会触发子查询；after 动作设置 `context.stop` 提前结束路由时同样跳过；路由没有 resolver 时忽略子查询；子查询抛出异常时降级为 SERVFAIL 响应并继续回调；子查询只执行一轮，on_subquery 中再设置 `context.subquery` 不会再次触发。当前唯一内置消费者是 `https` Action（记录无 hint 时以 A 记录子查询获取 IP 标签）。
 
 ## 10. 缓存与共享状态
 

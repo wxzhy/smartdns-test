@@ -30,3 +30,6 @@ class BaseAction:
 
     async def on_response(self, context: Context) -> None:
         """转发到客户端之前调用（after 阶段）。"""
+
+    async def on_subquery(self, context: Context, response: Response) -> None:
+        """子查询完成后调用（on_response 阶段设置 context.subquery 后触发）。"""

@@ -5,7 +5,7 @@ from typing import Any
 
 from dns.edns import ECSOption
 from dns.exception import FormError
-from dns.message import Message, make_response
+from dns.message import Message, make_query, make_response
 from dns.name import Name
 from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
@@ -162,8 +162,36 @@ class Context:
     candidates: dict[str, Response] | None = None
     ip_infos: dict[IPvAnyAddress, IPInfo] | None = None
     stop: bool = False
+    # ConcurrentResolver 打在嵌套解析器子上下文上的内部查询标记
     is_subquery: bool = False
+    # on_response 阶段由 Action 设置；Router 以当前 resolver 执行后回调 on_subquery
     subquery: Context | None = None
     ext: dict[str, Any] = Field(
         default_factory=dict, description="扩展字段，用于存储额外信息"
     )
+
+    @classmethod
+    def for_subquery(
+        cls,
+        context: Context,
+        qname: Name | None = None,
+        rdtype: RdataType | None = None,
+    ) -> Context:
+        """从现有上下文派生子查询上下文，供 Action 在 on_response 阶段设置。
+
+        新请求默认沿用原查询的 qname/rdtype/rdclass、监听器与客户端地址；
+        传入 qname/rdtype 可派生查询其他目标的子请求。
+        """
+        request = context.request
+        message = make_query(
+            request.qname if qname is None else qname,
+            request.rdtype if rdtype is None else rdtype,
+            rdclass=request.rdclass,
+        )
+        return cls(
+            worker_id=context.worker_id,
+            request=Request.from_message(
+                message, request.listener, request.remote_address
+            ),
+            is_subquery=True,
+        )

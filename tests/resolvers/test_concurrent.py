@@ -84,24 +84,45 @@ class _FakeActions:
         return None
 
 
+class _RecordingAction:
+    """记录 on_resolver 调用的假动作。"""
+
+    def __init__(self) -> None:
+        self.on_resolver_calls: list[tuple[Context, Response]] = []
+
+    async def on_resolver(self, context: Context, response: Response) -> None:
+        self.on_resolver_calls.append((context, response))
+
+
+class _ActionManager:
+    def __init__(self, action: _RecordingAction) -> None:
+        self._action = action
+
+    def get(self, name: str) -> _RecordingAction | None:
+        return self._action
+
+
 def _make(
     upstreams: list[str],
     manager: _FakeManager,
     *,
     wait_all: bool = False,
     timeout: float = 5.0,
+    action_names: list[str] | None = None,
+    actions: _FakeActions | _ActionManager | None = None,
 ) -> ConcurrentResolver:
     config = ConcurrentResolverConfig(
         name="c",
         type="concurrent",
         resolvers=upstreams,
+        actions=action_names or [],
         wait_all=wait_all,
         timeout=timeout,
     )
     return ConcurrentResolver(
         config,
         cast("ResolverManager", manager),
-        cast("ActionManager", _FakeActions()),
+        cast("ActionManager", actions if actions is not None else _FakeActions()),
     )
 
 
@@ -295,3 +316,23 @@ async def test_nested_child_results_merged_into_parent() -> None:
     assert context.ip_infos is not None
     assert IPv4Address("192.0.2.1") in context.ip_infos
     assert context.ip_infos[IPv4Address("192.0.2.1")].rtt == 5.0
+
+
+async def test_none_context_skips_resolver_actions() -> None:
+    # Router 子查询以 context=None 调用：on_resolver 动作与候选写回全部跳过。
+    action = _RecordingAction()
+    upstream = _FakeResolver("a", _answer_response("a"))
+    resolver = _make(
+        ["a"],
+        _FakeManager([upstream]),
+        action_names=["checker"],
+        actions=_ActionManager(action),
+    )
+    context = _context()
+    result = await resolver.query(context.request, context)
+    assert result.upstream == "a"
+    assert len(action.on_resolver_calls) == 1
+    assert action.on_resolver_calls[0][0] is context
+    sub_result = await resolver.query(_context().request, None)
+    assert sub_result.upstream == "a"
+    assert len(action.on_resolver_calls) == 1
