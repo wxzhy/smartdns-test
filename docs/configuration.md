@@ -173,6 +173,24 @@ UDP 回包会遵循客户端声明的 EDNS payload；没有 EDNS 时上限为 51
 
 分帧与 DNS over TCP 相同（2 字节长度前缀），收发复用 `dns.asyncquery.tcp`。握手由内置的 utls（BoringSSL）驱动，连接池健康检查为非破坏性 `MSG_PEEK`（peek 到 TLS 密文视为存活）。
 
+### DNSCrypt
+
+```yaml
+- name: dnscrypt-cryptostorm
+  type: dnscrypt
+  stamp: sdns://AQcAAAAAAAAADTk0LjE5OC40MS4yMzUgMTNyrVlWMsJBa4cvCY-FG925ZShMbL6aTxkJZDDbqVoeMi5kbnNjcnlwdC1jZXJ0LmNyeXB0b3N0b3JtLmlz
+  timeout: 5
+  tcp_only: false
+```
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `stamp` | 必填 | `sdns://` DNSCrypt stamp，包含地址（端口省略时默认 443）、提供者名称与 Ed25519 公钥；配置加载期解析，非法格式直接报错 |
+| `tcp_only` | false | 强制所有查询走 TCP |
+| `pool_size` | 0 | TCP 连接池大小：0 表示每次查询新建连接；大于 0 时按 Worker 创建连接池复用 TCP 连接，空闲连接上有残留字节（上次交换异常中断）时重建 |
+
+协议实现为当前通用的 DNSCrypt 协议 2（X25519 共享密钥 + XChaCha20-Poly1305，PyNaCl），仅接受 es_version=2 证书。启动时向上游自身 `地址:端口` 发送普通 DNS TXT 查询获取证书（UDP 失败或截断回退 TCP），选取 serial 最高的有效证书；证书在启动时获取一次，过期需重启刷新。普通查询走 UDP，应答 TC 时抛 `Truncated` 由 dnspython 自动以 `max_size=True` 改走 TCP。加密查询的 DNS ID 恒为 0，应答解密时校验响应 nonce 与客户端 nonce 匹配（回放防护）。stamp 可从解析器提供方获取，或使用 dnscrypt 公共解析器列表中的现成值。TCP 连接池（`pool_size > 0`）复用加密通道的 TCP 连接；因查询按帧精确收发，空闲连接上若残留字节即视为上次交换异常中断，获取时直接重建连接。
+
 ### curl DoH
 
 ```yaml

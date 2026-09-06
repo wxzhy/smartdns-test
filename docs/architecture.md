@@ -26,7 +26,7 @@ smartdns/
 │   ├── master.py           监听器、全局缓存、Worker 调度与停机
 │   └── worker.py           单请求路由处理链与组件生命周期
 ├── listeners/              面向客户端的 UDP/TCP DNS 监听
-├── nameservers/            单个底层上游：UDP、TCP、TLS、curl DoH
+├── nameservers/            单个底层上游：UDP、TCP、TLS、DNSCrypt、curl DoH
 ├── resolvers/              解析策略：aiodns、plain、concurrent
 ├── routing/                路由、匹配与 Geo 数据查询
 ├── actions/                请求前及响应后的加工动作
@@ -200,6 +200,7 @@ Nameserver 代表 dnspython 可调用的一台底层上游，只被 `plain` Reso
 | `udp` | `UDPNameserver` | 每次查询创建 connected UDP socket；`repeat` 控制重复发包次数；`use_tricks` 最多多收几次并按报文特征过滤明显异常包；上游返回 `TC=1` 时由 dnspython 触发对同一地址的 TCP 重试 |
 | `tcp` | `TCPNameserver` | 普通 DNS over TCP；`pool_size > 0` 时使用连接池复用连接；`use_tricks` 尝试非阻塞 OOB 前缀发送，失败时回退完整报文的普通异步发送 |
 | `tls` | `TLSNameserver` | DNS over TLS：utls/BoringSSL 握手，`fingerprint` 指定 ClientHello 伪装预设（缺省 `chrome:stable`，null 为标准握手）；`pool_size > 0` 时用连接池复用握手完成的加密连接，健康检查沿用底层 TCP socket 的 `MSG_PEEK`；分帧与 DNS over TCP 相同，复用 `dns.asyncquery.tcp` |
+| `dnscrypt` | `DNSCryptNameserver` | DNSCrypt 协议 2（X25519 + XChaCha20-Poly1305，PyNaCl），配置为 `sdns://` stamp（地址、端口省略时默认 443、提供者名称与 Ed25519 公钥均在 stamp 内）；启动时经上游自身端点的明文 TXT 查询取证书并选 serial 最高的 es2 证书；UDP 应答 TC 抛 `Truncated` 由 dnspython 以 `max_size=True` 重调改走 TCP（2 字节分帧，`pool_size > 0` 时经连接池复用，残留字节的脏连接获取时重建）；应答解密校验响应 nonce 与回放防护 |
 | `curl` | `CurlNameserver` | 使用独占的 curl-cffi AsyncSession 发送 DoH GET/POST；可改 Host、证书验证并请求 ECH 配置；`fingerprint` 指定 curl-cffi 指纹模拟目标（缺省 chrome，null 不模拟），未知值在配置加载期拒绝 |
 
 curl 会话由各 CurlNameserver 独占，避免不同 DoH 上游共享并修改同一个 ECH 会话配置。`client.hosts` 会转换为 curl `RESOLVE`，仅为这些 HTTP 请求提供静态主机映射。

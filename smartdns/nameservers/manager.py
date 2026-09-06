@@ -5,12 +5,14 @@ from loguru import logger
 
 from smartdns.models.nameserver import (
     CurlNameserverConfig,
+    DNSCryptNameserverConfig,
     NameserverConfig,
     TCPNameserverConfig,
     TLSNameserverConfig,
     UDPNameserverConfig,
 )
 from smartdns.nameservers.curl import CurlNameserver
+from smartdns.nameservers.dnscrypt import DNSCryptNameserver
 from smartdns.nameservers.tcp import TCPNameserver
 from smartdns.nameservers.tls import TLSNameserver
 from smartdns.nameservers.udp import UDPNameserver
@@ -34,6 +36,8 @@ class NameserverManager:
                         nameserver: BaseNameserver = TCPNameserver(config=config)
                     case TLSNameserverConfig():
                         nameserver = TLSNameserver(config=config)
+                    case DNSCryptNameserverConfig():
+                        nameserver = DNSCryptNameserver(config=config)
                     case UDPNameserverConfig():
                         nameserver = UDPNameserver(config=config)
                     case CurlNameserverConfig():

@@ -8,6 +8,7 @@ from pydantic import Field, field_validator
 from pydantic.networks import HttpUrl, IPvAnyAddress
 
 from smartdns.models.rule import StrictModel
+from smartdns.nameservers._dnscrypt import parse_stamp
 
 
 class BaseNameserverConfig(StrictModel):
@@ -59,6 +60,26 @@ class TLSNameserverConfig(AddressNameserverConfig):
     pool_size: int = Field(default=0, ge=0, description="连接池大小")
 
 
+class DNSCryptNameserverConfig(BaseNameserverConfig):
+    """DNSCrypt（协议 2，XChaCha20-Poly1305）Nameserver 配置。"""
+
+    type: Literal["dnscrypt"]
+    stamp: str = Field(
+        description="DNSCrypt sdns:// stamp（含地址、端口、提供者名称与 Ed25519 公钥）"
+    )
+    tcp_only: bool = Field(default=False, description="是否强制使用 TCP")
+    pool_size: int = Field(
+        default=0, ge=0, description="TCP 连接池大小（复用加密通道的 TCP 连接）"
+    )
+
+    @field_validator("stamp")
+    @classmethod
+    def check_stamp(cls, value: str) -> str:
+        """配置加载期解析 stamp，提前暴露格式错误。"""
+        parse_stamp(value)
+        return value
+
+
 class CurlNameserverConfig(BaseNameserverConfig):
     """Curl Nameserver 配置。"""
 
@@ -96,6 +117,7 @@ NameserverConfig = Annotated[
     UDPNameserverConfig
     | TCPNameserverConfig
     | TLSNameserverConfig
+    | DNSCryptNameserverConfig
     | CurlNameserverConfig,
     Field(discriminator="type"),
 ]

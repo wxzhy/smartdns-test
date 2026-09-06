@@ -105,6 +105,15 @@ nameservers:
     fingerprint: chrome:stable
     verify: true
     pool_size: 4
+  # DNSCrypt 上游（协议 2，XChaCha20-Poly1305）：stamp 来自解析器提供方或 dnscrypt
+  # 公共解析器列表，包含地址（端口省略时默认 443）、提供者名称与 Ed25519 公钥；
+  # 启动时自动获取证书；tcp_only 为 true 时强制走 TCP；pool_size 同 TCP 上游。
+  - name: dnscrypt-cryptostorm
+    type: dnscrypt
+    stamp: sdns://AQcAAAAAAAAADTk0LjE5OC40MS4yMzUgMTNyrVlWMsJBa4cvCY-FG925ZShMbL6aTxkJZDDbqVoeMi5kbnNjcnlwdC1jZXJ0LmNyeXB0b3N0b3JtLmlz
+    timeout: 5
+    tcp_only: false
+    pool_size: 2
   # curl DoH 上游：ech 为 true 时启用 curl 自动 ECH；false 不设置 ECH；
   # 字符串时先经 client.resolver 查询该域名的 HTTPS 记录并提取 ECHConfig。
   # fingerprint 为 curl-cffi 指纹模拟目标（如 chrome/chrome131/safari/firefox），
