@@ -96,12 +96,15 @@ class HTTPClient:
         return entries
 
     def create_session(
-        self, extra_options: dict[CurlOpt, object] | None = None
+        self,
+        extra_options: dict[CurlOpt, object] | None = None,
+        impersonate: str | None = "chrome",
     ) -> AsyncSession:
         """创建一个独立的 AsyncSession。
 
         每个 CurlNameserver 各持一个，避免共享会话被逐请求修改 curl_options[ECH]
-        导致的并发竞态与跨上游污染。
+        导致的并发竞态与跨上游污染；impersonate 指定 TLS/HTTP2 指纹模拟目标，
+        None 表示不模拟。
         """
         opt = self._base_curl_options()
         if extra_options:
@@ -111,7 +114,7 @@ class HTTPClient:
             max_clients=self.config.max_clients,
             http_version=CurlHttpVersion.V2TLS,
             default_headers=True,
-            impersonate="chrome",
+            impersonate=impersonate,
             curl_options=opt,
         )
 

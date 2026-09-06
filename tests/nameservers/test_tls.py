@@ -384,6 +384,20 @@ async def test_start_builds_context_without_verify() -> None:
     await nameserver.stop()
 
 
+async def test_default_fingerprint_is_chrome_stable() -> None:
+    # 未配置 fingerprint 时默认以 chrome:stable 预设伪装 ClientHello。
+    config = TLSNameserverConfig(
+        name="t", type="tls", address="dns.google", verify=False
+    )
+    assert config.fingerprint == "chrome:stable"
+    nameserver = TLSNameserver(config)
+    await nameserver.start()
+    context = nameserver._ssl_context
+    assert context is not None
+    assert context.fingerprint is not None
+    await nameserver.stop()
+
+
 async def test_start_creates_pool_and_stop_closes() -> None:
     config = TLSNameserverConfig(
         name="t", type="tls", address="dns.google", pool_size=2

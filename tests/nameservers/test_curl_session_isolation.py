@@ -20,7 +20,7 @@ class _FakeClient:
     def __init__(self) -> None:
         self.sessions: list[object] = []
 
-    def create_session(self, extra_options=None) -> object:
+    def create_session(self, extra_options=None, impersonate="chrome") -> object:
         session = object()
         self.sessions.append(session)
         return session

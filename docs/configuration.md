@@ -167,7 +167,7 @@ UDP 回包会遵循客户端声明的 EDNS payload；没有 EDNS 时上限为 51
 |---|---|---|
 | `port` | 853 | DoT 标准端口 |
 | `server_name` | 域名地址取地址本身；IP 为空 | TLS SNI 与证书验证锚点；IP 地址不发 SNI（RFC 6066） |
-| `fingerprint` | null | utls 指纹预设（`chrome:131/142/146/148/150/stable`），伪装浏览器 ClientHello；缺省为标准 ClientHello |
+| `fingerprint` | chrome:stable | utls 指纹预设（`chrome:131/142/146/148/150/stable`），伪装浏览器 ClientHello；`null` 表示标准 ClientHello |
 | `verify` | true | 证书校验；`address` 为 IP 且未配 `server_name` 时开启校验会在启动时报错 |
 | `pool_size` | 0 | 同 TCP：0 表示每次查询新建连接并握手，大于 0 时按 Worker 创建连接池复用握手完成的加密连接 |
 
@@ -193,6 +193,7 @@ UDP 回包会遵循客户端声明的 EDNS payload；没有 EDNS 时上限为 51
 | `want_get` | false | false 使用 `application/dns-message` POST，true 使用 GET `?dns=` |
 | `verify` | true | 目标 HTTPS 证书验证 |
 | `ech` | true | 字符串时从该域名查询 ECHConfig；布尔值不触发显式查询 |
+| `fingerprint` | chrome | curl-cffi 指纹模拟目标（如 `chrome`、`chrome131`、`safari`、`firefox`），伪装 TLS/HTTP2 ClientHello；`null` 表示不模拟。未知值在配置加载期报错 |
 
 ## 6. Resolver
 

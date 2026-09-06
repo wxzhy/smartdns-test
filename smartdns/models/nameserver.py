@@ -1,6 +1,10 @@
 from typing import Annotated, Literal
 
-from pydantic import Field
+from curl_cffi.requests.impersonate import (
+    BrowserType,
+    resolve_latest_browser_type,
+)
+from pydantic import Field, field_validator
 from pydantic.networks import HttpUrl, IPvAnyAddress
 
 from smartdns.models.rule import StrictModel
@@ -48,8 +52,8 @@ class TLSNameserverConfig(AddressNameserverConfig):
         description="TLS SNI 与证书验证锚点；域名地址缺省取自身，IP 不发送 SNI",
     )
     fingerprint: str | None = Field(
-        default=None,
-        description="utls TLS 指纹预设（如 chrome:stable）；缺省为标准 ClientHello",
+        default="chrome:stable",
+        description="utls TLS 指纹预设（如 chrome:stable）；null 表示标准 ClientHello",
     )
     verify: bool = Field(default=True, description="是否验证 TLS 证书")
     pool_size: int = Field(default=0, ge=0, description="连接池大小")
@@ -66,6 +70,26 @@ class CurlNameserverConfig(BaseNameserverConfig):
     ech: bool | str = Field(
         default=True, description="是否使用ECH请求，或指定ECH密钥的域名"
     )
+    fingerprint: str | None = Field(
+        default="chrome",
+        description="curl-cffi 指纹模拟目标（如 chrome131、safari）；null 表示不模拟",
+    )
+
+    @field_validator("fingerprint")
+    @classmethod
+    def check_fingerprint(cls, value: str | None) -> str | None:
+        """按 curl-cffi 自身的解析规则在配置加载期校验指纹目标。
+
+        合法值为 BrowserType 枚举成员（版本化目标如 chrome131）或
+        resolve_latest_browser_type 认识的别名（chrome/safari/firefox 等）。
+        """
+        if value is None:
+            return value
+        if value in {item.value for item in BrowserType}:
+            return value
+        if resolve_latest_browser_type(value) != value:
+            return value
+        raise ValueError(f"未知的 curl-cffi 指纹 {value!r}")
 
 
 NameserverConfig = Annotated[

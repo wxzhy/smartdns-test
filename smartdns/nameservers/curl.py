@@ -24,6 +24,7 @@ class CurlNameserver(BaseNameserver):
         self.want_get = config.want_get
         self.ech = config.ech
         self.verify = config.verify
+        self.fingerprint = config.fingerprint
         self._curl: AsyncSession | None = None
         self._client = client
 
@@ -36,14 +37,16 @@ class CurlNameserver(BaseNameserver):
         resolve = self._client.resolve_entries(self.port) if self.port else []
         if resolve:
             options = {**(options or {}), CurlOpt.RESOLVE: resolve}
-        self._curl = self._client.create_session(options)
+        self._curl = self._client.create_session(options, impersonate=self.fingerprint)
         logger.info(
-            "Curl解析器 {} 已启动，目标: {}, Host: {}, want_get: {}, ech: {}",
+            "Curl解析器 {} 已启动，目标: {}, Host: {}, want_get: {}, ech: {}, "
+            "fingerprint: {}",
             self.name,
             self.url,
             self.host,
             self.want_get,
             self.ech,
+            self.fingerprint,
         )
 
     async def stop(self):
