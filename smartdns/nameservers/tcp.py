@@ -8,7 +8,11 @@ from anyio import connect_tcp, fail_after
 from generic_connection_pool.asyncio import ConnectionPool
 from loguru import logger
 
-from smartdns.nameservers._pool import TcpEndpoint, TCPStreamConnectionManager
+from smartdns.nameservers._pool import (
+    HealthCheckedTCPConnectionManager,
+    TcpEndpoint,
+    TrackedStream,
+)
 from smartdns.nameservers._socket import AnyioStreamSocket
 from smartdns.nameservers.base import BaseAddressNameserver
 
@@ -24,7 +28,7 @@ class TCPNameserver(BaseAddressNameserver):
     def __init__(self, config: TCPNameserverConfig):
         super().__init__(config)
         self._pool_size = config.pool_size
-        self._pool: ConnectionPool[TcpEndpoint, SocketStream] | None = None
+        self._pool: ConnectionPool[TcpEndpoint, TrackedStream] | None = None
         self.host = config.address
         self.port = config.port
         self._use_tricks = config.use_tricks
@@ -36,7 +40,7 @@ class TCPNameserver(BaseAddressNameserver):
         """启动 TCP 上游；pool_size>0 时创建连接池以复用连接。"""
         if self._pool_size:
             self._pool = ConnectionPool(
-                TCPStreamConnectionManager(connect_timeout=self.timeout),
+                HealthCheckedTCPConnectionManager(connect_timeout=self.timeout),
                 min_idle=1,
                 max_size=self._pool_size,
                 total_max_size=self._pool_size,
@@ -51,7 +55,7 @@ class TCPNameserver(BaseAddressNameserver):
 
     async def _query_on_stream(
         self,
-        raw_sock: SocketStream,
+        raw_sock: TrackedStream | SocketStream,
         request: dns.message.QueryMessage,
         timeout: float,
         one_rr_per_rrset: bool,
@@ -93,13 +97,19 @@ class TCPNameserver(BaseAddressNameserver):
                     endpoint, timeout=effective_timeout
                 ) as raw_sock:
                     remaining = max(deadline - monotonic(), 0.1)
-                    return await self._query_on_stream(
-                        raw_sock,
-                        request,
-                        remaining,
-                        one_rr_per_rrset,
-                        ignore_trailing,
-                    )
+                    try:
+                        return await self._query_on_stream(
+                            raw_sock,
+                            request,
+                            remaining,
+                            one_rr_per_rrset,
+                            ignore_trailing,
+                        )
+                    except Exception:
+                        # 交换中途失败（如超时打断半读应答）后帧对齐不可信，
+                        # 标记脏连接，归还池后由健康检查在下次获取时重建。
+                        raw_sock.healthy = False
+                        raise
             # 无池路径：建连与查询均计入 effective_timeout，黑洞地址不会挂到 OS 级超时。
             deadline = monotonic() + effective_timeout
             with fail_after(effective_timeout):
