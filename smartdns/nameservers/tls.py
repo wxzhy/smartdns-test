@@ -121,7 +121,7 @@ class TLSNameserver(BaseAddressNameserver):
         one_rr_per_rrset: bool = False,
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
-        # 传入 timeout 为剩余 lifetime；0 表示已到期，不回退到完整配置超时。
+        # 传入 timeout 为剩余 lifetime；0/None（未设置或已到期）回退到完整配置超时。
         effective_timeout = (
             timeout if timeout is not None and timeout > 0 else self.timeout
         )
@@ -135,13 +135,20 @@ class TLSNameserver(BaseAddressNameserver):
                     endpoint, timeout=effective_timeout
                 ) as conn:
                     remaining = max(deadline - monotonic(), 0.1)
-                    return await self._query_on_stream(
-                        conn,
-                        request,
-                        remaining,
-                        one_rr_per_rrset,
-                        ignore_trailing,
-                    )
+                    try:
+                        return await self._query_on_stream(
+                            conn,
+                            request,
+                            remaining,
+                            one_rr_per_rrset,
+                            ignore_trailing,
+                        )
+                    except Exception:
+                        # 交换中途失败（如超时打断半条 TLS 记录）后记录层
+                        # 对齐不可信，标记脏连接，归还池后由健康检查在
+                        # 下次获取时重建。
+                        conn.healthy = False
+                        raise
             # 无池路径：建连、握手与查询均计入 effective_timeout，黑洞地址
             # 不会挂到 OS 级超时。
             ssl_context = self._ssl_context or self._build_ssl_context()
@@ -164,5 +171,5 @@ class TLSNameserver(BaseAddressNameserver):
             finally:
                 await conn.aclose()
         except Exception:
-            logger.exception("TLS 上游 {} 查询失败", self.name)
+            logger.warning("TLS 上游 {} 查询失败", self.name)
             raise

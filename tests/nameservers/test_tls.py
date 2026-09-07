@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 import anyio
 import dns.asyncbackend
 import dns.asyncquery
+import dns.exception
 import dns.message
 import dns.rcode
 import pytest
@@ -421,3 +422,126 @@ async def test_nameserver_manager_registers_tls() -> None:
         assert nameserver.kind() == "tls"
     finally:
         await manager.stop_all()
+
+
+class _HalfFrameSSLObject:
+    """首条连接的假密码层：read 第一次返回半帧应答，之后永远 WantRead。
+
+    模拟超时打断半条 TLS 记录：半帧明文已读入用户态缓冲（bio_in），
+    MSG_PEEK 看不到，脏判定只能依赖交换方的 healthy 标记。
+    """
+
+    def __init__(self, bio_in: MemoryBIO, bio_out: MemoryBIO, response: bytes):
+        self._bio_in = bio_in
+        self._bio_out = bio_out
+        self._response = response
+        self.handshake_done = False
+
+    def do_handshake(self) -> bool:
+        self.handshake_done = True
+        return True
+
+    def write(self, data: bytes) -> int:
+        self._bio_out.write(data)
+        return len(data)
+
+    def read(self, n: int) -> bytes:
+        if self._response:
+            data, self._response = self._response[:n], self._response[n:]
+            return data
+        if self._bio_in.eof:
+            raise stdlib_ssl.SSLEOFError
+        raise stdlib_ssl.SSLWantReadError
+
+
+async def test_interrupted_exchange_rebuilds_tls_connection(monkeypatch) -> None:
+    """交换中途超时的池内 TLS 连接被标记脏并在下次获取时重建，第二次成功。"""
+    query = dns.message.make_query("example.com.", "A")
+    wire = dns.message.make_response(query).to_wire()
+    half = struct.pack("!H", len(wire)) + wire[: len(wire) // 2]
+    state = {"connections": 0, "exchanges": 0}
+
+    async def handle(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        state["connections"] += 1
+        first = state["connections"] == 1
+        try:
+            header = await reader.readexactly(2)
+            (length,) = struct.unpack("!H", header)
+            await reader.readexactly(length)
+            if first:
+                writer.write(half)  # 只发半帧应答后悬挂
+            else:
+                resp = dns.message.make_response(query).to_wire()
+                writer.write(struct.pack("!H", len(resp)) + resp)
+                state["exchanges"] += 1
+            await writer.drain()
+            if first:
+                await reader.read()  # 保持连接，等客户端超时断开经 EOF 退出
+        except asyncio.IncompleteReadError, ConnectionError:
+            pass
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        created: list[TLSStreamConnection] = []
+
+        def fake_start_tls(transport, ssl_context, server_hostname):
+            bio_in = utls.MemoryBIO()
+            bio_out = utls.MemoryBIO()
+            if len(created) == 0:
+                fake = _HalfFrameSSLObject(bio_in, bio_out, half)
+            else:
+                fake = _FakeSSLObject(bio_in, bio_out)
+            conn = TLSStreamConnection(
+                transport, cast("SSLObject", fake), bio_in, bio_out
+            )
+            created.append(conn)
+            return conn
+
+        # start_tls 在 connect_tls 内被调用，握手在 fake 上瞬间完成。
+        async def fake_start_tls_async(*args, **kwargs):
+            return fake_start_tls(*args, **kwargs)
+
+        monkeypatch.setattr("smartdns.nameservers._tls.start_tls", fake_start_tls_async)
+
+        config = TLSNameserverConfig(
+            name="t",
+            type="tls",
+            address="127.0.0.1",
+            port=port,
+            timeout=0.3,
+            verify=False,
+            pool_size=1,
+        )
+        nameserver = TLSNameserver(config)
+        await nameserver.start()
+        with pytest.raises(dns.exception.Timeout):
+            await nameserver.async_query(
+                query,
+                0.3,
+                None,
+                0,
+                False,
+                cast("dns.asyncbackend.Backend", object()),
+            )
+        response = await nameserver.async_query(
+            query,
+            2.0,
+            None,
+            0,
+            False,
+            cast("dns.asyncbackend.Backend", object()),
+        )
+        assert response.rcode() == dns.rcode.NOERROR
+        await nameserver.stop()
+        # 超时打断的连接未复用：第二次查询在新连接上完成。
+        assert state["connections"] == 2
+        assert state["exchanges"] == 1
+        assert len(created) == 2
+        assert created[0].healthy is False
+    finally:
+        server.close()

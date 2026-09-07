@@ -44,6 +44,10 @@ class TLSStreamConnection:
         self._ssl_object = ssl_object
         self._bio_in = bio_in
         self._bio_out = bio_out
+        # 池化健康标记：交换异常（如超时打断半条 TLS 记录）时由使用方置
+        # False。半条记录的密文已进入 bio_in（用户态），MSG_PEEK 不可见，
+        # 脏判定必须由交换方显式标记；记录层错位后连接无法恢复。
+        self.healthy = True
 
     async def handshake(self) -> None:
         await self._drive(self._ssl_object.do_handshake)
@@ -165,12 +169,14 @@ class TLSStreamConnectionManager(
     async def check_aliveness(
         self, endpoint: TcpEndpoint, conn: TLSStreamConnection
     ) -> bool:
+        # 交换方标记的脏连接（半条 TLS 记录已读入用户态缓冲）优先判死。
+        if not conn.healthy:
+            return False
         raw = conn.extra(SocketAttribute.raw_socket, None)
         if raw is None:
             return False
         # asyncio 后端返回 TransportSocket，其他后端可能直接返回标准 socket。
-        # peek 的是 TLS 密文：对端关闭返回 b""，无数据抛 BlockingIOError（存活），
-        # 已缓冲 close_notify 的连接会在下次查询失败后由池回收。
+        # peek 的是 TLS 密文：对端关闭返回 b""，无数据抛 BlockingIOError（存活）。
         probe = getattr(raw, "_sock", raw)
         try:
             return probe.recv(1, socket.MSG_PEEK) != b""
