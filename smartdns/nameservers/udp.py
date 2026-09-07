@@ -49,7 +49,7 @@ class UDPNameserver(BaseAddressNameserver):
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
         try:
-            # 传入 timeout 为剩余 lifetime；0 表示已到期，不回退到完整配置超时。
+            # 传入 timeout 为剩余 lifetime；0/None（未设置或已到期）回退到完整配置超时。
             effective_timeout = (
                 timeout if timeout is not None and timeout > 0 else self.timeout
             )
@@ -87,5 +87,5 @@ class UDPNameserver(BaseAddressNameserver):
                     raise_on_truncation=True,
                 )
         except Exception:
-            logger.exception("UDP解析器 {} 查询失败", self.name)
+            logger.warning("UDP 上游 {} 查询失败", self.name)
             raise

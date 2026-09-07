@@ -117,7 +117,7 @@ class CurlNameserver(BaseNameserver):
                     verify=self.verify,
                 )
         except Exception:
-            logger.exception("Curl解析器 {} 请求失败", self.name)
+            logger.warning("Curl 上游 {} 请求失败", self.name)
             raise
         if result.status_code != 200:
             raise ValueError(

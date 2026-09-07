@@ -83,7 +83,7 @@ class TCPNameserver(BaseAddressNameserver):
         one_rr_per_rrset: bool = False,
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
-        # 传入 timeout 为剩余 lifetime；0 表示已到期，不回退到完整配置超时。
+        # 传入 timeout 为剩余 lifetime；0/None（未设置或已到期）回退到完整配置超时。
         effective_timeout = (
             timeout if timeout is not None and timeout > 0 else self.timeout
         )
@@ -125,5 +125,5 @@ class TCPNameserver(BaseAddressNameserver):
             finally:
                 await raw_sock.aclose()
         except Exception:
-            logger.exception("TCP 上游 {} 查询失败", self.name)
+            logger.warning("TCP 上游 {} 查询失败", self.name)
             raise
