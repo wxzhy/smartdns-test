@@ -31,6 +31,9 @@ class StaticActionConfig(BaseActionConfig):
         default_factory=lambda: {IPv6Address("::1")},
         description="静态返回的 IPv6 地址",
     )
+    ttl: int = Field(
+        default=86400, ge=0, description="静态应答的 TTL（秒），默认 86400"
+    )
 
 
 class ReplaceActionMap(StrictModel):
@@ -90,6 +93,9 @@ class FallbackMap(StrictModel):
     )
     ipv6: set[IPv6Address] | None = Field(
         default=None, description="静态返回的 IPv6 地址"
+    )
+    ttl: int = Field(
+        default=86400, ge=0, description="静态应答的 TTL（秒），默认 86400"
     )
 
 

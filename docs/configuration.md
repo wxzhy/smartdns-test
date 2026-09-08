@@ -321,9 +321,10 @@ match_ip:
   type: static
   ipv4: [0.0.0.0]
   ipv6: ["::"]
+  ttl: 86400
 ```
 
-放入路由 `before`；A/AAAA 之外的类型会得到空 NOERROR。
+放入路由 `before`；A/AAAA 之外的类型会得到空 NOERROR。`ttl` 为静态应答的 TTL（秒），默认 86400。
 
 ### replace
 
@@ -389,9 +390,10 @@ match_ip:
         domain_include: [google]
       ipv4: [203.0.113.10]
       ipv6: ["2001:db8::10"]
+      ttl: 86400
 ```
 
-Fallback 依赖此前的 Speedcheck 采样；只有所有候选测速均失败时才替换。
+Fallback 依赖此前的 Speedcheck 采样；当应答为 NOERROR 但没有任何 IP（NODATA 空应答），或所有候选测速均失败时，替换为映射中的静态地址，TTL 用映射的 `ttl`（秒，默认 86400）。
 
 ### filter
 

@@ -1,8 +1,10 @@
 """PlainResolver NXDOMAIN 应答提取与应答缓存行为测试。"""
 
+from time import time
 from typing import TYPE_CHECKING, cast
 
 import dns.message
+import pytest
 from anyio import Event, create_task_group
 from dns.name import from_text
 from dns.rcode import Rcode
@@ -17,7 +19,6 @@ from smartdns.resolvers.plain import PlainResolver
 from smartdns.utils.cache_async import AnswerCache
 
 if TYPE_CHECKING:
-    import pytest
     from dns.message import QueryMessage
 
     from smartdns.nameservers.client import HTTPClient
@@ -206,3 +207,85 @@ async def test_cache_disabled_with_zero_cache_size(
     await resolver.query(request)
 
     assert counting.calls == 2
+
+
+def _nodata_message(qname: str, with_soa: bool = False) -> dns.message.Message:
+    text = (
+        f"id 1\nopcode QUERY\nrcode NOERROR\nflags QR AA RA\n;QUESTION\n{qname} IN A\n"
+    )
+    if with_soa:
+        text += (
+            f";AUTHORITY\n{qname} 3600 IN SOA "
+            "ns.example.com. hostmaster.example.com. 1 2 3 4 300\n"
+        )
+    return dns.message.from_text(text)
+
+
+async def test_nodata_without_soa_gets_bounded_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """无 SOA 的 NODATA 经 nodata_ttl 钉住过期时刻，不再取 dnspython 的 MAX_TTL。"""
+    resolver = _resolver(cache_size=10)
+    request = _request("nodata.example.com.")
+    counting = _CountingResolve(
+        [
+            Answer(
+                from_text("nodata.example.com."),
+                RdataType.A,
+                RdataClass.IN,
+                cast("QueryMessage", _nodata_message("nodata.example.com.")),
+            )
+        ]
+    )
+    monkeypatch.setattr(resolver, "resolve", counting)
+
+    response = await resolver.query(request)
+
+    assert response.rcode == Rcode.NOERROR
+    assert response.ans is not None
+    # MAX_TTL 约 136 年；clamp 后应落在 nodata_ttl（默认 300）± 容差内。
+    assert response.ans.expiration - time() == pytest.approx(300, abs=5)
+
+
+async def test_nodata_with_soa_keeps_soa_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """携带 SOA 的 NODATA 按 min(SOA TTL, SOA.minimum) 过期，不被 clamp。"""
+    resolver = _resolver(cache_size=10)
+    request = _request("nodata-soa.example.com.")
+    counting = _CountingResolve(
+        [
+            Answer(
+                from_text("nodata-soa.example.com."),
+                RdataType.A,
+                RdataClass.IN,
+                cast(
+                    "QueryMessage",
+                    _nodata_message("nodata-soa.example.com.", with_soa=True),
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(resolver, "resolve", counting)
+
+    response = await resolver.query(request)
+
+    assert response.rcode == Rcode.NOERROR
+    assert response.ans is not None
+    # SOA ttl=3600、minimum=300 → 期望 300 而非 nodata_ttl。
+    assert response.ans.expiration - time() == pytest.approx(300, abs=5)
+
+
+async def test_answered_query_keeps_rrset_expiration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """正常应答（有 rrset）不经 NODATA clamp，TTL 跟随 rrset。"""
+    resolver = _resolver(cache_size=10)
+    request = _request("answered.example.com.")
+    counting = _CountingResolve([_answer("answered.example.com.", ttl=60)])
+    monkeypatch.setattr(resolver, "resolve", counting)
+
+    response = await resolver.query(request)
+
+    assert response.ans is not None
+    assert response.ans.expiration - time() == pytest.approx(60, abs=5)

@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from ipaddress import IPv4Address, IPv6Address
+from time import time
 from typing import TYPE_CHECKING
 
 from dns.rdatatype import RdataType
@@ -56,19 +57,31 @@ def replace_answer_rrset(
         answer.nameserver,
         answer.port,
     )
-    copied.expiration = answer.expiration
+    copied.expiration = _replacement_expiration(copied)
     return Response.from_answer(copied, upstream=upstream or response.upstream)
 
 
 def replace_response_ip(
-    response: Response, ips: set[IPv4Address] | set[IPv6Address]
+    response: Response,
+    ips: set[IPv4Address] | set[IPv6Address],
+    ttl: int | None = None,
 ) -> Response:
-    """用静态 IP 集合返回新的响应；空集合时保留原响应。"""
+    """用静态 IP 集合返回新的响应；空集合时保留原响应。
+
+    NODATA 空应答（无 rrset）也允许替换：以请求的 qname/rdtype 新建
+    RRset，供 fallback 之类的静态回退从空应答产出有记录的应答。
+    ttl 为 None 时沿用原 rrset 的 TTL（NODATA 无 rrset 则为 0）。
+    """
     answer = response.ans
-    if answer is None or answer.rrset is None or not ips:
+    if answer is None or not ips:
         return response
-    rrset = RRset(answer.rrset.name, answer.rrset.rdclass, answer.rrset.rdtype)
-    rrset.update_ttl(answer.rrset.ttl)
+    name = answer.qname
+    rdclass = answer.rdclass
+    rdtype = answer.rdtype
+    if ttl is None:
+        ttl = answer.rrset.ttl if answer.rrset is not None else 0
+    rrset = RRset(name, rdclass, rdtype)
+    rrset.update_ttl(ttl)
     for ip in ips:
         if answer.rdtype == RdataType.A and isinstance(ip, IPv4Address):
             rrset.add(A(rrset.rdclass, rrset.rdtype, str(ip)))
@@ -77,7 +90,45 @@ def replace_response_ip(
     if not rrset:
         # 记录类型与 IP 地址族不符时未产出任何记录，保留原应答。
         return response
+    if answer.rrset is None:
+        return _response_with_answer_rrset(response, rrset)
     return replace_answer_rrset(response, rrset)
+
+
+def _response_with_answer_rrset(response: Response, rrset: RRset) -> Response:
+    """NODATA 应答的替换：复制 Message 后在 answer 区注入新 RRset。"""
+    answer = response.ans
+    assert answer is not None
+    message = deepcopy(answer.response)
+    message.answer.append(deepcopy(rrset))
+    message.index = None  # ty: ignore[invalid-assignment]
+    copied = Answer(
+        answer.qname,
+        answer.rdtype,
+        answer.rdclass,
+        message,
+        answer.nameserver,
+        answer.port,
+    )
+    copied.expiration = _replacement_expiration(copied)
+    return Response.from_answer(copied, upstream=response.upstream)
+
+
+def _replacement_expiration(copied: Answer) -> float:
+    """替换后应答的缓存过期时刻：替换产生的 rrset 以其自身 TTL 从现在起算。
+
+    原 NODATA 无 SOA 的 expiration 是 dnspython 的 MAX_TTL（约 136 年），
+    原样继承会让静态替换结果在缓存中永不过期；带 SOA 负应答的较短
+    expiration 也被替换 rrset 的 TTL 覆盖（替换后权威的是新 rrset）。
+    """
+    now = time()
+    if copied.rrset is not None:
+        return now + copied.rrset.ttl
+    return min(copied.expiration, now + _MAX_REPLACEMENT_TTL)
+
+
+# 无记录替换兜底（理论不可达）：过期时刻不应超过常规上限。
+_MAX_REPLACEMENT_TTL = 86400
 
 
 def replace_response_ipinfo(

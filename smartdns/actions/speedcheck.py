@@ -1,8 +1,7 @@
 from threading import BoundedSemaphore
 from typing import TYPE_CHECKING
 
-from anyio import create_task_group
-from anyio.lowlevel import checkpoint
+from anyio import create_task_group, sleep
 from dns.rdatatype import RdataType
 from loguru import logger
 
@@ -15,6 +14,10 @@ if TYPE_CHECKING:
     from smartdns.models.action import SpeedcheckActionConfig
     from smartdns.models.context import Context, Response
 
+# 槽位占满时的等待间隔（秒）：线程信号量无跨线程通知，轮询之间让出事件循环，
+# 避免纯 checkpoint 自旋空转 CPU。
+_SLOT_POLL_INTERVAL = 0.05
+
 
 class _GlobalMeasureLimit:
     """在多个 Worker 事件循环之间共享的可取消并发限制。"""
@@ -23,8 +26,12 @@ class _GlobalMeasureLimit:
         self._semaphore = BoundedSemaphore(value)
 
     async def acquire(self) -> None:
-        while not self._semaphore.acquire(blocking=False):
-            await checkpoint()
+        # 跨线程 BoundedSemaphore 无事件循环级通知可用，轮询等待是刻意设计；
+        # sleep 间隔让出事件循环，避免纯 checkpoint 自旋空转 CPU。
+        while not self._semaphore.acquire(  # noqa: ASYNC110
+            blocking=False
+        ):
+            await sleep(_SLOT_POLL_INTERVAL)
 
     def release(self) -> None:
         self._semaphore.release()

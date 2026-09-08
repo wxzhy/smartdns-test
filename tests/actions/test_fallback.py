@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from dns.message import QueryMessage
 
 
-def _config() -> FallbackActionConfig:
+def _config(ttl: int = 86400) -> FallbackActionConfig:
     return FallbackActionConfig(
         name="fb",
         type="fallback",
@@ -27,6 +27,7 @@ def _config() -> FallbackActionConfig:
             FallbackMap(
                 match_name=RequestMatcher(domain_include={"google"}),
                 ipv4={IPv4Address("203.0.113.10")},
+                ttl=ttl,
             )
         ],
     )
@@ -45,6 +46,21 @@ def _a_response() -> Response:
         "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
         ";QUESTION\nwww.google.com. IN A\n;ANSWER\n"
         "www.google.com. 300 IN A 192.0.2.1\n"
+    )
+    answer = Answer(
+        from_text("www.google.com."),
+        RdataType.A,
+        RdataClass.IN,
+        cast("QueryMessage", msg),
+    )
+    return Response.from_answer(answer, upstream="test")
+
+
+def _nodata_response() -> Response:
+    """NOERROR 空应答（NODATA）：无 answer 记录、无 ip_infos。"""
+    msg = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
+        ";QUESTION\nwww.google.com. IN A\n"
     )
     answer = Answer(
         from_text("www.google.com."),
@@ -79,8 +95,53 @@ def test_fallback_does_not_mutate_shared_config() -> None:
 
 
 async def test_fallback_replaces_when_all_rtt_failed() -> None:
+    action = FallbackAction(_config(ttl=300))
+    context = _context(rtt=float("inf"))
+
+    await action.on_response(context)
+
+    assert context.response is not None
+    assert context.response.ip_list == ["203.0.113.10"]
+    # 静态回退的 TTL 用映射配置值，而非原应答的 300。
+    answer = context.response.ans
+    assert answer is not None
+    assert answer.rrset is not None
+    assert answer.rrset.ttl == 300
+
+
+async def test_fallback_default_ttl_is_one_day() -> None:
+    """未显式配置 ttl 时静态回退 TTL 为默认的 86400。"""
     action = FallbackAction(_config())
     context = _context(rtt=float("inf"))
+
+    await action.on_response(context)
+
+    assert context.response is not None
+    answer = context.response.ans
+    assert answer is not None
+    assert answer.rrset is not None
+    assert answer.rrset.ttl == 86400
+
+
+async def test_fallback_keeps_response_when_rtt_available() -> None:
+    action = FallbackAction(_config())
+    context = _context(rtt=10.0)
+    original = context.response
+
+    await action.on_response(context)
+
+    assert context.response is original
+
+
+async def test_fallback_replaces_when_nodata_without_ip() -> None:
+    """NOERROR 但无 IP（NODATA）视为没有可用 IP，回退到静态地址。"""
+    action = FallbackAction(_config())
+    context = Context(
+        worker_id=0,
+        request=_request(),
+        response=_nodata_response(),
+        ip_infos=None,
+    )
 
     await action.on_response(context)
 
@@ -88,9 +149,17 @@ async def test_fallback_replaces_when_all_rtt_failed() -> None:
     assert context.response.ip_list == ["203.0.113.10"]
 
 
-async def test_fallback_keeps_response_when_rtt_available() -> None:
-    action = FallbackAction(_config())
-    context = _context(rtt=10.0)
+async def test_fallback_keeps_nodata_when_no_map_matches() -> None:
+    """NODATA 但映射未命中（如域名不匹配）时保持原空应答。"""
+    config = _config()
+    config.map[0].match_name = RequestMatcher(domain_include={"nonexistent"})
+    action = FallbackAction(config)
+    context = Context(
+        worker_id=0,
+        request=_request(),
+        response=_nodata_response(),
+        ip_infos=None,
+    )
     original = context.response
 
     await action.on_response(context)

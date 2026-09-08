@@ -26,10 +26,12 @@ from nacl.bindings import (
     crypto_aead_xchacha20poly1305_ietf_encrypt,
     crypto_scalarmult,
 )
+from nacl.exceptions import CryptoError
 from nacl.public import PrivateKey
 from nacl.signing import SigningKey
 from nacl.utils import random as random_bytes
 
+import smartdns.nameservers.dnscrypt as dnscrypt_module
 from smartdns.models.nameserver import DNSCryptNameserverConfig
 from smartdns.nameservers._dnscrypt import (
     RESOLVER_MAGIC,
@@ -468,5 +470,75 @@ async def test_manager_registers_dnscrypt() -> None:
             assert nameserver.answer_port() == port
         finally:
             await manager.stop_all()
+    finally:
+        transport.close()
+
+
+async def test_cert_rotation_triggers_refresh_and_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """上游轮换证书后旧参数解密失败（MAC 校验不通过），应刷新证书并重试成功。"""
+    server = _FakeDnsCryptServer()
+    transport, port = await _start_udp(server)
+    try:
+        nameserver = await _make_nameserver(server, port)
+        old_serial = nameserver._cert.serial
+        # 服务端发布新证书（新 serial）；本地仍用旧证书参数，首轮解密失败。
+        server.certs = [(2, old_serial + 1, -100, 86400, False)]
+        real_decrypt = dnscrypt_module.decrypt_response
+        first_attempt = True
+
+        def flaky_decrypt(wire, key, client_nonce):
+            nonlocal first_attempt
+            if first_attempt:
+                first_attempt = False
+                raise CryptoError("MAC 校验失败：上游已用新证书应答")
+            return real_decrypt(wire, key, client_nonce)
+
+        monkeypatch.setattr(dnscrypt_module, "decrypt_response", flaky_decrypt)
+
+        response = await _query(nameserver)
+        assert response.answer[0][0].address == PADDED_ANSWER_IP
+        assert nameserver._cert.serial == old_serial + 1
+        await nameserver.stop()
+    finally:
+        transport.close()
+
+
+async def test_expiring_cert_refreshes_before_query() -> None:
+    """证书剩余寿命低于阈值时，查询前主动刷新获取新证书。"""
+    server = _FakeDnsCryptServer()
+    transport, port = await _start_udp(server)
+    try:
+        nameserver = await _make_nameserver(server, port)
+        old_serial = nameserver._cert.serial
+        # 把已安装证书的过期时刻改到阈值内（模拟临期），服务端同时发布新证书。
+        object.__setattr__(nameserver._cert, "expire", int(time()) + 60)
+        server.certs = [(2, old_serial + 1, -100, 86400, False)]
+
+        response = await _query(nameserver)
+        assert response.answer[0][0].address == PADDED_ANSWER_IP
+        assert nameserver._cert.serial == old_serial + 1
+        await nameserver.stop()
+    finally:
+        transport.close()
+
+
+async def test_cert_refresh_failure_keeps_old_cert() -> None:
+    """刷新失败（无有效证书）时沿用旧证书，重试用尽后向上抛错。"""
+    server = _FakeDnsCryptServer()
+    transport, port = await _start_udp(server)
+    try:
+        nameserver = await _make_nameserver(server, port)
+        old_cert = nameserver._cert
+        server.server_private = PrivateKey.generate()
+        # 服务端只发布坏签名证书：刷新拿不到有效证书。旧密钥加密的查询
+        # 在假服务器上无应答（解密失败被丢弃），最终按超时上抛。
+        server.certs = [(2, 99, -100, 86400, True)]
+
+        with pytest.raises(TimeoutError):
+            await _query(nameserver)
+        assert nameserver._cert is old_cert
+        await nameserver.stop()
     finally:
         transport.close()

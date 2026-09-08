@@ -181,13 +181,15 @@ actions:
     type: log
     text: dns-query
 
-  # before 阶段静态应答并终止路由；固定 TTL 86400，非 A/AAAA 返回空 NOERROR。
+  # before 阶段静态应答并终止路由；ttl 为应答 TTL（秒，默认 86400），
+  # 非 A/AAAA 返回空 NOERROR。
   - name: block
     type: static
     ipv4:
       - 0.0.0.0
     ipv6:
       - "::"
+    ttl: 86400
 
   # 替换 CDN IP：保留原 IP 在 prefixlen 之外的主机位，叠加到目标基址。
   # 例：原 192.0.2.42 + 基址 198.51.100.0 + ipv4_prefixlen 24 → 198.51.100.42。
@@ -223,8 +225,9 @@ actions:
         - cloudflare
     ech_domain: crypto.cloudflare.com
 
-  # 测速回退：所有候选测速均失败时以静态地址替换当前响应
-  # （依赖 speedcheck 已在 on_resolver 阶段采样；查询类型固定为 A/AAAA）。
+  # 测速回退：NOERROR 无 IP（NODATA）或所有候选测速均失败时，以静态地址
+  # 替换当前响应（依赖 speedcheck 已在 on_resolver 阶段采样；查询类型固定
+  # 为 A/AAAA；ttl 为静态应答 TTL 秒数，默认 86400）。
   - name: fallback-map
     type: fallback
     map:
@@ -235,6 +238,7 @@ actions:
           - 203.0.113.10
         ipv6:
           - "2001:db8::10"
+        ttl: 86400
 
   # 测速选优：on_resolver 阶段对候选 IP 并发 ICMP/TCP 探测（任一成功即取消其余），
   # on_response 阶段保留与最优 RTT 差不超过 threshold 的前 max_num 个地址。

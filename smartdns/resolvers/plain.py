@@ -1,6 +1,7 @@
 from time import time
 from typing import TYPE_CHECKING, cast
 
+import dns.rdatatype
 from dns.asyncresolver import Resolver
 from dns.edns import ECSOption
 from dns.rcode import Rcode
@@ -41,6 +42,7 @@ class PlainResolver(BaseResolver, Resolver):
                 ECSOption(str(config.ecs.network_address), config.ecs.prefixlen)
             ]
         self.lifetime = config.lifetime
+        self._nodata_ttl = config.nodata_ttl
         self._upstreams = config.nameservers
         self._manager: NameserverManager = nameservers
         upstreams: list[BaseNameserver] = []
@@ -106,7 +108,7 @@ class PlainResolver(BaseResolver, Resolver):
     ) -> Answer:
         """单次上游解析；NXDOMAIN 携带权威 SOA 时转为可缓存的负应答对象。"""
         try:
-            return await self.resolve(
+            answer = await self.resolve(
                 qname,
                 rdtype,
                 rdclass,
@@ -116,8 +118,26 @@ class PlainResolver(BaseResolver, Resolver):
         except NXDOMAIN as error:
             answer = self._nxdomain_answer(error, qname, rdtype, rdclass)
             if answer is not None:
+                self._clamp_nodata_expiration(answer)
                 return answer
             raise
+        self._clamp_nodata_expiration(answer)
+        return answer
+
+    def _clamp_nodata_expiration(self, answer: Answer) -> None:
+        """无记录且无 SOA 的否定应答显式设置负缓存 TTL。
+
+        dnspython 的 resolve_chaining 找不到 SOA 时 minimum_ttl 取 MAX_TTL
+        （约 136 年），此类 NODATA/NXDOMAIN 进入缓存后永不过期；
+        携带 SOA 的负应答已按 min(SOA TTL, SOA.minimum) 计算，不在此列。
+        """
+        if answer.rrset is not None:
+            return
+        if any(
+            rrset.rdtype == dns.rdatatype.SOA for rrset in answer.response.authority
+        ):
+            return
+        answer.expiration = time() + self._nodata_ttl
 
     def _nxdomain_answer(
         self, error: NXDOMAIN, qname: Name, rdtype: RdataType, rdclass: RdataClass

@@ -29,6 +29,11 @@ class PlainResolverConfig(BaseResolverConfig):
         default=None, description="是否启用ECS，指定ECS网段"
     )
     lifetime: float = Field(default=5.0, ge=0.1, description="请求生存时间（秒）")
+    nodata_ttl: int = Field(
+        default=300,
+        ge=0,
+        description="无 SOA 否定应答（NODATA/NXDOMAIN）的负缓存 TTL，单位秒",
+    )
 
 
 class AioDNSResolverConfig(BaseResolverConfig):

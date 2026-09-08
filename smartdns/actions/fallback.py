@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 
 class FallbackAction(BaseAction):
-    """当全部测速失败时以静态地址复制并替换当前响应。"""
+    """当无可用 IP（NODATA 空应答）或全部测速失败时以静态地址替换当前响应。"""
 
     def __init__(self, config: FallbackActionConfig) -> None:
         super().__init__(config)
@@ -28,9 +28,10 @@ class FallbackAction(BaseAction):
         logger.info("Fallback Action {} 已启动，映射数={}", self.name, len(self.map))
 
     async def on_response(self, context: Context) -> None:
-        if context.response is None or not context.ip_infos:
+        # NOERROR 但无 IP（NODATA 空应答）视为没有可用 IP，交由静态映射回退。
+        if context.response is None:
             return
-        if any(
+        if context.ip_infos and any(
             info.rtt is not None and info.rtt < float("inf")
             for info in context.ip_infos.values()
         ):
@@ -39,7 +40,11 @@ class FallbackAction(BaseAction):
             if not match_context(item.match_name, context):
                 continue
             if context.request.rdtype == RdataType.A and item.ipv4:
-                context.response = replace_response_ip(context.response, item.ipv4)
+                context.response = replace_response_ip(
+                    context.response, item.ipv4, item.ttl
+                )
             elif context.request.rdtype == RdataType.AAAA and item.ipv6:
-                context.response = replace_response_ip(context.response, item.ipv6)
+                context.response = replace_response_ip(
+                    context.response, item.ipv6, item.ttl
+                )
             return

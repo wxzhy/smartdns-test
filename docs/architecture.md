@@ -311,7 +311,7 @@ ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使
 
 ### fallback
 
-当 `context.ip_infos` 存在且所有测速结果都不可用时，根据域名/CNAME 标签映射，用静态 IPv4/IPv6 地址替换当前响应。它依赖前面已经在 ConcurrentResolver 中执行过 `speedcheck.on_resolver`；若没有测速数据，Fallback 会直接跳过。
+当应答为 NOERROR 但没有任何 IP（NODATA 空应答）时，或所有测速结果都不可用时，根据域名/CNAME 标签映射，用静态 IPv4/IPv6 地址替换当前响应。测速判定依赖前面已经在 ConcurrentResolver 中执行过 `speedcheck.on_resolver`；若无测速数据但存在 IP 候选（未启用测速），视为未失败，Fallback 直接跳过。
 
 ### filter
 

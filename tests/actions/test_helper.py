@@ -1,9 +1,11 @@
 """copy-on-write 应答重建工具的回归测试。"""
 
 from ipaddress import IPv4Address, IPv6Address
+from time import time
 from typing import TYPE_CHECKING, cast
 
 import dns.message
+import pytest
 from dns.name import from_text
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
@@ -108,3 +110,43 @@ def test_replace_answer_rrset_preserves_other_sections() -> None:
     names = [str(rr.name) for rr in result.ans.response.answer]
     assert "web.example.net." in names  # CNAME 记录保留
     assert result.ans.response.answer[-1].ttl == 60
+
+
+def _nodata_response() -> Response:
+    return _response(
+        "A",
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
+        ";QUESTION\nexample.com. IN A\n",
+    )
+
+
+def test_replace_response_ip_nodata_expiration_bounded_by_ttl() -> None:
+    """NODATA 替换后的缓存过期时刻按新 rrset TTL 起算，而非继承 MAX_TTL。"""
+    response = _nodata_response()
+    assert response.ans is not None
+    assert response.ans.rrset is None
+
+    result = replace_response_ip(response, {IPv4Address("203.0.113.10")}, ttl=60)
+
+    assert result is not response
+    assert result.ans is not None
+    assert result.ip_list == ["203.0.113.10"]
+    remaining = result.ans.expiration - time()
+    assert remaining == pytest.approx(60, abs=5)  # 不再是 ~136 年
+
+
+def test_replace_answer_rrset_recomputes_expiration() -> None:
+    """有记录应答的替换同样按新 rrset TTL 重算过期时刻。"""
+    response = _a_response()  # 原 rrset TTL=300
+    answer = response.ans
+    assert answer is not None
+    assert answer.rrset is not None
+    new_rrset = RRset(answer.rrset.name, answer.rrset.rdclass, answer.rrset.rdtype)
+    new_rrset.update_ttl(60)
+    new_rrset.add(A(answer.rrset.rdclass, answer.rrset.rdtype, "203.0.113.10"))
+
+    result = replace_answer_rrset(response, new_rrset)
+
+    assert result.ans is not None
+    remaining = result.ans.expiration - time()
+    assert remaining == pytest.approx(60, abs=5)

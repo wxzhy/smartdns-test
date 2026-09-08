@@ -17,7 +17,6 @@ from base64 import urlsafe_b64decode
 from dataclasses import dataclass
 from struct import pack, unpack
 from time import monotonic, time
-from typing import TYPE_CHECKING
 
 import dns.flags
 import dns.message
@@ -31,10 +30,8 @@ from nacl.bindings import (
     crypto_scalarmult,
 )
 from nacl.exceptions import CryptoError
+from nacl.signing import VerifyKey
 from nacl.utils import random as random_bytes
-
-if TYPE_CHECKING:
-    from nacl.signing import VerifyKey
 
 RESOLVER_MAGIC = b"r6fnvWjl"
 CERT_MAGIC = b"DNSC"
@@ -66,6 +63,7 @@ class CertInfo:
     resolver_pk: bytes  # X25519 公钥（32 字节）
     client_magic: bytes  # 8 字节，客户端查询前缀
     serial: int
+    expire: int  # 证书过期时刻（Unix 时间戳），供运行期刷新判定
 
 
 def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
@@ -183,7 +181,12 @@ def parse_cert(
     if expire < now:
         logger.warning("DNSCrypt 证书已过期: serial={}", serial)
         return None
-    return CertInfo(resolver_pk=resolver_pk, client_magic=client_magic, serial=serial)
+    return CertInfo(
+        resolver_pk=resolver_pk,
+        client_magic=client_magic,
+        serial=serial,
+        expire=expire,
+    )
 
 
 def pad_query(wire: bytes, minimum: int) -> bytes:
@@ -283,6 +286,23 @@ async def fetch_certs(
         logger.info("DNSCrypt 证书 UDP 获取失败，回退 TCP: {}", provider_name)
     response = await _tcp_roundtrip(host, port, query.to_wire(), timeout)
     return _cert_payloads(dns.message.from_wire(response))
+
+
+async def fetch_best_cert(
+    host: str,
+    port: int,
+    provider_name: str,
+    provider_key: bytes,
+    timeout: float,
+) -> CertInfo | None:
+    """获取证书并挑选 serial 最大的有效 es2 证书；无有效证书返回 None。"""
+    verify_key = VerifyKey(provider_key)
+    best: CertInfo | None = None
+    for payload in await fetch_certs(host, port, provider_name, timeout):
+        cert = parse_cert(payload, verify_key)
+        if cert is not None and (best is None or cert.serial > best.serial):
+            best = cert
+    return best
 
 
 def _cert_payloads(message: dns.message.Message) -> list[bytes]:

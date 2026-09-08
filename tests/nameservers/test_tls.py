@@ -189,6 +189,47 @@ async def test_manager_aliveness_detects_closed_peer(monkeypatch) -> None:
         server.close()
 
 
+async def test_manager_aliveness_rejects_pending_data(monkeypatch) -> None:
+    """内核缓冲有待读密文时应判死重建，与 TCP 池语义一致。
+
+    anyio asyncio 后端会把到达数据收进用户态缓冲，MSG_PEEK 不可见；
+    故以注入 raw_socket 的方式验证内核态可见分支的判定语义。
+    """
+    server, port, _received = await _start_record_echo_server()
+    try:
+        endpoint: TcpEndpoint = ("127.0.0.1", port)
+        manager = TLSStreamConnectionManager(
+            cast("SSLContext", object()), None, connect_timeout=2.0
+        )
+
+        async def fake_start_tls(transport, ssl_context, server_hostname):
+            return _connection(transport)
+
+        monkeypatch.setattr("smartdns.nameservers._tls.start_tls", fake_start_tls)
+        conn = await manager.create(endpoint)
+
+        class _PeekableRaw:
+            """模拟内核缓冲有待读数据的 raw socket（MSG_PEEK 可见）。"""
+
+            def recv(self, size: int, flags: int) -> bytes:
+                return b"x" * size
+
+        monkeypatch.setattr(
+            type(conn._transport),
+            "extra",
+            lambda self, attr, default=None: (
+                _PeekableRaw()
+                if attr is not None and "raw_socket" in str(attr)
+                else None
+            ),
+            raising=False,
+        )
+        assert await manager.check_aliveness(endpoint, conn) is False
+        await manager.dispose(endpoint, conn)
+    finally:
+        server.close()
+
+
 async def test_pool_reuses_tls_connection(monkeypatch) -> None:
     server, port, _received = await _start_record_echo_server()
     try:

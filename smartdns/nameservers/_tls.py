@@ -176,11 +176,14 @@ class TLSStreamConnectionManager(
         if raw is None:
             return False
         # asyncio 后端返回 TransportSocket，其他后端可能直接返回标准 socket。
-        # peek 的是 TLS 密文：对端关闭返回 b""，无数据抛 BlockingIOError（存活）。
+        # peek 的是 TLS 密文：对端关闭返回 b""，无数据抛 BlockingIOError（存活）；
+        # 有待读密文说明对端已在空闲连接上主动发送（close_notify 或错位残留），
+        # 复用会在下次交换读到 EOF/记录错位，与 TCP 池一致判死重建。
         probe = getattr(raw, "_sock", raw)
         try:
-            return probe.recv(1, socket.MSG_PEEK) != b""
+            probe.recv(1, socket.MSG_PEEK)
         except BlockingIOError:
-            return True
+            return True  # 内核缓冲无待读密文：连接存活
         except OSError:
-            return False
+            return False  # 对端关闭或 socket 异常：重建
+        return False  # 内核缓冲有残留密文：重建
