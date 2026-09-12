@@ -1,14 +1,14 @@
-#worker_count: 1
+worker_count: 1
 listeners:
   - name: TCP
     type: tcp
     port: 5335
-    timeout: 5
+    timeout: 10
   - name: UDP
     type: udp
     host: "::"
     port: 5335
-    timeout: 5
+    timeout: 10
 geodata:
   geoip: tags/output/geoip.metadb
   geosite: tags/output/geosite.trie
@@ -28,29 +28,17 @@ client:
     tries: 4
   hosts:
     dns.cloudflare.com:
-      - 172.64.145.0
-      - 172.64.146.0
-      - 104.18.38.0
-      - 104.18.39.0
       - "2606:4700:10::"
       - "2606:4700:20::"
     dns.nextdns.io:
-      - 172.64.145.0
-      - 172.64.146.0
-      - 104.18.38.0
-      - 104.18.39.0
       - "2606:4700:10::"
       - "2606:4700:20::"
     www.baidu.com:
       - "2001:300::5"
       - "2001:300::6"
-      - 103.2.57.5
-      - 103.2.57.6
     www.sina.com:
       - "2001:b000:168::1"
       - "2001:b000:168::2"
-      - 168.95.1.1
-      - 168.95.192.1
 
 nameservers:
   - name: test-tcp
@@ -61,14 +49,14 @@ nameservers:
     timeout: 5
   - name: google-1
     type: udp
-    address: 8.8.8.8
+    address: 2001:4860:4860::8888
     port: 53
     repeat: 0
     use_tricks: true
     timeout: 3
   - name: google-2
     type: udp
-    address: 8.8.4.4
+    address: 2001:4860:4860::8844
     port: 53
     repeat: 0
     use_tricks: true
@@ -91,6 +79,13 @@ nameservers:
     type: curl
     url: https://jxl61mtx82.cloudflare-gateway.com/dns-query
     host: jxl61mtx82.cloudflare-gateway.com
+    want_get: false
+    verify: true
+    ech: crypto.cloudflare.com
+  - name: v-dns
+    type: curl
+    url: https://v.recipes/dns-ecs
+    host: v.recipes
     want_get: false
     verify: true
     ech: crypto.cloudflare.com
@@ -160,8 +155,6 @@ resolvers:
   - name: opennic
     type: aiodns
     nameservers:
-      - 95.216.99.249
-      - 65.21.1.106
       - 2a01:4f9:2b:1305::2
       - 2a01:4f9:c011:83d::1
       # - test-udp
@@ -187,8 +180,9 @@ resolvers:
   - name: google-cn
     type: plain
     nameservers:
-      - curl-doh
-    ecs: 58.215.177.0/24
+      - google-1
+      - google-2
+    ecs: 2001:250:5002::/48
     timeout: 3
     lifetime: 5
   - name: cn
@@ -206,8 +200,6 @@ resolvers:
   - name: global
     type: concurrent
     resolvers:
-      - hinet
-      - iij
       - doh-test
       - nextdns
     wait_all: true
@@ -223,8 +215,6 @@ resolvers:
       - cmcc
       - dnspod
       - 114dns
-      - hinet
-      - iij
       - doh-test
       - nextdns
     wait_all: true
@@ -293,11 +283,9 @@ actions:
           - 146.75.50.217
           - 146.75.49.91
         ipv6:
-          - "2a04:4e42:7c::133"
-          - "2a04:4e42:7c::311"
-          - "2a04:4e42:7c::347"
-          - "2a04:4e42:7c::644"
-          - "2a04:4e42:7c::729"
+          - "2a04:4e42:200::133"
+          - "2a04:4e42:400::311"
+          - "2a04:4e42:600::347"
       - match_ip:
           ip_include:
             - fastly
