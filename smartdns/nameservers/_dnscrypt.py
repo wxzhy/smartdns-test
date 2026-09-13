@@ -16,7 +16,7 @@
 from base64 import urlsafe_b64decode
 from dataclasses import dataclass
 from struct import pack, unpack
-from time import monotonic, time
+from time import time
 
 import dns.flags
 import dns.message
@@ -32,6 +32,8 @@ from nacl.bindings import (
 from nacl.exceptions import CryptoError
 from nacl.signing import VerifyKey
 from nacl.utils import random as random_bytes
+
+from smartdns.nameservers.base import query_deadline, remaining_timeout
 
 RESOLVER_MAGIC = b"r6fnvWjl"
 CERT_MAGIC = b"DNSC"
@@ -253,11 +255,11 @@ async def _tcp_exchange(stream, wire: bytes, timeout: float) -> bytes:
 
 async def _tcp_roundtrip(host: str, port: int, wire: bytes, timeout: float) -> bytes:
     """TCP 交换：新建连接、用后关闭（证书获取与无池路径使用）。"""
-    deadline = monotonic() + timeout
-    with fail_after(timeout):
+    deadline = query_deadline(timeout, timeout)
+    with fail_after(remaining_timeout(deadline)):
         stream = await connect_tcp(host, port)
     try:
-        return await _tcp_exchange(stream, wire, max(deadline - monotonic(), 0.1))
+        return await _tcp_exchange(stream, wire, remaining_timeout(deadline))
     finally:
         await stream.aclose()
 
@@ -275,16 +277,21 @@ async def fetch_certs(
     host: str, port: int, provider_name: str, timeout: float
 ) -> list[bytes]:
     """向上游自身发起普通 TXT 查询获取证书内容；UDP 失败或 TC 后回退 TCP。"""
+    deadline = query_deadline(timeout, timeout)
     query = dns.message.make_query(provider_name, dns.rdatatype.TXT)
     try:
-        response = await _udp_roundtrip(host, port, query.to_wire(), timeout)
+        # UDP 黑洞不能耗尽全部预算，否则规范要求的 TCP 回退永远没有机会执行。
+        udp_timeout = remaining_timeout(deadline) / 2
+        response = await _udp_roundtrip(host, port, query.to_wire(), udp_timeout)
         message = dns.message.from_wire(response)
         if message.rcode() == dns.rcode.NOERROR and not message.flags & dns.flags.TC:
             return _cert_payloads(message)
     except Exception:
         # 超时、应答截断或收到非法报文：统一回退 TCP。
         logger.info("DNSCrypt 证书 UDP 获取失败，回退 TCP: {}", provider_name)
-    response = await _tcp_roundtrip(host, port, query.to_wire(), timeout)
+    response = await _tcp_roundtrip(
+        host, port, query.to_wire(), remaining_timeout(deadline)
+    )
     return _cert_payloads(dns.message.from_wire(response))
 
 

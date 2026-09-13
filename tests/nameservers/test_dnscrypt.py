@@ -482,6 +482,7 @@ async def test_cert_rotation_triggers_refresh_and_retry(
     transport, port = await _start_udp(server)
     try:
         nameserver = await _make_nameserver(server, port)
+        assert nameserver._cert is not None
         old_serial = nameserver._cert.serial
         # 服务端发布新证书（新 serial）；本地仍用旧证书参数，首轮解密失败。
         server.certs = [(2, old_serial + 1, -100, 86400, False)]
@@ -499,7 +500,76 @@ async def test_cert_rotation_triggers_refresh_and_retry(
 
         response = await _query(nameserver)
         assert response.answer[0][0].address == PADDED_ANSWER_IP
+        assert nameserver._cert is not None
         assert nameserver._cert.serial == old_serial + 1
+        await nameserver.stop()
+    finally:
+        transport.close()
+
+
+async def test_concurrent_rotation_errors_reuse_single_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """并发旧证书请求同时失败时，应都使用首个请求刷新的证书重试。"""
+    server = _FakeDnsCryptServer()
+    transport, port = await _start_udp(server)
+    try:
+        nameserver = await _make_nameserver(server, port)
+        assert nameserver._cert is not None
+        old_serial = nameserver._cert.serial
+        server.certs = [(2, old_serial + 1, -100, 86400, False)]
+        original_exchange = nameserver._exchange
+        attempts: dict[int, int] = {}
+        first_attempts = 0
+        both_started = asyncio.Event()
+
+        async def controlled_exchange(request, *args, **kwargs):
+            nonlocal first_attempts
+            key = id(request)
+            attempts[key] = attempts.get(key, 0) + 1
+            if attempts[key] == 1:
+                first_attempts += 1
+                if first_attempts == 2:
+                    both_started.set()
+                await both_started.wait()
+                raise CryptoError("旧证书交换失败")
+            return await original_exchange(request, *args, **kwargs)
+
+        monkeypatch.setattr(nameserver, "_exchange", controlled_exchange)
+        responses = await asyncio.gather(_query(nameserver), _query(nameserver))
+
+        assert all(
+            response.answer[0][0].address == PADDED_ANSWER_IP for response in responses
+        )
+        assert nameserver._cert.serial == old_serial + 1
+        assert sorted(attempts.values()) == [2, 2]
+        await nameserver.stop()
+    finally:
+        transport.close()
+
+
+async def test_unchanged_expiring_cert_refresh_is_backed_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """临期证书未更新时，在退避期内不应每次查询都重新取证书。"""
+    server = _FakeDnsCryptServer()
+    transport, port = await _start_udp(server)
+    try:
+        nameserver = await _make_nameserver(server, port)
+        assert nameserver._cert is not None
+        object.__setattr__(nameserver._cert, "expire", int(time()) + 60)
+        refreshes = 0
+
+        async def unchanged_refresh(timeout=None) -> bool:
+            nonlocal refreshes
+            refreshes += 1
+            return False
+
+        monkeypatch.setattr(nameserver, "_refresh_cert", unchanged_refresh)
+        await _query(nameserver)
+        await _query(nameserver)
+
+        assert refreshes == 1
         await nameserver.stop()
     finally:
         transport.close()
@@ -511,6 +581,7 @@ async def test_expiring_cert_refreshes_before_query() -> None:
     transport, port = await _start_udp(server)
     try:
         nameserver = await _make_nameserver(server, port)
+        assert nameserver._cert is not None
         old_serial = nameserver._cert.serial
         # 把已安装证书的过期时刻改到阈值内（模拟临期），服务端同时发布新证书。
         object.__setattr__(nameserver._cert, "expire", int(time()) + 60)
@@ -518,6 +589,7 @@ async def test_expiring_cert_refreshes_before_query() -> None:
 
         response = await _query(nameserver)
         assert response.answer[0][0].address == PADDED_ANSWER_IP
+        assert nameserver._cert is not None
         assert nameserver._cert.serial == old_serial + 1
         await nameserver.stop()
     finally:
