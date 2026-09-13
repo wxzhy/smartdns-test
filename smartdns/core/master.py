@@ -19,7 +19,7 @@ from smartdns.actions._ping import set_cache
 from smartdns.listeners.manager import ListenerManager
 from smartdns.models.context import Request, Response
 from smartdns.nameservers.client import set_ech_cache
-from smartdns.routing.manager import init_geo_manager
+from smartdns.routing.manager import close_geo_manager, init_geo_manager
 from smartdns.utils.cache_async import AnswerCache
 
 from .worker import Worker
@@ -126,6 +126,7 @@ class Master:
                 await wrap_future(portal.start_task_soon(worker.stop))
             except Exception:
                 logger.exception("停止 Worker {} 失败", worker.worker_id)
+        close_geo_manager()
 
     async def dispatch(self, request: Request) -> Message | None:
         """分发请求到 Worker 并返回响应 Message。"""

@@ -31,3 +31,7 @@ class IPSet:
             for node in nodes:
                 result.update(node.data.keys())
         return result
+
+    def close(self) -> None:
+        """释放已加载的 radix 数据。"""
+        self._radix = None

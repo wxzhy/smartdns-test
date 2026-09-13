@@ -47,6 +47,15 @@ class GeoManager:
             tags = self.geosite.lookup(domain)
         return tags
 
+    def close(self) -> None:
+        """释放全部 Geo 数据映射和文件句柄。"""
+        for component in (self.geoip, self.geosite, self.ipset):
+            if component is not None:
+                component.close()
+        self.geoip = None
+        self.geosite = None
+        self.ipset = None
+
 
 _geo_manager: GeoManager | None = None
 
@@ -54,7 +63,19 @@ _geo_manager: GeoManager | None = None
 def init_geo_manager(config: GeoDataConfig):
     """初始化GeoManager实例"""
     global _geo_manager  # noqa: PLW0603  模块级单例，进程内唯一
+    previous = _geo_manager
     _geo_manager = GeoManager(config)
+    if previous is not None:
+        previous.close()
+
+
+def close_geo_manager() -> None:
+    """关闭并清空进程级 GeoManager。"""
+    global _geo_manager  # noqa: PLW0603  模块级单例，进程内唯一
+    manager = _geo_manager
+    _geo_manager = None
+    if manager is not None:
+        manager.close()
 
 
 def get_geo_manager() -> GeoManager | None:

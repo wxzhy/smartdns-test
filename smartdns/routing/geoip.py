@@ -55,3 +55,13 @@ class GeoIP:
             if isinstance(asn_info, dict):
                 asn = asn_info.get("autonomous_system_number")
         return country, asn
+
+    def close(self) -> None:
+        """关闭 MaxMind mmap reader 并释放文件句柄。"""
+        geoip, asn = self._geoip, self._asn
+        self._geoip = None
+        self._asn = None
+        if geoip is not None:
+            geoip.close()
+        if asn is not None:
+            asn.close()

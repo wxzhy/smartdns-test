@@ -41,3 +41,7 @@ class GeoSite:
                 for value in self._trie[prefix]:
                     result.add(value.decode("ascii"))
         return result
+
+    def close(self) -> None:
+        """释放 mmap trie；底层映射随对象引用释放。"""
+        self._trie = None

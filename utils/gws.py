@@ -83,11 +83,14 @@ async def collect(domains: set[str], ips: set[str], results: Results) -> None:
         flags=ARES_FLAG_EDNS,
     )
     limiter = CapacityLimiter(200)
-    async with create_task_group() as task_group:
-        for domain in domains:
-            task_group.start_soon(resolve_name, resolver, domain, limiter, results)
-        for value in ips:
-            task_group.start_soon(resolve_ip, resolver, value, limiter, results)
+    try:
+        async with create_task_group() as task_group:
+            for domain in domains:
+                task_group.start_soon(resolve_name, resolver, domain, limiter, results)
+            for value in ips:
+                task_group.start_soon(resolve_ip, resolver, value, limiter, results)
+    finally:
+        await resolver.close()
 
 
 def _load_results(path: Path) -> Results:
