@@ -219,7 +219,7 @@ TLS 上游的握手与加密流由 `smartdns.nameservers._tls` 自行驱动：an
 
 已转换的记录类型包括 A、AAAA、CAA、CNAME、HTTPS、MX、NAPTR、NS、PTR、SOA、SRV、TLSA、TXT 和 URI。pycares 会丢失 TXT 的原始 character-string 分段边界，因此长 TXT 会按每段最多 255 字节重新分段后编码。ARES_ENODATA 映射为空 NOERROR，ARES_ENOTFOUND 映射为 NXDOMAIN，其他异常映射为 SERVFAIL。
 
-应答缓存经 `AnswerCache` 挂在 `resolve()` 边界（`cache_size` 默认 10000，`0` 关闭）：`query()` 路径与 HTTPClient 的 ECH 引导查询共用同一份按名共享缓存，条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），同事件循环内同键并发合并为一次 pycares 查询。
+应答缓存经 `AnswerCache` 挂在 `resolve()` 边界（`cache_size` 默认 10000，`0` 关闭）：`query()` 路径与 HTTPClient 的 ECH 引导查询共用同一份按完整解析器配置共享的缓存，条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），同事件循环内同键并发合并为一次 pycares 查询。同名但配置不同的解析器使用不同缓存。
 
 ### 7.2 PlainResolver
 
@@ -227,7 +227,7 @@ TLS 上游的握手与加密流由 `smartdns.nameservers._tls` 自行驱动：an
 
 `BaseResolver` 写入的 `timeout` 会覆盖 dnspython Resolver 的同名属性，作为单次上游尝试时限；`query()` 还显式传入 `lifetime` 作为整个解析过程的总时限。
 
-应答缓存不走 dnspython 的 Resolver.cache，而是经 `cached()` 装饰 `_resolve_answer()` 实现：持久层是按解析器名注册、跨 Worker 线程共享的 `cachetools.TLRUCache`（ttu 取 `Answer.expiration`，负应答即 SOA TTL），同一事件循环内的同键并发由装饰器的 in-flight 表合并为一次上游查询；携带 SOA 的 NXDOMAIN 转为可缓存对象，无 SOA 的仍抛出、由 `query()` 转为不缓存的 NXDOMAIN 响应。`cache_size: 0` 关闭缓存。
+应答缓存不走 dnspython 的 Resolver.cache，而是经 `cached()` 装饰 `_resolve_answer()` 实现：持久层按完整解析器配置注册并跨 Worker 线程共享（同名但配置不同的解析器相互隔离），底层使用 `cachetools.TLRUCache`（ttu 取 `Answer.expiration`，负应答即 SOA TTL）。同一事件循环内的同键并发由装饰器的 in-flight 表合并为一次上游查询；携带 SOA 的 NXDOMAIN 转为可缓存对象，无 SOA 的仍抛出、由 `query()` 转为不缓存的 NXDOMAIN 响应。`cache_size: 0` 关闭缓存。
 
 ### 7.3 ConcurrentResolver
 
@@ -334,7 +334,7 @@ Router 在 after 动作循环结束后检查 `context.subquery`：已设置且�
 1. Master DNS Answer 缓存：`AnswerCache` 直建实例（跨线程锁 + TLRUCache，ttu 取 Answer 自身 expiration），容量由顶层 `cache_size` 控制，`0` 关闭；`fetch` 的同键 in-flight 合并覆盖全部监听器。
 2. 全局 ECHConfig 缓存：Master 创建 100 项、300 秒的 TTLCache 并通过 `set_ech_cache` 注入，所有 Worker 的 HTTPClient 共享；键为域名规范化文本，不含实例标识。
 3. 测速缓存：Master 创建 10000 项、1800 秒的 TLRUCache，保存跨 Worker 可共享的数值结果。
-4. Resolver 应答缓存：plain 与 aiodns 各自的 `cache_size` 控制容量，经 `AnswerCache.shared` 按解析器名注册、跨 Worker 线程共享；aiodns 挂在 `resolve()` 边界（ECH 引导查询亦受益），plain 挂在 `query()` 出口前。
+4. Resolver 应答缓存：plain 与 aiodns 各自的 `cache_size` 控制容量，经 `AnswerCache.shared` 按完整解析器配置注册并跨 Worker 线程共享，同名但配置不同的解析器相互隔离；aiodns 挂在 `resolve()` 边界（ECH 引导查询亦受益），plain 挂在 `query()` 出口前。
 
 `AnswerCache`（`utils/cache_async.py`）是三类 Answer 缓存的统一载体：存储层为线程锁串行化的 TLRUCache（墙钟计时、按应答自身 TTL 过期），实现 MutableMapping 协议，对外提供 `read`/`write` 异步读写与 `fetch(key, fn)`（未命中执行 fn 并写入，同键并发经 `cached()` in-flight 表合并为一次执行）。
 

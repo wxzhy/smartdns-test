@@ -236,7 +236,7 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
 
 `nameservers` 只接受 IP 地址；误填 Nameserver 名称会在配置加载时失败。aiodns 不支持 ECS（pycares 无法注入 EDNS Client Subnet 选项），需要固定 ECS 时请使用 plain 解析器。
 
-`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：缓存挂在 `resolve()` 边界，路由路径与 `client.resolver` 的 ECH 引导查询共用；条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），持久层为同名解析器跨 Worker 共享的 `AnswerCache` 实例。注意：与顶层 aiodns 解析器同名的 `client.resolver`（如均叫 `114dns`）会共享同一份缓存。
+`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：缓存挂在 `resolve()` 边界，路由路径与 `client.resolver` 的 ECH 引导查询共用；条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），持久层为相同完整配置跨 Worker 共享的 `AnswerCache` 实例。同名但配置不同的解析器使用不同缓存；配置完全一致的顶层解析器和 `client.resolver` 会共享缓存。
 
 `nodata_ttl` 是空应答（NODATA，如 IPv4-only 域名查 AAAA）写入缓存的秒数：pycares 的 ENODATA 不携带 SOA，无记录可压 TTL，需显式指定负缓存时长，0 表示不缓存。
 
@@ -253,7 +253,7 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
   lifetime: 5
 ```
 
-`nameservers` 填前面 `nameservers[].name`。`lifetime` 是实际查询总时限。`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：条目按应答自身 TTL 过期（负应答取 authority 区 SOA），持久层是同名解析器跨 Worker 共享的 cachetools 实例，同一事件循环内的同键并发查询经 `cached()` 合并为一次上游查询。
+`nameservers` 填前面 `nameservers[].name`。`lifetime` 是实际查询总时限。`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：条目按应答自身 TTL 过期（负应答取 authority 区 SOA），持久层由相同完整配置的解析器跨 Worker 共享，同名但配置不同的解析器使用不同实例；同一事件循环内的同键并发查询经 `cached()` 合并为一次上游查询。
 
 所有 PlainResolver 引用都会在配置加载时校验，不存在的名称不会延迟到运行期跳过。
 

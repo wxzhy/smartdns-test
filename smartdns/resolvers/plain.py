@@ -53,11 +53,14 @@ class PlainResolver(BaseResolver, Resolver):
             else:
                 logger.warning("Nameserver {} 不存在", name)
         self.nameservers = upstreams
-        # 应答缓存（AnswerCache）：按解析器名跨 Worker 线程共享，
-        # cache_size=0 关闭；fetch 的同键 in-flight 合并按事件循环隔离。
+        # 应答缓存（AnswerCache）：相同完整配置跨 Worker 线程共享；同名但配置
+        # 不同的解析器彼此隔离。cache_size=0 关闭；fetch 的同键 in-flight
+        # 合并按事件循环隔离。
         if config.cache_size > 0:
             self._cache: AnswerCache[ResolverCacheKey, Answer] | None = (
-                AnswerCache.shared(config.name, config.cache_size)
+                AnswerCache.shared(
+                    f"plain:{config.model_dump_json()}", config.cache_size
+                )
             )
         else:
             self._cache = None

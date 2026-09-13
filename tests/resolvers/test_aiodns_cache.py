@@ -1,5 +1,6 @@
 """AioDNSResolver resolve() 级应答缓存回归测试。"""
 
+from time import time
 from typing import TYPE_CHECKING, cast
 
 from dns.message import make_query, make_response
@@ -10,6 +11,7 @@ from dns.rdtypes.IN.A import A
 from dns.resolver import Answer
 from dns.rrset import RRset
 
+from smartdns.models.context import Request
 from smartdns.models.resolver import AioDNSResolverConfig
 from smartdns.resolvers.aiodns import AioDNSResolver
 
@@ -72,3 +74,47 @@ async def test_cache_size_zero_disables_cache() -> None:
 def test_cache_size_defaults_to_10000() -> None:
     config = AioDNSResolverConfig(name="d", type="aiodns", nameservers=["1.1.1.1"])
     assert config.cache_size == 10000
+
+
+async def test_query_decays_ttl_of_cached_answer() -> None:
+    resolver = _StubResolver(cache_size=10)
+    request = Request.from_message(make_query("example.com.", "A"), "test")
+    cached_answer = await resolver.resolve(
+        request.qname, request.rdtype, request.rdclass
+    )
+    cached_answer.expiration = time() + 1.9
+
+    response = await resolver.query(request)
+
+    assert response.ans is not None
+    assert response.ans.rrset is not None
+    assert response.ans.rrset.ttl <= 1
+    assert cached_answer.rrset is not None
+    assert cached_answer.rrset.ttl == 300
+
+
+async def test_stop_closes_aiodns_channel() -> None:
+    class _ClosableResolver:
+        closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    resolver = _StubResolver(cache_size=0)
+    channel = _ClosableResolver()
+    resolver._resolver = cast("object", channel)  # ty: ignore[invalid-assignment]
+
+    await resolver.stop()
+
+    assert channel.closed
+
+
+def test_same_name_with_different_config_uses_distinct_cache() -> None:
+    first = AioDNSResolver(
+        AioDNSResolverConfig(name="shared", type="aiodns", nameservers=["1.1.1.1"])
+    )
+    second = AioDNSResolver(
+        AioDNSResolverConfig(name="shared", type="aiodns", nameservers=["8.8.8.8"])
+    )
+
+    assert first._cache is not second._cache

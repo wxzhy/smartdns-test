@@ -57,8 +57,8 @@ class AnswerCache[KT, VT](MutableMappingABC[KT, VT]):
     - ``fetch``：未命中时执行 fetch_fn 并写入；同键并发经 cached() 的
       in-flight 表合并为一次执行（按事件循环隔离，跨循环首次填充可能
       各执行一次，落库由锁内 setdefault 保证只保留一份）。
-    - ``shared``：按名字注册的共享实例，各 Worker 用同一份配置构造的
-      同名 Resolver 经此取到同一缓存对象。
+    - ``shared``：按命名空间注册的共享实例；Resolver 以完整配置生成命名空间，
+      让各 Worker 复用同一对象，并隔离同名但配置不同的 Resolver。
     """
 
     _shared: ClassVar[dict[str, AnswerCache[Any, Any]]] = {}
@@ -117,21 +117,21 @@ class AnswerCache[KT, VT](MutableMappingABC[KT, VT]):
         """读缓存；未命中时执行 fetch_fn（同键并发合并）并写入后返回。"""
         return await self._fetch_merged(key, fetch_fn)
 
-    # -- 按名共享注册表 --
+    # -- 按命名空间共享注册表 --
 
     @classmethod
-    def shared(cls, name: str, maxsize: int) -> AnswerCache[KT, VT]:
-        """取或建按名字注册的共享缓存；同名返回同一实例。"""
+    def shared(cls, namespace: str, maxsize: int) -> AnswerCache[KT, VT]:
+        """取或建共享缓存；同一命名空间返回同一实例。"""
         with cls._shared_lock:
-            cache = cls._shared.get(name)
+            cache = cls._shared.get(namespace)
             if cache is None:
                 cache = cls(maxsize=maxsize)
-                cls._shared[name] = cache
+                cls._shared[namespace] = cache
             return cast("AnswerCache[KT, VT]", cache)
 
     @classmethod
     def reset_shared(cls) -> None:
-        """清空共享注册表；供测试在用例间隔离同名缓存。"""
+        """清空共享注册表；供测试在用例间隔离缓存。"""
         with cls._shared_lock:
             cls._shared.clear()
 
@@ -166,6 +166,7 @@ def cached[KT, VT](
             raise TypeError(f"Expected Coroutine function, got {fn}")
 
         inflight: dict[tuple[object, KT], Task[VT]] = {}
+        waiter_counts: dict[tuple[object, KT], int] = {}
         inflight_lock = Lock()
         missing = object()
 
@@ -207,6 +208,7 @@ def cached[KT, VT](
                 with inflight_lock:
                     if task is not None and inflight.get(inflight_key) is task:
                         del inflight[inflight_key]
+                        waiter_counts.pop(inflight_key, None)
 
         async def wrapper(*args, **kwargs):
             cache_key = key(*args, **kwargs)
@@ -228,7 +230,26 @@ def cached[KT, VT](
                     )
                     task.add_done_callback(_consume_task_exception)
                     inflight[inflight_key] = task
-            return await shield(task)
+                    waiter_counts[inflight_key] = 0
+                waiter_counts[inflight_key] += 1
+            try:
+                return await shield(task)
+            finally:
+                with inflight_lock:
+                    if inflight.get(inflight_key) is not task:
+                        continue_cleanup = False
+                    else:
+                        remaining_waiters = waiter_counts[inflight_key] - 1
+                        continue_cleanup = remaining_waiters == 0
+                        if continue_cleanup:
+                            del inflight[inflight_key]
+                            del waiter_counts[inflight_key]
+                        else:
+                            waiter_counts[inflight_key] = remaining_waiters
+                # 共享调用仍有等待者时继续运行；最后一个等待者离开后取消底层
+                # 查询，使监听器超时和服务停机能真正释放 Worker / socket 资源。
+                if continue_cleanup and not task.done():
+                    task.cancel()
 
         return update_wrapper(wrapper, fn)
 

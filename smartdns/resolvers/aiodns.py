@@ -53,6 +53,7 @@ from pycares import (
     URIRecordData,
 )
 
+from smartdns.actions._helper import clone_answer
 from smartdns.models.context import Request, Response
 from smartdns.resolvers.base import BaseResolver
 from smartdns.utils.cache_async import AnswerCache
@@ -82,12 +83,12 @@ class AioDNSResolver(BaseResolver):
         self.nodata_ttl = config.nodata_ttl
         self.nameservers = [str(address) for address in config.nameservers]
         self._resolver: DNSResolver | None = None
-        # 应答缓存（AnswerCache）：按解析器名跨 Worker 线程共享，
-        # cache_size=0 关闭。挂在 resolve() 边界，query() 与 HTTPClient
-        # 的 ECH 引导查询共用同一缓存。
+        # 应答缓存（AnswerCache）：相同完整配置跨 Worker 线程共享；同名但配置
+        # 不同的解析器彼此隔离。cache_size=0 关闭。挂在 resolve() 边界，
+        # query() 与 HTTPClient 的 ECH 引导查询共用同一缓存。
         if config.cache_size > 0:
             self._cache: AnswerCache[CacheKey, Answer] | None = AnswerCache.shared(
-                config.name, config.cache_size
+                f"aiodns:{config.model_dump_json()}", config.cache_size
             )
         else:
             self._cache = None
@@ -111,13 +112,19 @@ class AioDNSResolver(BaseResolver):
 
     async def stop(self):
         """停止解析器"""
+        resolver = self._resolver
         self._resolver = None
+        if resolver is not None:
+            await resolver.close()
 
     async def query(self, request: Request, context: Context | None = None) -> Response:
         """处理查询"""
         try:
             answer = await self.resolve(request.qname, request.rdtype, request.rdclass)
-            return Response.from_answer(answer, upstream=self.name)
+            remaining = max(0, int(answer.expiration - time()))
+            return Response.from_answer(
+                clone_answer(answer, remaining_ttl=remaining), upstream=self.name
+            )
         except NXDOMAIN:
             return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
         except Exception:

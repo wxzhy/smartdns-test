@@ -158,13 +158,27 @@ async def test_query_merges_concurrent_same_key(
     assert all(r.rcode == Rcode.NOERROR for r in results)
 
 
-def test_resolver_cache_is_shared_by_name() -> None:
-    """同名解析器实例（各 Worker 场景）经名字注册表共享同一 AnswerCache。"""
+def test_answer_cache_is_shared_by_namespace() -> None:
+    """相同命名空间返回同一 AnswerCache。"""
     first = AnswerCache.shared("shared-probe", 5)
     second = AnswerCache.shared("shared-probe", 999)
     assert first is second
     third = AnswerCache.shared("other", 5)
     assert first is not third
+
+
+def test_same_name_with_different_config_uses_distinct_cache() -> None:
+    manager = NameserverManager(config=[], client=cast("HTTPClient", None))
+    first = PlainResolver(
+        PlainResolverConfig(name="shared", type="plain", nameservers=[], rotate=False),
+        manager,
+    )
+    second = PlainResolver(
+        PlainResolverConfig(name="shared", type="plain", nameservers=[], rotate=True),
+        manager,
+    )
+
+    assert first._cache is not second._cache
 
 
 async def test_nxdomain_with_soa_is_cached_negatively(

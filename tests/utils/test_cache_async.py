@@ -4,7 +4,7 @@ from asyncio import CancelledError, create_task
 from threading import Lock
 
 import pytest
-from anyio import Event
+from anyio import Event, fail_after
 from anyio.lowlevel import checkpoint
 from cachetools import TTLCache
 
@@ -75,6 +75,32 @@ async def test_waiter_cancellation_does_not_cancel_shared_call() -> None:
     release.set()
     assert await survivor == 9
     assert cache == {"key": 9}
+
+
+async def test_last_waiter_cancellation_cancels_underlying_call() -> None:
+    """没有其他等待者时，取消必须传递到底层 I/O 任务。"""
+    cache: dict[str, int] = {}
+    started = Event()
+    cancelled_inside = Event()
+
+    @cached(cache, key=lambda value: value)
+    async def load(value: str) -> int:
+        started.set()
+        try:
+            await Event().wait()
+        except CancelledError:
+            cancelled_inside.set()
+            raise
+        raise AssertionError("未设置的 Event 不应返回")
+
+    waiter = create_task(load("key"))
+    await started.wait()
+    waiter.cancel()
+    with pytest.raises(CancelledError):
+        await waiter
+    with fail_after(1):
+        await cancelled_inside.wait()
+    assert cache == {}
 
 
 async def test_runtime_cache_getter_uses_current_binding() -> None:
