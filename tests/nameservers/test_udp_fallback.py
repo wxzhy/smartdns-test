@@ -4,6 +4,7 @@ from asyncio import sleep
 from typing import cast
 
 import dns.asyncbackend
+import dns.exception
 import dns.message
 import pytest
 
@@ -116,7 +117,7 @@ async def test_max_size_tcp_retry_connect_times_out(monkeypatch) -> None:
     monkeypatch.setattr("smartdns.nameservers.udp.connect_tcp", hanging_connect)
 
     request = dns.message.make_query("example.com.", "TXT")
-    with pytest.raises(TimeoutError):
+    with pytest.raises(dns.exception.Timeout):
         await UDPNameserver(
             UDPNameserverConfig(
                 name="upstream",

@@ -1,5 +1,7 @@
+from time import monotonic
 from typing import TYPE_CHECKING
 
+from dns.exception import Timeout
 from dns.nameserver import AddressAndPortNameserver, Nameserver
 
 if TYPE_CHECKING:
@@ -10,6 +12,22 @@ if TYPE_CHECKING:
         AddressNameserverConfig,
         BaseNameserverConfig,
     )
+
+
+def query_deadline(timeout: float | None, default: float) -> float:
+    """建立单次上游查询的绝对截止时刻。"""
+    effective = default if timeout is None else timeout
+    if effective <= 0:
+        raise Timeout(timeout=effective)
+    return monotonic() + effective
+
+
+def remaining_timeout(deadline: float) -> float:
+    """返回截止时刻前的严格正剩余时间，耗尽时立即超时。"""
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise Timeout(timeout=0)
+    return remaining
 
 
 class BaseNameserver(Nameserver):

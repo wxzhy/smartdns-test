@@ -1,4 +1,3 @@
-from time import monotonic
 from typing import TYPE_CHECKING
 
 import dns.asyncbackend
@@ -14,7 +13,11 @@ from smartdns.nameservers._pool import (
     TrackedStream,
 )
 from smartdns.nameservers._socket import AnyioStreamSocket
-from smartdns.nameservers.base import BaseAddressNameserver
+from smartdns.nameservers.base import (
+    BaseAddressNameserver,
+    query_deadline,
+    remaining_timeout,
+)
 
 if TYPE_CHECKING:
     from anyio.abc import SocketStream
@@ -83,25 +86,18 @@ class TCPNameserver(BaseAddressNameserver):
         one_rr_per_rrset: bool = False,
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
-        # 传入 timeout 为剩余 lifetime；0/None（未设置或已到期）回退到完整配置超时。
-        effective_timeout = (
-            timeout if timeout is not None and timeout > 0 else self.timeout
-        )
+        deadline = query_deadline(timeout, self.timeout)
         endpoint: TcpEndpoint = (self.address, self.port)
         try:
             if self._pool is not None:
-                # 连接获取（含新建）计入总时限；0.1 与配置最小超时一致，
-                # 避免 0 被 dns.asyncquery 当作立即超时。
-                deadline = monotonic() + effective_timeout
                 async with self._pool.connection(
-                    endpoint, timeout=effective_timeout
+                    endpoint, timeout=remaining_timeout(deadline)
                 ) as raw_sock:
-                    remaining = max(deadline - monotonic(), 0.1)
                     try:
                         return await self._query_on_stream(
                             raw_sock,
                             request,
-                            remaining,
+                            remaining_timeout(deadline),
                             one_rr_per_rrset,
                             ignore_trailing,
                         )
@@ -110,15 +106,14 @@ class TCPNameserver(BaseAddressNameserver):
                         # 标记脏连接，归还池后由健康检查在下次获取时重建。
                         raw_sock.healthy = False
                         raise
-            # 无池路径：建连与查询均计入 effective_timeout，黑洞地址不会挂到 OS 级超时。
-            deadline = monotonic() + effective_timeout
-            with fail_after(effective_timeout):
+            # 无池路径：建连与查询共用同一截止时刻，黑洞地址不会挂到 OS 级超时。
+            with fail_after(remaining_timeout(deadline)):
                 raw_sock = await connect_tcp(self.host, self.port)
             try:
                 return await self._query_on_stream(
                     raw_sock,
                     request,
-                    max(deadline - monotonic(), 0.1),
+                    remaining_timeout(deadline),
                     one_rr_per_rrset,
                     ignore_trailing,
                 )

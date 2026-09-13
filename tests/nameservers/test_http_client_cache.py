@@ -3,11 +3,12 @@
 from ipaddress import IPv4Address, IPv6Address
 from typing import TYPE_CHECKING, cast
 
+import dns.asyncbackend
 import dns.message
 import pytest
-from anyio import Event, create_task_group, run, to_thread
+from anyio import Event, create_task_group, run, sleep, to_thread
 from cachetools import TTLCache
-from curl_cffi import CurlOpt
+from curl_cffi import AsyncSession, CurlOpt
 from dns.name import from_text
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
@@ -154,3 +155,49 @@ async def test_curl_session_gets_resolve_for_its_own_port() -> None:
         ]
     finally:
         await nameserver.stop()
+
+
+async def test_curl_timeout_includes_ech_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ECH 预查询必须计入本次 DoH 请求的总时限。"""
+
+    class _UnreachedCurl:
+        def __init__(self) -> None:
+            self.curl_options: dict[CurlOpt, object] = {}
+            self.called = False
+
+        async def post(self, *args, **kwargs):
+            self.called = True
+            raise AssertionError("ECH 超时后不应再发送 DoH 请求")
+
+    client = HTTPClient(HTTPClientConfig())
+
+    async def slow_ech_lookup(domain: str) -> str | None:
+        await sleep(10)
+        return None
+
+    monkeypatch.setattr(client, "get_ech_key", slow_ech_lookup)
+    nameserver = CurlNameserver(
+        CurlNameserverConfig(
+            name="ns",
+            type="curl",
+            url="https://dns.example.com/dns-query",
+            ech="ech.example.com",
+        ),
+        client,
+    )
+    curl = _UnreachedCurl()
+    nameserver._curl = cast("AsyncSession", curl)
+
+    with pytest.raises(TimeoutError):
+        await nameserver.async_query(
+            dns.message.make_query("example.com.", "A"),
+            0.02,
+            None,
+            0,
+            False,
+            cast("dns.asyncbackend.Backend", None),
+        )
+
+    assert not curl.called

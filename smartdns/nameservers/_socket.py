@@ -90,11 +90,16 @@ class AnyioStreamSocket(StreamSocket):
             # 其他后端可能直接返回标准库 socket。
             socket = getattr(raw_socket, "_sock", raw_socket)
             trick_prefix = what[:16] + b"\x00"
-            return socket.send(trick_prefix, MSG_OOB) == len(trick_prefix)
+            sent = socket.send(trick_prefix, MSG_OOB)
         except Exception:
             # 该技巧不是查询成功的必要条件。平台或后端不支持时由调用方
             # 回退为完整报文的普通异步发送。
             return False
+        if sent != len(trick_prefix):
+            # 部分前缀已经进入 TCP 流，此时回退发送完整报文会重复前缀并
+            # 破坏 DNS 长度帧；让本次交换失败并由连接池丢弃该连接。
+            raise OSError(f"OOB 前缀仅发送 {sent}/{len(trick_prefix)} 字节")
+        return True
 
     async def sendall(self, what, timeout):
         try:

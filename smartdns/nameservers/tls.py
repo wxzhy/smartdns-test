@@ -1,5 +1,4 @@
 from ipaddress import ip_address
-from time import monotonic
 from typing import TYPE_CHECKING
 
 import dns.asyncbackend
@@ -15,7 +14,11 @@ from smartdns.nameservers._tls import (
     TLSStreamConnectionManager,
     connect_tls,
 )
-from smartdns.nameservers.base import BaseAddressNameserver
+from smartdns.nameservers.base import (
+    BaseAddressNameserver,
+    query_deadline,
+    remaining_timeout,
+)
 
 if TYPE_CHECKING:
     from utls import SSLContext
@@ -121,25 +124,18 @@ class TLSNameserver(BaseAddressNameserver):
         one_rr_per_rrset: bool = False,
         ignore_trailing: bool = False,
     ) -> dns.message.Message:
-        # 传入 timeout 为剩余 lifetime；0/None（未设置或已到期）回退到完整配置超时。
-        effective_timeout = (
-            timeout if timeout is not None and timeout > 0 else self.timeout
-        )
+        deadline = query_deadline(timeout, self.timeout)
         endpoint: TcpEndpoint = (self.address, self.port)
         try:
             if self._pool is not None:
-                # 连接获取（含新建与握手）计入总时限；0.1 与配置最小超时一致，
-                # 避免 0 被 dns.asyncquery 当作立即超时。
-                deadline = monotonic() + effective_timeout
                 async with self._pool.connection(
-                    endpoint, timeout=effective_timeout
+                    endpoint, timeout=remaining_timeout(deadline)
                 ) as conn:
-                    remaining = max(deadline - monotonic(), 0.1)
                     try:
                         return await self._query_on_stream(
                             conn,
                             request,
-                            remaining,
+                            remaining_timeout(deadline),
                             one_rr_per_rrset,
                             ignore_trailing,
                         )
@@ -149,22 +145,21 @@ class TLSNameserver(BaseAddressNameserver):
                         # 下次获取时重建。
                         conn.healthy = False
                         raise
-            # 无池路径：建连、握手与查询均计入 effective_timeout，黑洞地址
+            # 无池路径：建连、握手与查询共用同一截止时刻，黑洞地址
             # 不会挂到 OS 级超时。
             ssl_context = self._ssl_context or self._build_ssl_context()
-            deadline = monotonic() + effective_timeout
             conn = await connect_tls(
                 str(self.host),
                 self.port,
                 ssl_context,
                 self._server_hostname,
-                effective_timeout,
+                remaining_timeout(deadline),
             )
             try:
                 return await self._query_on_stream(
                     conn,
                     request,
-                    max(deadline - monotonic(), 0.1),
+                    remaining_timeout(deadline),
                     one_rr_per_rrset,
                     ignore_trailing,
                 )

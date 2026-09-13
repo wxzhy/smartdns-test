@@ -3,10 +3,15 @@ from typing import TYPE_CHECKING
 
 import dns.asyncbackend
 import dns.message
+from anyio import fail_after
 from curl_cffi import AsyncSession, CurlOpt
 from loguru import logger
 
-from smartdns.nameservers.base import BaseNameserver
+from smartdns.nameservers.base import (
+    BaseNameserver,
+    query_deadline,
+    remaining_timeout,
+)
 
 if TYPE_CHECKING:
     from smartdns.models.nameserver import CurlNameserverConfig
@@ -82,16 +87,21 @@ class CurlNameserver(BaseNameserver):
     ) -> dns.message.Message:
         if self._curl is None:
             raise ValueError("Curl解析器未启动")
+        deadline = query_deadline(timeout, self.timeout)
         message = request.to_wire()
         encoded = urlsafe_b64encode(message).decode("ascii").rstrip("=")
         if isinstance(self.ech, str):
             # 本会话为此上游独占、ECH 域名固定，故设置在会话级安全无竞态。
-            ech_key = await self._client.get_ech_key(self.ech)
+            # 超时包在缓存等待者外层：并发调用即使共享同一底层 ECH 查询，
+            # 每个 DNS 请求仍遵守自己的剩余 lifetime。
+            with fail_after(remaining_timeout(deadline)):
+                ech_key = await self._client.get_ech_key(self.ech)
             if ech_key is not None:
                 self._curl.curl_options[CurlOpt.ECH] = f"ecl:{ech_key}"
                 # ECH 密钥属于敏感数据，日志只记录已配置状态，不打印密钥内容。
                 logger.debug("Curl解析器 {} 已设置 ECH 密钥", self.name)
             else:
+                self._curl.curl_options.pop(CurlOpt.ECH, None)
                 logger.warning(
                     "Curl解析器 {} 未能获取 ECH 密钥，使用默认设置", self.name
                 )
@@ -101,7 +111,7 @@ class CurlNameserver(BaseNameserver):
                     self.url,
                     params={"dns": encoded},
                     headers={"Host": self.host, "Accept": "application/dns-message"},
-                    timeout=timeout,
+                    timeout=remaining_timeout(deadline),
                     verify=self.verify,
                 )
             else:
@@ -113,7 +123,7 @@ class CurlNameserver(BaseNameserver):
                         "Content-Type": "application/dns-message",
                         "Accept": "application/dns-message",
                     },
-                    timeout=timeout,
+                    timeout=remaining_timeout(deadline),
                     verify=self.verify,
                 )
         except Exception:

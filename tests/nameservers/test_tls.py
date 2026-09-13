@@ -356,8 +356,8 @@ async def test_tls_nameserver_connect_times_out_without_pool(monkeypatch) -> Non
 
     monkeypatch.setattr("smartdns.nameservers._tls.connect_tcp", hanging_connect)
 
-    # 传入 timeout=0（已到期），应回退到配置的 0.3 秒而不是被当作"未设置"。
-    with pytest.raises(TimeoutError):
+    # dnspython 传入的是剩余 lifetime；0 表示已经到期，不能重置为配置超时。
+    with pytest.raises(dns.exception.Timeout):
         await nameserver.async_query(
             dns.message.make_query("example.com.", "A"),
             0,

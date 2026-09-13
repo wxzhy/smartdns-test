@@ -2,6 +2,7 @@
 
 from socket import AF_INET, MSG_OOB
 
+import pytest
 from anyio.abc import SocketAttribute
 
 from smartdns.models.nameserver import TCPNameserverConfig, UDPNameserverConfig
@@ -33,8 +34,11 @@ class _FakeDatagramSocket:
 
 
 class _FakeRawSocket:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self, error: Exception | None = None, sent_size: int | None = None
+    ) -> None:
         self.error = error
+        self.sent_size = sent_size
         self.sent: list[tuple[bytes, int]] = []
         self.blocking_changes: list[bool] = []
 
@@ -42,7 +46,7 @@ class _FakeRawSocket:
         if self.error is not None:
             raise self.error
         self.sent.append((data, flags))
-        return len(data)
+        return len(data) if self.sent_size is None else self.sent_size
 
     def setblocking(self, value: bool) -> None:
         self.blocking_changes.append(value)
@@ -132,3 +136,15 @@ async def test_tcp_trick_failure_falls_back_to_complete_payload() -> None:
 
     assert raw_socket.blocking_changes == []
     assert stream.sent == [payload]
+
+
+async def test_tcp_trick_partial_write_does_not_duplicate_prefix() -> None:
+    payload = bytes(range(40))
+    raw_socket = _FakeRawSocket(sent_size=8)
+    stream = _FakeStream(raw_socket)
+    socket = AnyioStreamSocket(stream, use_tricks=True)
+
+    with pytest.raises(OSError, match="仅发送"):
+        await socket.sendall(payload, 1)
+
+    assert stream.sent == []
