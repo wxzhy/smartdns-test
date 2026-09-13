@@ -116,12 +116,18 @@ class _FakeAcceptor:
     def __init__(self, streams: list[_FakeStream]) -> None:
         self._streams = list(streams)
         self._exhausted = Event()
+        self.accepted_two = Event()
+        self.accepted_count = 0
         self.closed = False
         self.listeners = [self]
 
     async def accept(self) -> _FakeStream:
         if self._streams:
-            return self._streams.pop(0)
+            stream = self._streams.pop(0)
+            self.accepted_count += 1
+            if self.accepted_count >= 2:
+                self.accepted_two.set()
+            return stream
         await self._exhausted.wait()
         raise AssertionError  # pragma: no cover - 阻塞事件未释放时的兜底
 
@@ -173,3 +179,34 @@ async def test_tcp_listener_limits_concurrent_connections(monkeypatch) -> None:
             await third_entered.wait()
         assert entered == 3  # 前两个完成后第三个进入
         tg.cancel_scope.cancel()
+
+
+async def test_cancel_closes_connection_waiting_for_capacity(monkeypatch) -> None:
+    """停机取消发生在限流等待期间时，已 accept 的连接也必须关闭。"""
+    streams = [_FakeStream(_query_payload()) for _ in range(2)]
+    acceptor = _FakeAcceptor(streams)
+
+    async def fake_create_tcp_listener(**kwargs):
+        return acceptor
+
+    monkeypatch.setattr(
+        "smartdns.listeners.tcp.create_tcp_listener", fake_create_tcp_listener
+    )
+
+    listener = _listener(timeout=30, max_connections=1)
+    first_entered = Event()
+    release = Event()
+
+    async def handler(request: Request):
+        first_entered.set()
+        await release.wait()
+
+    async with create_task_group() as tg:
+        tg.start_soon(listener.start, handler)
+        with fail_after(5):
+            await first_entered.wait()
+            await acceptor.accepted_two.wait()
+        assert not streams[1].closed
+        tg.cancel_scope.cancel()
+
+    assert streams[1].closed

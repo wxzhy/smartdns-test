@@ -6,9 +6,11 @@ from typing import TYPE_CHECKING, cast
 from anyio import (
     ClosedResourceError,
     Semaphore,
+    aclose_forcefully,
     create_task_group,
     create_tcp_listener,
     fail_after,
+    sleep,
 )
 from dns.asyncquery import receive_tcp, send_tcp
 from loguru import logger
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
 
     from smartdns.listeners.base import Handler
     from smartdns.models.listener import Do53ListenerConfig
+
+_ACCEPT_ERROR_BACKOFF = 0.1
 
 
 class TCPListener(BaseListener):
@@ -67,12 +71,18 @@ class TCPListener(BaseListener):
                     return
                 except Exception:
                     logger.warning("TCP监听器 {} 接收连接失败", self.name)
+                    await sleep(_ACCEPT_ERROR_BACKOFF)
                     continue
-                await limiter.acquire()
+                try:
+                    await limiter.acquire()
+                except BaseException:
+                    await aclose_forcefully(stream)
+                    raise
                 try:
                     tg.start_soon(self._handle_connection, stream, limiter)
                 except BaseException:
                     limiter.release()
+                    await aclose_forcefully(stream)
                     raise
 
         async with listener, create_task_group() as tg:

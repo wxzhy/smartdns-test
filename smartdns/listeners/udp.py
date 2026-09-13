@@ -11,7 +11,7 @@ from sys import platform
 from time import time
 from typing import TYPE_CHECKING
 
-from anyio import ClosedResourceError, Semaphore, create_task_group, fail_after
+from anyio import ClosedResourceError, Semaphore, create_task_group, fail_after, sleep
 from anyio.abc import UDPSocket
 from dns.asyncquery import receive_udp, send_udp
 from dns.inet import af_for_address
@@ -31,6 +31,8 @@ if platform == "win32":
     from socket import SO_EXCLUSIVEADDRUSE
 else:
     from socket import SO_REUSEPORT
+
+_RECEIVE_ERROR_BACKOFF = 0.1
 
 
 class UDPListener(BaseListener):
@@ -133,6 +135,7 @@ class UDPListener(BaseListener):
                         break
                     except Exception:
                         logger.warning("UDP监听器 {} 接收请求失败", self.name)
+                        await sleep(_RECEIVE_ERROR_BACKOFF)
                         continue
                     await limiter.acquire()
                     try:
