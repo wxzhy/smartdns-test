@@ -45,6 +45,20 @@ def _a_response() -> Response:
     )
 
 
+def _cname_response(*, with_address: bool = True) -> Response:
+    answer = (
+        "leaf.example.org. 120 IN A 192.0.2.1\n" if with_address else ""
+    )
+    return _response(
+        "A",
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
+        ";QUESTION\nexample.com. IN A\n;ANSWER\n"
+        "example.com. 300 IN CNAME edge.example.net.\n"
+        "edge.example.net. 180 IN CNAME leaf.example.org.\n"
+        + answer,
+    )
+
+
 def _mx_response() -> Response:
     return _response(
         "MX",
@@ -78,6 +92,40 @@ def test_replace_response_ip_rewrites_matching_family() -> None:
     assert result.ip_list == ["203.0.113.10"]
     # 原应答不受影响（copy-on-write）。
     assert response.ip_list == ["192.0.2.1"]
+
+
+def test_replace_response_ip_keeps_cname_leaf_as_address_owner() -> None:
+    response = _cname_response()
+
+    result = replace_response_ip(response, {IPv4Address("203.0.113.10")})
+
+    assert result.ans is not None
+    assert result.ans.rrset is not None
+    assert result.ans.rrset.name == from_text("leaf.example.org.")
+    assert [rrset.name for rrset in result.ans.response.answer] == [
+        from_text("example.com."),
+        from_text("edge.example.net."),
+        from_text("leaf.example.org."),
+    ]
+
+
+def test_replace_response_ip_uses_cname_leaf_for_nodata_fallback() -> None:
+    response = _cname_response(with_address=False)
+    assert response.ans is not None
+    assert response.ans.rrset is None
+
+    result = replace_response_ip(
+        response, {IPv4Address("203.0.113.10")}, ttl=60
+    )
+
+    assert result.ans is not None
+    assert result.ans.rrset is not None
+    assert result.ans.rrset.name == from_text("leaf.example.org.")
+    assert [rrset.name for rrset in result.ans.response.answer] == [
+        from_text("example.com."),
+        from_text("edge.example.net."),
+        from_text("leaf.example.org."),
+    ]
 
 
 def test_replace_response_ipinfo_filters_by_family() -> None:

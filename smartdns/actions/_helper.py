@@ -68,14 +68,17 @@ def replace_response_ip(
 ) -> Response:
     """用静态 IP 集合返回新的响应；空集合时保留原响应。
 
-    NODATA 空应答（无 rrset）也允许替换：以请求的 qname/rdtype 新建
-    RRset，供 fallback 之类的静态回退从空应答产出有记录的应答。
+    NODATA 空应答（无 rrset）也允许替换：以 CNAME 链的最终规范名称和
+    请求 rdtype 新建 RRset，供 fallback 之类的静态回退产出有记录的应答。
     ttl 为 None 时沿用原 rrset 的 TTL（NODATA 无 rrset 则为 0）。
     """
     answer = response.ans
     if answer is None or not ips:
         return response
-    name = answer.qname
+    # A/AAAA 的 owner 应是 CNAME 链的最终规范名称；无 CNAME 时它等于 qname。
+    # 这里也要覆盖 CNAME 后 NODATA 的情况，此时 answer.rrset 为 None，不能
+    # 从旧 RRset 取 owner。
+    name = answer.canonical_name
     rdclass = answer.rdclass
     rdtype = answer.rdtype
     if ttl is None:
