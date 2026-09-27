@@ -69,7 +69,7 @@ class DNSCryptNameserverConfig(BaseNameserverConfig):
     )
     tcp_only: bool = Field(default=False, description="是否强制使用 TCP")
     pool_size: int = Field(
-        default=0, ge=0, description="TCP 连接池大小（复用加密通道的 TCP 连接）"
+        default=0, ge=0, description="已弃用，DNSCrypt TCP 每次查询都新建连接"
     )
 
     @field_validator("stamp")

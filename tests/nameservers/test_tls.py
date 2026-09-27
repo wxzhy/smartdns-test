@@ -8,6 +8,8 @@
 import asyncio
 import ssl as stdlib_ssl
 import struct
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import anyio
@@ -586,3 +588,31 @@ async def test_interrupted_exchange_rebuilds_tls_connection(monkeypatch) -> None
         assert created[0].healthy is False
     finally:
         server.close()
+
+
+async def test_cancelled_exchange_marks_pooled_tls_connection_unhealthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nameserver = TLSNameserver(
+        TLSNameserverConfig(
+            name="t", type="tls", address="dns.example", verify=False, pool_size=1
+        )
+    )
+    conn = SimpleNamespace(healthy=True)
+
+    class FakePool:
+        @asynccontextmanager
+        async def connection(self, *args, **kwargs):
+            yield conn
+
+    async def cancelled_query(*args, **kwargs):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(nameserver, "_pool", FakePool())
+    monkeypatch.setattr(nameserver, "_query_on_stream", cancelled_query)
+    query = dns.message.make_query("example.com.", "A")
+    with pytest.raises(asyncio.CancelledError):
+        await nameserver.async_query(
+            query, 1.0, None, 0, False, cast("dns.asyncbackend.Backend", object())
+        )
+    assert conn.healthy is False

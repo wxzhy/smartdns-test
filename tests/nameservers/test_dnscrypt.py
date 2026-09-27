@@ -15,17 +15,15 @@ from typing import TYPE_CHECKING, cast
 import dns.asyncbackend
 import dns.flags
 import dns.message
+import dns.query
 import dns.rcode
 import dns.rdataclass
 import dns.rdatatype
 import dns.rrset
+import dnsstamps
 import pytest
 from dns.rdtypes.ANY.TXT import TXT
-from nacl.bindings import (
-    crypto_aead_xchacha20poly1305_ietf_decrypt,
-    crypto_aead_xchacha20poly1305_ietf_encrypt,
-    crypto_scalarmult,
-)
+from nacl.bindings import crypto_scalarmult_base
 from nacl.exceptions import CryptoError
 from nacl.public import PrivateKey
 from nacl.signing import SigningKey
@@ -36,10 +34,17 @@ from smartdns.models.nameserver import DNSCryptNameserverConfig
 from smartdns.nameservers._dnscrypt import (
     RESOLVER_MAGIC,
     decrypt_response,
+    derive_key,
     encrypt_query,
     pad_query,
     parse_addr,
     parse_stamp,
+    unpad_response,
+)
+from smartdns.nameservers._sodium import (
+    box_beforenm,
+    box_easy_afternm,
+    box_open_easy_afternm,
 )
 from smartdns.nameservers.dnscrypt import DNSCryptNameserver
 from smartdns.nameservers.manager import NameserverManager
@@ -61,6 +66,8 @@ class _FakeDnsCryptServer:
         self.server_private = PrivateKey.generate()
         self.client_magic = CLIENT_MAGIC
         self.force_tc = False
+        self.wrong_id = False
+        self.wrong_question = False
         # (es_version, serial, start_offset, expire_offset, break_signature)
         self.certs: list[tuple[int, int, int, int, bool]] = [(2, 2, -100, 86400, False)]
         self.transport_counts = {"udp": 0, "tcp": 0}
@@ -97,12 +104,14 @@ class _FakeDnsCryptServer:
             raise ValueError("不是 DNSCrypt 查询")
         client_pk = data[8:40]
         client_nonce = data[40:52]
-        shared = crypto_scalarmult(bytes(self.server_private.encode()), client_pk)
-        payload = crypto_aead_xchacha20poly1305_ietf_decrypt(
-            data[52:], None, client_nonce + b"\x00" * 12, shared
-        )
-        query = dns.message.from_wire(payload, ignore_trailing=True)
+        shared = box_beforenm(bytes(self.server_private.encode()), client_pk)
+        payload = box_open_easy_afternm(data[52:], client_nonce + b"\x00" * 12, shared)
+        query = dns.message.from_wire(unpad_response(payload))
         response = dns.message.make_response(query)
+        if self.wrong_id:
+            response.id ^= 1
+        if self.wrong_question:
+            response.question = dns.message.make_query("other.example.", "A").question
         # str(Name) 渲染为带根点的绝对域名，构造 rrset 需要绝对名。
         response.answer.append(
             dns.rrset.from_text(
@@ -111,11 +120,9 @@ class _FakeDnsCryptServer:
         )
         if self.force_tc:
             response.flags |= dns.flags.TC
-        response_wire = response.to_wire()
+        response_wire = pad_query(response.to_wire(), 0)
         combined = client_nonce + random_bytes(12)
-        ciphertext = crypto_aead_xchacha20poly1305_ietf_encrypt(
-            response_wire, None, combined, shared
-        )
+        ciphertext = box_easy_afternm(response_wire, combined, shared)
         return RESOLVER_MAGIC + combined + ciphertext
 
     def _handle_plain(self, data: bytes) -> bytes:
@@ -150,18 +157,16 @@ def _varint(value: int) -> bytes:
 
 
 def _stamp(host: str, port: int, server: _FakeDnsCryptServer) -> str:
-    addr = f"{host}:{port}"
-    payload = (
-        b"\x01"
-        + struct.pack("<Q", 7)  # props：DNSSEC | 无日志 | 无过滤
-        + _varint(len(addr))
-        + addr.encode()
-        + _varint(32)
-        + server.provider_key
-        + _varint(len(server.provider_name))
-        + server.provider_name.encode()
+    return dnsstamps.create_dnscrypt(
+        f"{host}:{port}",
+        server.provider_key.hex(),
+        server.provider_name,
+        options=[
+            dnsstamps.Option.DNSSEC,
+            dnsstamps.Option.NO_LOGS,
+            dnsstamps.Option.NO_FILTERS,
+        ],
     )
-    return "sdns://" + urlsafe_b64encode(payload).rstrip(b"=").decode()
 
 
 async def _start_udp(
@@ -283,17 +288,24 @@ def test_parse_stamp_rejects_invalid() -> None:
     with pytest.raises(ValueError, match="base64"):
         parse_stamp("sdns://!!!not-base64!!!")
     with pytest.raises(ValueError, match="类型"):
-        # 类型字节 0x02 是 DoH stamp。
-        parse_stamp("sdns://" + urlsafe_b64encode(b"\x02\x00").rstrip(b"=").decode())
+        parse_stamp(dnsstamps.create_plain("1.2.3.4"))
     with pytest.raises(ValueError, match="截断"):
         # 类型 + props 正常，addr 长度声明 16 字节但数据缺失。
         parse_stamp(
             "sdns://"
             + urlsafe_b64encode(b"\x01" + b"\x00" * 8 + b"\x10").rstrip(b"=").decode()
         )
-    payload = b"\x01" + b"\x00" * 8 + _varint(4) + b"a:44" + _varint(3) + b"abc"
+    payload = b"\x01" + b"\x00" * 8 + _varint(7) + b"1.2.3.4" + _varint(3) + b"abc"
     with pytest.raises(ValueError, match="公钥"):
         parse_stamp("sdns://" + urlsafe_b64encode(payload).rstrip(b"=").decode())
+
+
+def test_parse_stamp_does_not_silently_truncate_long_provider_name() -> None:
+    provider_name = "2.dnscrypt-cert." + "a" * 60 + "." + "b" * 56
+    assert len(provider_name) == 133
+    stamp = dnsstamps.create_dnscrypt("9.9.9.9", "ff" * 32, provider_name)
+    with pytest.raises(ValueError, match="字段解析不完整"):
+        parse_stamp(stamp)
 
 
 def test_pad_query_spec_alignment() -> None:
@@ -310,7 +322,7 @@ def test_pad_query_spec_alignment() -> None:
 
 
 def test_replay_guard_rejects_nonce_mismatch() -> None:
-    key = crypto_scalarmult(
+    key = derive_key(
         PrivateKey.generate().encode(), PrivateKey.generate().public_key.encode()
     )
     encrypted, nonce = encrypt_query(b"q", key, b"k" * 32, CLIENT_MAGIC)
@@ -318,6 +330,47 @@ def test_replay_guard_rejects_nonce_mismatch() -> None:
     wire = RESOLVER_MAGIC + b"\xff" * 12 + nonce + encrypted[52:]
     with pytest.raises(ValueError, match="nonce"):
         decrypt_response(wire, key, nonce)
+
+
+def test_official_dnscrypt_v2_crypto_vector(monkeypatch: pytest.MonkeyPatch) -> None:
+    # https://dnscrypt.github.io/dnscrypt-protocol/draft-denis-dprive-dnscrypt.html#appendix-2-dnscrypt-test-vectors
+    resolver_pk = bytes.fromhex(
+        "358072d6365880d1aeea329adf9121383851ed21a28e3b75e965d0d2cd166254"
+    )
+    client_sk = bytes(range(0x40, 0x60))
+    client_pk = crypto_scalarmult_base(client_sk)
+    assert client_pk.hex() == (
+        "79a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a"
+    )
+    key = derive_key(client_sk, resolver_pk)
+    assert key.hex() == (
+        "335d32f2d65e6623cbbd05b6539c9575fee16cb5405fe839ab4bd291fdf13262"
+    )
+    monkeypatch.setattr(
+        "smartdns.nameservers._dnscrypt.random_bytes",
+        lambda count: bytes(range(0xA0, 0xA0 + count)),
+    )
+    query = bytes.fromhex(
+        "12340100000100000000000003777777076578616d706c6503636f6d0000010001"
+    )
+    wire, nonce = encrypt_query(
+        pad_query(query, 256), key, client_pk, bytes.fromhex("b1b2b3b4b5b6b7b8")
+    )
+    assert len(wire) == 324
+    assert wire[52:68].hex() == "2dae527c26386d5cd4e61152db6dd181"
+    assert wire[68:100].hex() == (
+        "2ff6aaf7644fc122afc70b1b580b18f10fbc26577abc759152cde31cd0afc5c5"
+    )
+    response_wire = bytes.fromhex(
+        "7236666e76576a38a0a1a2a3a4a5a6a7a8a9aaabc0c1c2c3c4c5c6c7c8c9cacb"
+        "f2670995c6d37c2f8d2016029dd5970b893de83c02815ece9b48d9fd0b0dca87"
+        "41674142fbd8e12c1120b111f366326aa71c89823a2931ac5c860dad49685ed6"
+        "cc22cc13e829d2e51d1c00ea64d1d39d"
+    )
+    assert unpad_response(decrypt_response(response_wire, key, nonce)).hex() == (
+        "12348180000100010000000003777777076578616d706c6503636f6d0000010001"
+        "c00c0001000100000e1000045db8d822"
+    )
 
 
 async def test_udp_query_round_trip() -> None:
@@ -376,6 +429,20 @@ async def test_truncated_udp_raises() -> None:
         transport.close()
 
 
+@pytest.mark.parametrize("fault", ["wrong_id", "wrong_question"])
+async def test_rejects_mismatched_encrypted_response(fault: str) -> None:
+    server = _FakeDnsCryptServer()
+    setattr(server, fault, True)
+    transport, port = await _start_udp(server)
+    try:
+        nameserver = await _make_nameserver(server, port)
+        with pytest.raises(dns.query.BadResponse):
+            await _query(nameserver)
+        await nameserver.stop()
+    finally:
+        transport.close()
+
+
 async def test_cert_selection_prefers_highest_serial() -> None:
     server = _FakeDnsCryptServer()
     server.certs = [(2, 1, -100, 86400, False), (2, 7, -100, 86400, False)]
@@ -418,8 +485,8 @@ async def test_start_raises_without_valid_cert() -> None:
         transport.close()
 
 
-async def test_tcp_pool_reuses_connection() -> None:
-    # pool_size=1：证书获取走一次性 TCP 回退，之后多次查询复用同一池内连接。
+async def test_tcp_pool_setting_still_uses_one_connection_per_query() -> None:
+    # DNSCrypt 协议每条 TCP 连接只能进行一次加密查询，即使配置旧的 pool_size。
     server = _FakeDnsCryptServer()
     tcp, port = await _start_tcp(server)
     try:
@@ -427,8 +494,8 @@ async def test_tcp_pool_reuses_connection() -> None:
         for _ in range(3):
             response = await _query(nameserver)
             assert response.answer[0][0].address == PADDED_ANSWER_IP
-        # 1 条证书回退临时连接 + 1 条池内复用连接。
-        assert server.tcp_connections == 2
+        # 1 条证书回退连接 + 3 条查询连接。
+        assert server.tcp_connections == 4
         assert server.transport_counts["tcp"] == 4  # 证书 + 3 次查询
         await nameserver.stop()
     finally:

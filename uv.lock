@@ -303,6 +303,15 @@ idna = [
 ]
 
 [[package]]
+name = "dnsstamps"
+version = "1.4.1"
+source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
+sdist = { url = "https://mirrors.ustc.edu.cn/pypi/packages/66/e6/18c31e034acb688c0bf0f22e8427ac74060ad2b3d92b16b785b0325422a7/dnsstamps-1.4.1.tar.gz", hash = "sha256:8c6bedc5085daeb1ff79893293e82cbd1a5dc65b689c897a1af971bcbf562d97", size = 13492, upload-time = "2025-12-12T10:26:33.182Z" }
+wheels = [
+    { url = "https://mirrors.ustc.edu.cn/pypi/packages/e3/81/129ce307ceb2fb66180ff80826f4c53de931b96e5c5467916246d821d72a/dnsstamps-1.4.1-py3-none-any.whl", hash = "sha256:34cd0385726650c63fd68224f557755a5c340d077c3bd342bb7335a6c7c57fdf", size = 16704, upload-time = "2025-12-12T10:26:32.124Z" },
+]
+
+[[package]]
 name = "executing"
 version = "2.2.1"
 source = { registry = "https://mirrors.cernet.edu.cn/pypi/web/simple" }
@@ -1142,6 +1151,7 @@ dependencies = [
     { name = "cachetools" },
     { name = "curl-cffi" },
     { name = "dnspython", extra = ["doh", "idna"] },
+    { name = "dnsstamps" },
     { name = "generic-connection-pool" },
     { name = "icmplib" },
     { name = "loguru" },
@@ -1176,6 +1186,7 @@ requires-dist = [
     { name = "cachetools", specifier = ">=7.1.7" },
     { name = "curl-cffi", specifier = ">=0.16.0" },
     { name = "dnspython", extras = ["doh", "idna"], specifier = ">=2.8.0" },
+    { name = "dnsstamps", specifier = ">=1.4.1" },
     { name = "generic-connection-pool", specifier = ">=0.8.1" },
     { name = "icmplib", specifier = ">=3.0.4" },
     { name = "loguru", specifier = ">=0.7.3" },

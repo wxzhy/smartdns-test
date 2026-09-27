@@ -5,6 +5,7 @@ import dns.asyncbackend
 import dns.asyncquery
 import dns.message
 import utls
+from anyio import CancelScope
 from generic_connection_pool.asyncio import ConnectionPool
 from loguru import logger
 
@@ -139,7 +140,7 @@ class TLSNameserver(BaseAddressNameserver):
                             one_rr_per_rrset,
                             ignore_trailing,
                         )
-                    except Exception:
+                    except BaseException:
                         # 交换中途失败（如超时打断半条 TLS 记录）后记录层
                         # 对齐不可信，标记脏连接，归还池后由健康检查在
                         # 下次获取时重建。
@@ -164,7 +165,8 @@ class TLSNameserver(BaseAddressNameserver):
                     ignore_trailing,
                 )
             finally:
-                await conn.aclose()
+                with CancelScope(shield=True):
+                    await conn.aclose()
         except Exception:
             logger.warning("TLS 上游 {} 查询失败", self.name)
             raise

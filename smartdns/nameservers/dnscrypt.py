@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING
 
 import dns.asyncbackend
 import dns.message
+import dns.query
 from anyio import Lock, fail_after
-from generic_connection_pool.asyncio import ConnectionPool
 from loguru import logger
 from nacl.exceptions import CryptoError
 from nacl.public import PrivateKey
@@ -13,7 +13,6 @@ from smartdns.nameservers._dnscrypt import (
     UDP_MINIMUM_SIZE,
     CertInfo,
     StampInfo,
-    _tcp_exchange,
     _tcp_roundtrip,
     _udp_roundtrip,
     decrypt_response,
@@ -22,12 +21,9 @@ from smartdns.nameservers._dnscrypt import (
     fetch_best_cert,
     pad_query,
     parse_stamp,
+    unpad_response,
 )
-from smartdns.nameservers._pool import (
-    HealthCheckedTCPConnectionManager,
-    TcpEndpoint,
-    TrackedStream,
-)
+from smartdns.nameservers._sodium import require_libsodium
 from smartdns.nameservers.base import (
     BaseNameserver,
     query_deadline,
@@ -63,7 +59,6 @@ class DNSCryptNameserver(BaseNameserver):
         self._key: bytes | None = None
         self._cert_generation = 0
         self._next_refresh_attempt = 0.0
-        self._pool: ConnectionPool[TcpEndpoint, TrackedStream] | None = None
         # 刷新互斥：同一时刻只有一个查询触发证书重取，其余等待后复用结果。
         self._refresh_lock = Lock()
 
@@ -82,6 +77,7 @@ class DNSCryptNameserver(BaseNameserver):
 
     async def start(self):
         """启动：获取证书、生成客户端密钥并派生共享密钥。"""
+        require_libsodium()
         cert = await fetch_best_cert(
             self.host,
             self.port,
@@ -93,19 +89,16 @@ class DNSCryptNameserver(BaseNameserver):
             raise ValueError(f"DNSCrypt 上游 {self.name} 未找到有效证书")
         self._install_cert(cert)
         if self._pool_size:
-            self._pool = ConnectionPool(
-                HealthCheckedTCPConnectionManager(connect_timeout=self.timeout),
-                min_idle=1,
-                max_size=self._pool_size,
-                total_max_size=self._pool_size,
+            logger.warning(
+                "DNSCrypt 上游 {} 的 pool_size 已弃用；协议要求每个 TCP 查询使用新连接",
+                self.name,
             )
         logger.info(
-            "DNSCrypt 上游 {} 已启动，目标: {}:{}，证书 serial={}，TCP 池: {}",
+            "DNSCrypt 上游 {} 已启动，目标: {}:{}，证书 serial={}",
             self.name,
             self.host,
             self.port,
             cert.serial,
-            self._pool_size,
         )
 
     def _install_cert(self, cert: CertInfo) -> None:
@@ -167,10 +160,7 @@ class DNSCryptNameserver(BaseNameserver):
                     )
 
     async def stop(self):
-        """停止DNSCrypt解析器，关闭 TCP 连接池。"""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        """停止 DNSCrypt 解析器。"""
         logger.info("DNSCrypt 上游 {} 已停止", self.name)
 
     async def async_query(
@@ -239,49 +229,28 @@ class DNSCryptNameserver(BaseNameserver):
         assert cert is not None
         assert key is not None
         assert client_pk is not None
-        # DNSCrypt 要求加密查询的 DNS ID 为 0（报文头前 2 字节）。
-        wire = bytearray(request.to_wire())
-        wire[0:2] = b"\x00\x00"
         encrypted, client_nonce = encrypt_query(
-            pad_query(bytes(wire), 0 if use_tcp else UDP_MINIMUM_SIZE),
+            pad_query(request.to_wire(), 0 if use_tcp else UDP_MINIMUM_SIZE),
             key,
             client_pk,
             cert.client_magic,
         )
         if use_tcp:
-            if self._pool is not None:
-                # 连接获取（含新建）与交换共享同一绝对截止时刻。
-                endpoint: TcpEndpoint = (self.host, self.port)
-                async with self._pool.connection(
-                    endpoint, timeout=remaining_timeout(deadline)
-                ) as stream:
-                    try:
-                        response_wire = await _tcp_exchange(
-                            stream,
-                            encrypted,
-                            remaining_timeout(deadline),
-                        )
-                    except Exception:
-                        # 交换中途失败（如超时打断半读应答）后帧对齐不可信，
-                        # 标记脏连接，归还池后由健康检查在下次获取时重建。
-                        stream.healthy = False
-                        raise
-            else:
-                response_wire = await _tcp_roundtrip(
-                    self.host, self.port, encrypted, remaining_timeout(deadline)
-                )
+            response_wire = await _tcp_roundtrip(
+                self.host, self.port, encrypted, remaining_timeout(deadline)
+            )
         else:
             response_wire = await _udp_roundtrip(
                 self.host, self.port, encrypted, remaining_timeout(deadline)
             )
-        payload = decrypt_response(response_wire, key, client_nonce)
+        payload = unpad_response(decrypt_response(response_wire, key, client_nonce))
         response = dns.message.from_wire(
             payload,
             one_rr_per_rrset=one_rr_per_rrset,
-            ignore_trailing=True,
+            ignore_trailing=ignore_trailing,
             # UDP 应答带 TC 时抛 Truncated，由 dnspython 以 max_size 重调。
             raise_on_truncation=not use_tcp,
         )
-        # 加密应答的 DNS ID 恒为 0，恢复原请求 ID 供调用方核对。
-        response.id = request.id
+        if not request.is_response(response) or response.question != request.question:
+            raise dns.query.BadResponse("DNSCrypt 应答 ID 或问题与查询不匹配")
         return response

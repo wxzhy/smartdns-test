@@ -1,11 +1,10 @@
 """DNSCrypt 协议 2 的 stamp 解析、证书处理与原始传输层。
 
-参考 utils/dnscrypt-python.py（v1 参考实现），本模块只实现当前通用的
-协议 2：响应 magic 为 ``r6fnvWjl``，仅接受 es_version=2 证书（X25519
-共享密钥 + XChaCha20-Poly1305 AEAD，经 PyNaCl）。与参考实现的已知偏差：
+本模块实现协议 2：响应 magic 为 ``r6fnvWj8``，仅接受 es_version=2
+证书。PyNaCl 用于密钥与证书，DNSCrypt 的 XChaCha20 crypto_box 由
+libsodium 提供。stamp 通过 dnsstamps 解析。
 
-- 填充按规范实现（UDP 明文至少 256 字节、总量 64 字节对齐，``0x80`` +
-  零填充；TCP 仅 64 字节对齐无下限）——参考实现的填充不合规。
+- 查询以 ``0x80`` 和零字节填充；UDP 明文至少 256 字节，TCP 无下限。
 - 应答解密校验 nonce 前 12 字节等于客户端 nonce（回放/错配防护）。
 
 加密交换不经过 dns.asyncquery（其无 dnscrypt 支持），直接用 anyio 套接字
@@ -15,27 +14,31 @@
 
 from base64 import urlsafe_b64decode
 from dataclasses import dataclass
+from ipaddress import ip_address
+from re import fullmatch
 from struct import pack, unpack
 from time import time
 
 import dns.flags
 import dns.message
+import dns.query
 import dns.rcode
 import dns.rdatatype
-from anyio import connect_tcp, create_connected_udp_socket, fail_after
+import dnsstamps
+from anyio import CancelScope, connect_tcp, create_connected_udp_socket, fail_after
 from loguru import logger
-from nacl.bindings import (
-    crypto_aead_xchacha20poly1305_ietf_decrypt,
-    crypto_aead_xchacha20poly1305_ietf_encrypt,
-    crypto_scalarmult,
-)
 from nacl.exceptions import CryptoError
 from nacl.signing import VerifyKey
 from nacl.utils import random as random_bytes
 
+from smartdns.nameservers._sodium import (
+    box_beforenm,
+    box_easy_afternm,
+    box_open_easy_afternm,
+)
 from smartdns.nameservers.base import query_deadline, remaining_timeout
 
-RESOLVER_MAGIC = b"r6fnvWjl"
+RESOLVER_MAGIC = b"r6fnvWj8"
 CERT_MAGIC = b"DNSC"
 ES_VERSION_XCHACHA = 2
 NONCE_HALF_SIZE = 12
@@ -43,7 +46,6 @@ MAC_SIZE = 16
 PADDING_BLOCK = 64
 UDP_MINIMUM_SIZE = 256
 STAMP_PREFIX = "sdns://"
-STAMP_TYPE_DNSCRYPT = 0x01
 DEFAULT_DNSCRYPT_PORT = 443
 
 
@@ -68,29 +70,6 @@ class CertInfo:
     expire: int  # 证书过期时刻（Unix 时间戳），供运行期刷新判定
 
 
-def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
-    """读取 LEB128 无符号 varint，返回 (值, 新偏移)。"""
-    result = 0
-    shift = 0
-    while True:
-        if offset >= len(data):
-            raise ValueError("stamp 数据在字段中间截断")
-        byte = data[offset]
-        offset += 1
-        result |= (byte & 0x7F) << shift
-        if not byte & 0x80:
-            return result, offset
-        shift += 7
-        if shift > 63:
-            raise ValueError("stamp varint 长度异常")
-
-
-def _read_bytes(data: bytes, offset: int, length: int) -> tuple[bytes, int]:
-    if offset + length > len(data):
-        raise ValueError("stamp 数据在字段中间截断")
-    return data[offset : offset + length], offset + length
-
-
 def parse_addr(addr: str) -> tuple[str, int]:
     """解析 stamp 的 addr 字段，返回 (host, port)。
 
@@ -102,11 +81,21 @@ def parse_addr(addr: str) -> tuple[str, int]:
         host, sep, rest = text[1:].partition("]")
         if not sep:
             raise ValueError(f"stamp 地址缺少右括号: {addr!r}")
+        if rest and not rest.startswith(":"):
+            raise ValueError(f"stamp 地址非法: {addr!r}")
+        if rest == ":":
+            raise ValueError(f"stamp 端口非法: {addr!r}")
         port_text = rest[1:] if rest.startswith(":") else ""
     else:
         host, sep, port_text = text.rpartition(":")
         if not sep:
             host, port_text = text, ""
+        elif not port_text:
+            raise ValueError(f"stamp 端口非法: {addr!r}")
+    try:
+        ip_address(host)
+    except ValueError:
+        raise ValueError(f"stamp IP 地址非法: {addr!r}") from None
     if not port_text:
         return host, DEFAULT_DNSCRYPT_PORT
     try:
@@ -119,41 +108,51 @@ def parse_addr(addr: str) -> tuple[str, int]:
 
 
 def parse_stamp(uri: str) -> StampInfo:
-    """解析 sdns:// DNSCrypt stamp（类型字节 0x01）。
-
-    布局：``0x01 | props(8 字节 LE uint64) | varint(addr) | varint(pk=32)
-    | varint(providerName)``；addr 可省略端口（默认 443）。
-    """
+    """用 dnsstamps 解析 DNSCrypt stamp，并检查必需字段。"""
     if not uri.startswith(STAMP_PREFIX):
         raise ValueError("stamp 必须以 sdns:// 开头")
-    encoded = uri[len(STAMP_PREFIX) :]
+    if not fullmatch(r"[A-Za-z0-9_-]+={0,2}", uri[len(STAMP_PREFIX) :]):
+        raise ValueError("stamp base64 编码非法")
     try:
-        data = urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        parsed = dnsstamps.parse(uri)
     except Exception as error:
-        raise ValueError(f"stamp base64 解码失败: {error}") from None
-    if len(data) < 9 or data[0] != STAMP_TYPE_DNSCRYPT:
+        raise ValueError(f"stamp 解析失败或字段截断: {error}") from error
+    if parsed.protocol != dnsstamps.Protocol.DNSCRYPT:
         raise ValueError("stamp 类型不是 DNSCrypt（0x01）")
-    props = int.from_bytes(data[1:9], "little")
-    offset = 9
-    addr_len, offset = _read_varint(data, offset)
-    addr_raw, offset = _read_bytes(data, offset, addr_len)
-    pk_len, offset = _read_varint(data, offset)
-    if pk_len != 32:
-        raise ValueError(f"stamp 公钥长度应为 32 字节，实际 {pk_len}")
-    pk_raw, offset = _read_bytes(data, offset, pk_len)
-    name_len, offset = _read_varint(data, offset)
-    name_raw, _ = _read_bytes(data, offset, name_len)
     try:
-        host, port = parse_addr(addr_raw.decode("ascii"))
-        provider_name = name_raw.decode("ascii")
-    except UnicodeDecodeError:
-        raise ValueError("stamp 地址/提供者名称非 ASCII") from None
+        provider_key = bytes.fromhex(parsed.public_key.decode("ascii"))
+    except (AttributeError, UnicodeDecodeError, ValueError) as error:
+        raise ValueError("stamp 公钥非法或缺失") from error
+    if len(provider_key) != 32:
+        raise ValueError(f"stamp 公钥长度应为 32 字节，实际 {len(provider_key)}")
+    try:
+        host, port = parse_addr(parsed.address)
+        provider_name = parsed.provider_name
+        provider_name.encode("ascii")
+    except (AttributeError, UnicodeEncodeError) as error:
+        raise ValueError("stamp 地址/提供者名称非法") from error
+    if not provider_name:
+        raise ValueError("stamp 提供者名称缺失")
+    # dnsstamps 1.4.1 会将单个 LP 字段的高位误当作 VLP 续项标志；
+    # 用库自身重新编码校验，避免把合法的长提供者名称悄悄截短。
+    rebuilt = dnsstamps.build(parsed)[len(STAMP_PREFIX) :]
+    original = uri[len(STAMP_PREFIX) :]
+    original_bytes = urlsafe_b64decode(original + "=" * (-len(original) % 4))
+    rebuilt_bytes = urlsafe_b64decode(rebuilt + "=" * (-len(rebuilt) % 4))
+    if original_bytes[9:] != rebuilt_bytes[9:]:
+        raise ValueError("stamp 字段解析不完整，当前 dnsstamps 版本不支持此格式")
+    options = parsed.options
+    props = (
+        int(dnsstamps.Option.DNSSEC in options)
+        | (int(dnsstamps.Option.NO_LOGS in options) << 1)
+        | (int(dnsstamps.Option.NO_FILTERS in options) << 2)
+    )
     return StampInfo(
         props=props,
         host=host,
         port=port,
         provider_name=provider_name,
-        provider_key=pk_raw,
+        provider_key=provider_key,
     )
 
 
@@ -202,8 +201,8 @@ def pad_query(wire: bytes, minimum: int) -> bytes:
 
 
 def derive_key(client_private: bytes, resolver_pk: bytes) -> bytes:
-    """X25519 共享密钥（crypto_box_beforenm 等价），供 XChaCha20 直接使用。"""
-    return crypto_scalarmult(client_private, resolver_pk)
+    """X25519 + HChaCha20 派生 DNSCrypt v2 crypto_box 共享密钥。"""
+    return box_beforenm(client_private, resolver_pk)
 
 
 def encrypt_query(
@@ -215,9 +214,7 @@ def encrypt_query(
     ``client_magic(8) | client_pk(32) | client_nonce(12) | ciphertext+mac``。
     """
     nonce = random_bytes(NONCE_HALF_SIZE)
-    ciphertext = crypto_aead_xchacha20poly1305_ietf_encrypt(
-        wire, None, nonce + b"\x00" * NONCE_HALF_SIZE, key
-    )
+    ciphertext = box_easy_afternm(wire, nonce + b"\x00" * NONCE_HALF_SIZE, key)
     return client_magic + client_pk + nonce + ciphertext, nonce
 
 
@@ -232,7 +229,17 @@ def decrypt_response(wire: bytes, key: bytes, client_nonce: bytes) -> bytes:
         raise ValueError("应答不是 DNSCrypt 协议 2 应答")
     if nonce[:NONCE_HALF_SIZE] != client_nonce:
         raise ValueError("应答 nonce 与请求不匹配")
-    return crypto_aead_xchacha20poly1305_ietf_decrypt(ciphertext, None, nonce, key)
+    return box_open_easy_afternm(ciphertext, nonce, key)
+
+
+def unpad_response(wire: bytes) -> bytes:
+    """Strip mandatory ISO/IEC 7816-4 padding from an authenticated response."""
+    end = len(wire) - 1
+    while end >= 0 and wire[end] == 0:
+        end -= 1
+    if end < 0 or wire[end] != 0x80:
+        raise ValueError("DNSCrypt 应答填充非法")
+    return wire[:end]
 
 
 async def _receive_exact(stream, size: int) -> bytes:
@@ -261,7 +268,8 @@ async def _tcp_roundtrip(host: str, port: int, wire: bytes, timeout: float) -> b
     try:
         return await _tcp_exchange(stream, wire, remaining_timeout(deadline))
     finally:
-        await stream.aclose()
+        with CancelScope(shield=True):
+            await stream.aclose()
 
 
 async def _udp_roundtrip(host: str, port: int, wire: bytes, timeout: float) -> bytes:
@@ -284,6 +292,8 @@ async def fetch_certs(
         udp_timeout = remaining_timeout(deadline) / 2
         response = await _udp_roundtrip(host, port, query.to_wire(), udp_timeout)
         message = dns.message.from_wire(response)
+        if not query.is_response(message) or message.question != query.question:
+            raise dns.query.BadResponse("DNSCrypt 证书应答与查询不匹配")
         if message.rcode() == dns.rcode.NOERROR and not message.flags & dns.flags.TC:
             return _cert_payloads(message)
     except Exception:
@@ -292,7 +302,10 @@ async def fetch_certs(
     response = await _tcp_roundtrip(
         host, port, query.to_wire(), remaining_timeout(deadline)
     )
-    return _cert_payloads(dns.message.from_wire(response))
+    message = dns.message.from_wire(response)
+    if not query.is_response(message) or message.question != query.question:
+        raise dns.query.BadResponse("DNSCrypt 证书应答与查询不匹配")
+    return _cert_payloads(message)
 
 
 async def fetch_best_cert(
