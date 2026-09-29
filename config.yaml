@@ -1,4 +1,4 @@
-#worker_count: 1
+worker_count: 1
 listeners:
   - name: TCP
     type: tcp
@@ -330,12 +330,12 @@ actions:
             - category-ntp
             - category-stun
         ipv6:
-          - "2607:f8b0:4023:c0b::ca"
-          - "2607:f8b0:4023:c0d::c3"
-          - "2607:f8b0:4023:c03::c4"
-          - "2607:f8b0:4023:c06::5a"
-          - "2607:f8b0:4023:c0b::c4"
-          - "2607:f8b0:4023:c06::ca"
+          - "2607:f8b0:4007:804::2000"
+          - "2607:f8b0:4007:812::2012"
+          - "2607:f8b0:4007:80c::201f"
+          - "2607:f8b0:4007:813::2009"
+          - "2607:f8b0:4007:817::2000"
+          - "2607:f8b0:4007:818::201f"
   - name: filter
     type: filter
     filters:

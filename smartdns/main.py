@@ -1,8 +1,10 @@
 from pathlib import Path
+from signal import SIGTERM
+from sys import platform
 from typing import Annotated
 
 import typer
-from anyio import run
+from anyio import create_task_group, open_signal_receiver, run
 from loguru import logger
 from typer import Typer
 
@@ -15,7 +17,26 @@ app = Typer(name="SmartDNS", help="SmartDNS CLI 工具")
 async def _serve(config: Config) -> None:
     """启动 Master 主服务并阻塞运行。"""
     master = Master(config)
-    await master.start()
+    if platform == "win32":
+        await master.start()
+        return
+
+    # ujail 中的服务可能是 PID 命名空间的 PID 1；默认 SIGTERM 动作不会
+    # 终止它。显式接收信号并取消主服务，让 Master 的 finally 清理资源。
+    with open_signal_receiver(SIGTERM) as signals:
+        async with create_task_group() as tg:
+
+            async def stop_on_sigterm() -> None:
+                async for _ in signals:
+                    logger.info("收到 SIGTERM，停止 SmartDNS 服务")
+                    tg.cancel_scope.cancel()
+                    return
+
+            tg.start_soon(stop_on_sigterm)
+            try:
+                await master.start()
+            finally:
+                tg.cancel_scope.cancel()
 
 
 @app.command()

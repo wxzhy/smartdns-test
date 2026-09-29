@@ -12,14 +12,41 @@ ENV_FILE="$APP_DIR/environment"
 CAPABILITIES="$APP_DIR/deploy/smartdns.openwrt.capabilities.json"
 RUN_DIR=/var/run/smartdns-python
 RUN_USER=smartdnspy
+SERVICE_NAME=smartdns-python
+
+service_stopped() {
+    # rc.common/procd_kill only submits an asynchronous delete request. Wait
+    # until the instance exits so `stop` does not report success while it is
+    # still serving DNS. ujail may take its 35-second grace period, and procd
+    # allows additional time for the jail supervisor.
+    local remaining=75
+    while procd_running "$SERVICE_NAME" main; do
+        if [ "$remaining" -eq 0 ]; then
+            echo "smartdns: stop timed out; instance is still running" >&2
+            return 1
+        fi
+        sleep 1
+        remaining=$((remaining - 1))
+    done
+}
+
+root_owned_regular_file() {
+    # OpenWrt may provide BusyBox ls without a stat applet or coreutils-stat.
+    local details expected
+    expected=$2
+    [ -f "$1" ] && [ ! -L "$1" ] || return 1
+    details=$(LC_ALL=C ls -ldn "$1" 2>/dev/null) || return 1
+    set -- $details
+    [ "$#" -ge 4 ] && [ "$1" = "$expected" ] && \
+        [ "$3" = 0 ] && [ "$4" = 0 ]
+}
 
 load_environment() {
     SMARTDNS_LIBSODIUM_PATH=
     [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ] || return 0
 
     # Never execute a writable or symlinked file as root. Only one data key is supported.
-    if [ ! -f "$ENV_FILE" ] || [ -L "$ENV_FILE" ] || \
-        [ "$(stat -c '%u:%g:%a' "$ENV_FILE" 2>/dev/null)" != '0:0:600' ]; then
+    if ! root_owned_regular_file "$ENV_FILE" '-rw-------'; then
         echo "smartdns: environment must be a regular root:root 0600 file" >&2
         return 1
     fi
@@ -54,11 +81,24 @@ load_environment() {
 }
 
 start_service() {
-    if [ ! -x "$PYTHON" ] || [ ! -r "$CONFIG" ] || \
-        [ ! -f "$CAPABILITIES" ] || [ -L "$CAPABILITIES" ] || \
-        [ "$(stat -c '%u:%g:%a' "$CAPABILITIES" 2>/dev/null)" != '0:0:644' ] || \
-        ! id -u "$RUN_USER" >/dev/null 2>&1; then
-        echo "smartdns: missing Python, config, capability profile, or service user" >&2
+    if [ ! -f "$APP_DIR/pyproject.toml" ]; then
+        echo "smartdns: project files are missing from $APP_DIR; copy the ZIP's top-level directory contents here" >&2
+        return 1
+    fi
+    if [ ! -x "$PYTHON" ]; then
+        echo "smartdns: Python is missing or not executable: $PYTHON; install Python inside $APP_DIR and run uv sync" >&2
+        return 1
+    fi
+    if [ ! -r "$CONFIG" ]; then
+        echo "smartdns: config is missing or unreadable: $CONFIG" >&2
+        return 1
+    fi
+    if ! root_owned_regular_file "$CAPABILITIES" '-rw-r--r--'; then
+        echo "smartdns: capability profile must be a regular root:root 0644 file: $CAPABILITIES (check with ls -ldn)" >&2
+        return 1
+    fi
+    if ! id -u "$RUN_USER" >/dev/null 2>&1; then
+        echo "smartdns: service user is missing: $RUN_USER" >&2
         return 1
     fi
     if [ ! -x /sbin/ujail ]; then
@@ -66,11 +106,22 @@ start_service() {
         return 1
     fi
     local python_real path
-    python_real=$(readlink -f "$PYTHON") || return 1
-    [ -x "$python_real" ] || return 1
+    python_real=$(readlink -f "$PYTHON") || {
+        echo "smartdns: cannot resolve Python interpreter: $PYTHON" >&2
+        return 1
+    }
+    if [ ! -x "$python_real" ]; then
+        echo "smartdns: resolved Python interpreter is not executable: $python_real" >&2
+        return 1
+    fi
     case "$python_real" in
         *[[:space:]]*)
             echo "smartdns: Python path cannot contain whitespace" >&2
+            return 1
+            ;;
+        "$APP_DIR"/*) ;;
+        *)
+            echo "smartdns: Python interpreter must reside inside $APP_DIR for the jail: $python_real; see docs/openwrt-installation.md" >&2
             return 1
             ;;
     esac
@@ -105,8 +156,9 @@ start_service() {
             PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
     fi
     procd_add_jail smartdns-python ronly log requirejail
-    # The venv Python is normally a symlink to a system interpreter.
-    procd_add_jail_mount "$APP_DIR" "$python_real"
+    # Stage the Python installation via APP_DIR; staging its ELF binary alone
+    # can crash ujail on some OpenWrt-derived builds.
+    procd_add_jail_mount "$APP_DIR"
     for path in /lib /usr/lib /usr/local/lib /usr/share/ca-certificates \
         /etc/ssl /etc/hosts /etc/resolv.conf /etc/nsswitch.conf \
         /etc/TZ /etc/localtime /etc/passwd /etc/group; do
