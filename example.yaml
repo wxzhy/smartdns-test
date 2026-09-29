@@ -209,13 +209,16 @@ actions:
         ipv6:
           - "2001:db8:100::"
 
-  # HTTPS 记录参数调整：移除 ipv4/ipv6 hint、ALPN 去 h3，按需注入 ECH
-  # （ech_domain 的 ECHConfig 经 client.resolver 查询；查询类型固定为 HTTPS）。
+  # HTTPS 记录参数调整：移除 ipv4/ipv6 hint、ALPN 去 h3，按需注入 ECH。
+  # enable_subquery 为 true 时，HTTPS NODATA 会查 A；命中且有 ECH 则合成记录。
+  # 设为 false 时不查 A，也不合成空 HTTPS 应答。
+  # ech_domain 的 ECHConfig 经 client.resolver 查询；查询类型固定为 HTTPS。
   - name: tune-https
     type: https
     remove_hint: true
     remove_h3: true
     add_ech: true
+    enable_subquery: true
     match_name:
       domain_exclude:
         - cn

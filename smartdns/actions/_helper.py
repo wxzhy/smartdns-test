@@ -94,16 +94,23 @@ def replace_response_ip(
         # 记录类型与 IP 地址族不符时未产出任何记录，保留原应答。
         return response
     if answer.rrset is None:
-        return _response_with_answer_rrset(response, rrset)
+        return append_answer_rrset(response, rrset)
     return replace_answer_rrset(response, rrset)
 
 
-def _response_with_answer_rrset(response: Response, rrset: RRset) -> Response:
-    """NODATA 应答的替换：复制 Message 后在 answer 区注入新 RRset。"""
+def append_answer_rrset(
+    response: Response, rrset: RRset, *, remove_negative_soa: bool = False
+) -> Response:
+    """复制 NODATA 应答并加入 RRset；可移除不再适用的否定 SOA。"""
     answer = response.ans
     assert answer is not None
+    assert answer.rrset is None
     message = deepcopy(answer.response)
     message.answer.append(deepcopy(rrset))
+    if remove_negative_soa:
+        message.authority = [
+            item for item in message.authority if item.rdtype != RdataType.SOA
+        ]
     message.index = None  # ty: ignore[invalid-assignment]
     copied = Answer(
         answer.qname,

@@ -373,6 +373,7 @@ match_ip:
   remove_hint: true
   remove_h3: true
   add_ech: true
+  enable_subquery: true
   match_name:
     domain_exclude: [cn]
   match_ip:
@@ -381,6 +382,9 @@ match_ip:
 ```
 
 字段名是 `ech_domain`，不是 `ech`。`add_ech: false` 只执行 hint/ALPN 清理，不查询或注入 ECH。
+`enable_subquery` 默认为 `true`。设为 `false` 时不发起 A 子查询，也不为 HTTPS 空应答合成记录；已有 HTTPS 记录仍会清理 hint/h3。若 `match_ip` 有筛选条件而记录无 hint，则缺少可判定的 IP，不注入 ECH。
+启用子查询且 HTTPS 查询返回 `NOERROR` 但无 HTTPS 记录时，Action 会以同一路由解析器查询原域名的 A 记录；A 地址命中 `match_ip` 且取得 ECHConfig 后，返回仅含 ECH 参数的 `HTTPS 1 .` 记录。合成记录的 TTL 不超过 A 应答、原空应答的剩余有效期及 300 秒；A 查询无地址、匹配失败或获取 ECH 失败时保留原空应答。此路径只使用 A 记录，不查询 AAAA。
+合成记录没有 ALPN 参数；按 [RFC 9460 的 HTTPS 映射](https://www.rfc-editor.org/rfc/rfc9460.html#section-9)，其默认 SVCB ALPN 集合为 `http/1.1`。
 
 ### fallback
 

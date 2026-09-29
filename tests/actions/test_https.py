@@ -7,10 +7,11 @@
 阶段完成 match_ip 判定与统一重写。
 """
 
+from time import time
 from typing import TYPE_CHECKING, cast
 
 import dns.message
-from dns.name import from_text
+from dns.name import from_text, root
 from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
@@ -32,15 +33,15 @@ if TYPE_CHECKING:
     from smartdns.resolvers.manager import ResolverManager
 
 
-def _https_response(*records: str) -> Response:
+def _https_response(*records: str, qname: str = "example.com.") -> Response:
     text = (
         "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
-        ";QUESTION\nexample.com. IN HTTPS\n;ANSWER\n"
-        + "".join(f"example.com. 300 IN HTTPS {r}\n" for r in records)
+        f";QUESTION\n{qname} IN HTTPS\n;ANSWER\n"
+        + "".join(f"{qname} 300 IN HTTPS {r}\n" for r in records)
     )
     msg = dns.message.from_text(text)
     answer = Answer(
-        from_text("example.com."),
+        from_text(qname),
         RdataType.HTTPS,
         RdataClass.IN,
         cast("QueryMessage", msg),
@@ -55,12 +56,13 @@ def _rrset(response: Response | None) -> RRset:
     return response.ans.rrset
 
 
-def _https_request() -> Request:
-    return Request.from_message(dns.message.make_query("example.com.", "HTTPS"), "test")
+def _https_request(qname: str = "example.com.") -> Request:
+    return Request.from_message(dns.message.make_query(qname, "HTTPS"), "test")
 
 
 def _action(
     add_ech: bool = True,
+    enable_subquery: bool = True,
     remove_hint: bool = True,
     remove_h3: bool = True,
     match_name: RequestMatcher | None = None,
@@ -73,6 +75,7 @@ def _action(
         match_name=match_name or RequestMatcher(),
         match_ip=match_ip or ResponseIPMatcher(),
         add_ech=add_ech,
+        enable_subquery=enable_subquery,
         remove_hint=remove_hint,
         remove_h3=remove_h3,
     )
@@ -84,22 +87,29 @@ class _FakeClient:
 
     def __init__(self, ech: str | None = "YWJj") -> None:
         self._ech = ech
+        self.calls = 0
 
     async def get_ech_key(self, domain: str) -> str | None:
+        self.calls += 1
         return self._ech
 
 
-def _a_response(*ips: str, rcode: Rcode = Rcode.NOERROR) -> Response:
+def _a_response(
+    *ips: str,
+    rcode: Rcode = Rcode.NOERROR,
+    qname: str = "example.com.",
+    ttl: int = 300,
+) -> Response:
     """构造 A 记录应答（或否定应答），模拟子查询结果。"""
     if rcode != Rcode.NOERROR:
         return Response.from_rcode(rcode, upstream="test")
-    records = "".join(f"example.com. 300 IN A {ip}\n" for ip in ips)
+    records = "".join(f"{qname} {ttl} IN A {ip}\n" for ip in ips)
     msg = dns.message.from_text(
         "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
-        ";QUESTION\nexample.com. IN A\n;ANSWER\n" + records
+        f";QUESTION\n{qname} IN A\n;ANSWER\n" + records
     )
     answer = Answer(
-        from_text("example.com."),
+        from_text(qname),
         RdataType.A,
         RdataClass.IN,
         cast("QueryMessage", msg),
@@ -192,6 +202,77 @@ async def test_no_hint_defers_ech_to_subquery() -> None:
     assert context.ext["h:ech-pending"] is True
 
 
+async def test_subquery_disabled_cleans_hintless_https_without_ech() -> None:
+    client = _FakeClient()
+    action = _action(
+        enable_subquery=False,
+        match_ip=ResponseIPMatcher(ip_exclude={"cn"}),
+        client=cast("HTTPClient", client),
+    )
+    context = Context(
+        worker_id=0, request=_https_request(), response=_https_response("1 . alpn=h3")
+    )
+    await action.on_response(context)
+    assert context.subquery is None
+    assert context.ext == {}
+    rr = next(iter(_rrset(context.response)))
+    assert ParamKey.ALPN not in rr.params
+    assert ParamKey.ECH not in rr.params
+    assert client.calls == 0
+
+
+async def test_subquery_disabled_keeps_https_nodata() -> None:
+    client = _FakeClient()
+    action = _action(
+        enable_subquery=False,
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", client),
+    )
+    for original in (
+        _https_response(qname="x.com."),
+        Response.from_rcode(Rcode.NOERROR, upstream="test"),
+    ):
+        context = Context(
+            worker_id=0, request=_https_request("x.com."), response=original
+        )
+        await action.on_response(context)
+        assert context.subquery is None
+        assert context.response is original
+    assert client.calls == 0
+
+
+async def test_subquery_disabled_still_injects_ech_from_hint() -> None:
+    client = _FakeClient()
+    action = _action(
+        enable_subquery=False,
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", client),
+    )
+    response = _with_tags(
+        _https_response("1 . alpn=h2 ipv4hint=172.64.146.0"), {"cloudflare"}
+    )
+    context = Context(worker_id=0, request=_https_request(), response=response)
+    await action.on_response(context)
+    assert context.subquery is None
+    rr = next(iter(_rrset(context.response)))
+    assert ParamKey.IPV4HINT not in rr.params
+    assert ParamKey.ECH in rr.params
+    assert client.calls == 1
+
+
+async def test_subquery_disabled_keeps_unconditional_ech_injection() -> None:
+    action = _action(
+        enable_subquery=False,
+        client=cast("HTTPClient", _FakeClient()),
+    )
+    context = Context(
+        worker_id=0, request=_https_request(), response=_https_response("1 . alpn=h2")
+    )
+    await action.on_response(context)
+    assert context.subquery is None
+    assert ParamKey.ECH in next(iter(_rrset(context.response))).params
+
+
 async def test_subquery_matched_ips_inject_ech() -> None:
     action = _action(
         match_ip=ResponseIPMatcher(ip_include={"google"}),
@@ -234,6 +315,225 @@ async def test_subquery_negative_answer_keeps_cleanup_without_ech() -> None:
     rr = next(iter(_rrset(context.response)))
     assert ParamKey.ECH not in rr.params
     assert ParamKey.ALPN not in rr.params
+
+
+async def test_exclude_only_does_not_match_failed_a_subquery() -> None:
+    client = _FakeClient()
+    action = _action(
+        match_ip=ResponseIPMatcher(ip_exclude={"cn"}),
+        client=cast("HTTPClient", client),
+    )
+    context = Context(
+        worker_id=0, request=_https_request(), response=_https_response("1 . alpn=h2")
+    )
+    await action.on_response(context)
+    assert context.subquery is not None
+    await action.on_subquery(context, _a_response(rcode=Rcode.SERVFAIL))
+    assert ParamKey.ECH not in next(iter(_rrset(context.response))).params
+    assert client.calls == 0
+
+
+async def test_router_synthesizes_https_for_x_com_nodata() -> None:
+    client = _FakeClient()
+    action = _action(
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", client),
+    )
+    original = _https_response(qname="x.com.")
+    assert original.ans is not None
+    assert original.ans.rrset is None
+    resolver = _TypedResolver(
+        "up",
+        {
+            RdataType.HTTPS: original,
+            RdataType.A: _with_tags(
+                _a_response("172.64.146.0", qname="x.com.", ttl=180),
+                {"cloudflare"},
+            ),
+        },
+    )
+    router = Router(
+        Rule(name="t", resolver="up", after=["h"]),
+        cast("ResolverManager", _Lookup(resolver, [action])),
+        cast("ActionManager", _Lookup(resolver, [action])),
+    )
+    context = Context(worker_id=0, request=_https_request("x.com."))
+    assert await router.query(context) is True
+    assert context.subquery is not None
+    assert context.subquery.request.qname == from_text("x.com.")
+    assert context.subquery.request.rdtype == RdataType.A
+    assert resolver.contexts == [context, None]
+    rrset = _rrset(context.response)
+    assert rrset.name == from_text("x.com.")
+    assert 0 < rrset.ttl <= 180
+    rr = next(iter(rrset))
+    assert rr.priority == 1
+    assert rr.target == root
+    assert set(rr.params) == {ParamKey.ECH}
+    assert context.response is not original
+    assert original.ans.rrset is None
+    assert context.response is not None
+    assert context.response.ans is not None
+    assert 0 < context.response.ans.expiration - time() <= 181
+    wire = context.request.make_answer(context.response.ans).to_wire()
+    assert dns.message.from_wire(wire).answer[0] == rrset
+    assert client.calls == 1
+
+
+async def test_nodata_kept_when_a_is_unmatched_empty_or_failed() -> None:
+    client = _FakeClient()
+    action = _action(
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", client),
+    )
+    original = _https_response(qname="x.com.")
+    a_responses = (
+        _with_tags(_a_response("203.0.113.1", qname="x.com."), {"cn"}),
+        _a_response(qname="x.com."),
+        _a_response(rcode=Rcode.SERVFAIL),
+    )
+    for sub_response in a_responses:
+        context = Context(
+            worker_id=0, request=_https_request("x.com."), response=original
+        )
+        await action.on_response(context)
+        assert context.subquery is not None
+        await action.on_subquery(context, sub_response)
+        assert context.response is original
+    assert client.calls == 0
+
+
+async def test_nodata_without_ip_criteria_still_checks_a() -> None:
+    action = _action(client=cast("HTTPClient", _FakeClient()))
+    original = _https_response()
+    context = Context(worker_id=0, request=_https_request(), response=original)
+    await action.on_response(context)
+    assert context.subquery is not None
+    await action.on_subquery(context, _a_response())
+    assert context.response is original
+
+
+async def test_nodata_kept_when_ech_fetch_returns_none() -> None:
+    client = _FakeClient(ech=None)
+    action = _action(
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", client),
+    )
+    original = _https_response()
+    context = Context(worker_id=0, request=_https_request(), response=original)
+    await action.on_response(context)
+    await action.on_subquery(
+        context, _with_tags(_a_response("172.64.146.0"), {"cloudflare"})
+    )
+    assert client.calls == 1
+    assert context.response is original
+
+
+async def test_nodata_name_mismatch_does_not_query_a() -> None:
+    action = _action(
+        match_name=RequestMatcher(domain_include={"google"}),
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", _FakeClient()),
+    )
+    original = _https_response()
+    context = Context(worker_id=0, request=_https_request(), response=original)
+    context.request.name_info.country = {"cn"}
+    await action.on_response(context)
+    assert context.subquery is None
+    assert context.response is original
+
+
+async def test_noerror_without_answer_can_synthesize_https() -> None:
+    action = _action(
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", _FakeClient()),
+    )
+    context = Context(
+        worker_id=0,
+        request=_https_request("x.com."),
+        response=Response.from_rcode(Rcode.NOERROR, upstream="test"),
+    )
+    await action.on_response(context)
+    assert context.subquery is not None
+    await action.on_subquery(
+        context,
+        _with_tags(_a_response("172.64.146.0", qname="x.com."), {"cloudflare"}),
+    )
+    assert ParamKey.ECH in next(iter(_rrset(context.response))).params
+
+
+async def test_nodata_synthesis_preserves_cname_and_removes_negative_soa() -> None:
+    msg = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
+        ";QUESTION\nexample.com. IN HTTPS\n;ANSWER\n"
+        "example.com. 300 IN CNAME leaf.example.org.\n"
+        ";AUTHORITY\nexample.org. 60 IN SOA ns.example.org. hostmaster.example.org. "
+        "1 2 3 4 60\n"
+    )
+    answer = Answer(
+        from_text("example.com."),
+        RdataType.HTTPS,
+        RdataClass.IN,
+        cast("QueryMessage", msg),
+    )
+    original = Response.from_answer(answer, upstream="test")
+    assert answer.rrset is None
+    action = _action(
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", _FakeClient()),
+    )
+    context = Context(worker_id=0, request=_https_request(), response=original)
+    await action.on_response(context)
+    await action.on_subquery(
+        context, _with_tags(_a_response("172.64.146.0"), {"cloudflare"})
+    )
+    rrset = _rrset(context.response)
+    assert rrset.name == from_text("leaf.example.org.")
+    assert 0 <= rrset.ttl <= 60
+    assert context.response is not None
+    assert context.response.ans is not None
+    message = context.response.ans.response
+    assert [item.rdtype for item in message.answer] == [
+        RdataType.CNAME,
+        RdataType.HTTPS,
+    ]
+    assert all(item.rdtype != RdataType.SOA for item in message.authority)
+    assert answer.rrset is None
+
+
+async def test_nodata_synthetic_ttl_follows_a_cname_chain() -> None:
+    msg = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
+        ";QUESTION\nexample.com. IN A\n;ANSWER\n"
+        "example.com. 45 IN CNAME edge.example.org.\n"
+        "edge.example.org. 180 IN A 172.64.146.0\n"
+    )
+    a_answer = Answer(
+        from_text("example.com."),
+        RdataType.A,
+        RdataClass.IN,
+        cast("QueryMessage", msg),
+    )
+    a_response = _with_tags(
+        Response.from_answer(a_answer, upstream="test"), {"cloudflare"}
+    )
+    action = _action(
+        match_ip=ResponseIPMatcher(ip_include={"cloudflare"}),
+        client=cast("HTTPClient", _FakeClient()),
+    )
+    context = Context(worker_id=0, request=_https_request(), response=_https_response())
+    await action.on_response(context)
+    await action.on_subquery(context, a_response)
+    assert 0 < _rrset(context.response).ttl <= 45
+
+
+async def test_nodata_does_not_synthesize_with_ech_disabled() -> None:
+    action = _action(add_ech=False)
+    original = _https_response()
+    context = Context(worker_id=0, request=_https_request(), response=original)
+    await action.on_response(context)
+    assert context.subquery is None
+    assert context.response is original
 
 
 async def test_no_defer_with_hints_present() -> None:

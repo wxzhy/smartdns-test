@@ -75,6 +75,9 @@ class HTTPSActionConfig(BaseActionConfig):
         default=True, description="是否移除 HTTPS ALPN 中的 h3 参数"
     )
     add_ech: bool = Field(default=True, description="是否添加 HTTPS 中的 ech 参数")
+    enable_subquery: bool = Field(
+        default=True, description="无 IP hint 或 HTTPS 空应答时是否发起 A 子查询"
+    )
     match_name: RequestMatcher = Field(description="匹配的域名")
     match_ip: ResponseIPMatcher = Field(description="匹配的IP地址")
     ech_domain: str = Field(
