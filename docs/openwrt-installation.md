@@ -28,7 +28,7 @@ useradd -r -g smartdnspy -M -d /var/run/smartdns-python -s /bin/false smartdnspy
 id smartdnspy
 ```
 
-如果从源码仓库部署，可在仓库根目录（开发机）打包并传到路由器；将示例地址换成路由器地址。如果配置需要已生成的地理数据，再把 `tags/output` 加入打包命令。
+如果从源码仓库部署最小示例配置，可在仓库根目录（开发机）打包并传到路由器；将示例地址换成路由器地址。该最小包不含 Geo 数据。如果配置使用 `geodata`，应在开发机运行 `uv run --no-sync python deploy/package.py` 生成源码 ZIP，再按下文的 ZIP 步骤安装。这个 ZIP 包含 `tags/geosite.dat`、自定义标签文本、转换器和 MaxMind DB，但不包含其他设备生成的 `geosite.trie`、`geoip.radix`。
 
 ```sh
 tar -czf smartdns-openwrt.tar.gz smartdns pyproject.toml uv.lock README.md deploy/config.yaml deploy/smartdns.openwrt.init deploy/smartdns.openwrt.capabilities.json
@@ -44,7 +44,7 @@ mkdir -p /opt/smartdns-python
 tar -xzf /tmp/smartdns-openwrt.tar.gz -C /opt/smartdns-python
 ```
 
-全新安装若使用提供的 `smartdns-deploy-*.zip`，请跳过上面的 tar 打包和解包步骤。ZIP 内有一个 `smartdns-deploy-*` 顶层目录，必须将**该目录的内容**复制到 `/opt/smartdns-python`，不能把顶层目录本身放进去。在路由器的 `/tmp` 中只保留一个匹配的 ZIP，并确认已安装 `unzip` 后执行：
+全新安装若使用 `deploy/package.py` 生成的 `smartdns-deploy-*-source.zip`，请跳过上面的 tar 打包和解包步骤。ZIP 内有一个 `smartdns-deploy-*` 顶层目录，必须将**该目录的内容**复制到 `/opt/smartdns-python`，不能把顶层目录本身放进去。在路由器的 `/tmp` 中只保留一个匹配的 ZIP，并确认已安装 `unzip` 后执行：
 
 ```sh
 STAGE=$(mktemp -d /tmp/smartdns-zip.XXXXXX)
@@ -55,7 +55,7 @@ test -f /opt/smartdns-python/pyproject.toml
 test -f /opt/smartdns-python/deploy/smartdns.openwrt.capabilities.json
 ```
 
-如果路由器没有 `unzip`，可在开发机解压后把顶层目录**里面的文件**传到 `/opt/smartdns-python`。不要把开发机上的 `.venv` 一并复制到路由器；下一步要在路由器上重新运行 `uv sync`。已有部署若只需修复启动和停止问题，仅更新 `deploy/smartdns.openwrt.init` 与 `smartdns/main.py`，并重新安装 init 脚本；不要用整个 ZIP 覆盖现有 `config.yaml`。
+如果路由器没有 `unzip`，可在开发机解压后把顶层目录**里面的文件**传到 `/opt/smartdns-python`。不要把开发机上的 `.venv` 一并复制到路由器；下一步要在路由器上重新运行 `uv sync`。已有部署若只需修复启动和停止问题，仅更新 `deploy/smartdns.openwrt.init` 与 `smartdns/main.py`，并重新安装 init 脚本；不要用整个 ZIP 覆盖现有 `config.yaml`。如果已有部署需要重建 Geo 数据，只复制 ZIP 内 `tags/geosite.dat`、`tags/geosite/`、`tags/geoip/` 和 `utils/` 的转换器源码，保留路由器上已有的 MaxMind DB，并按第 3 步重新生成。
 
 示例配置只在 `127.0.0.1:5335` 监听 UDP/TCP，示例上游为 `1.1.1.1:53`，不需要 53 端口权限。**该上游并非在所有网络都可达**；在路由器上先运行 `nslookup example.org 1.1.1.1`。若失败，应将 `/opt/smartdns-python/config.yaml` 的 `upstream-udp.address` 换成已验证可达的 DNS 地址（可参考 `ubus call network.interface.wan status` 的 `dns-server`），再启动服务。若计划让 dnsmasq 转发到 SmartDNS，不能把 SmartDNS 上游设为路由器自己的 `127.0.0.1:53`，否则会形成转发环。启动前还须确认 5335 未被其他服务占用。自定义配置若引用 `tags/output` 等相对路径，路径从 `/opt/smartdns-python` 解析。服务以普通用户运行，请确保该用户能读取这些文件。与 systemd 示例一样，capability 配置提供 `CAP_NET_BIND_SERVICE` 和 `CAP_NET_RAW`，可用于绑定 53 端口及运行特权 ICMP 测速；改用 53 端口前须先解除与 dnsmasq 等服务的端口冲突。
 
@@ -89,10 +89,20 @@ UV_PYTHON_INSTALL_DIR=/opt/smartdns-python/.python \
     uv sync --locked --no-dev --no-python-downloads --python "$PYTHON_PATH"
 readlink -f /opt/smartdns-python/.venv/bin/python
 /opt/smartdns-python/.venv/bin/python -c 'import smartdns.main; print("imports OK")'
+if [ -f tags/geosite.dat ]; then
+    test -f utils/convert.py || { echo 'Geo converter is missing' >&2; exit 1; }
+    test -f utils/message_pool.py || { echo 'Geo protobuf support is missing' >&2; exit 1; }
+    /opt/smartdns-python/.venv/bin/python -m utils.convert \
+        --geodata-path tags/geosite.dat --tag-path tags --output-path tags/output
+fi
 chown -R root:root /opt/smartdns-python
 chmod -R go-w /opt/smartdns-python
 chmod 0755 /opt/smartdns-python
+chmod -R a+rX /opt/smartdns-python/smartdns
 chmod -R a+rX /opt/smartdns-python/.python /opt/smartdns-python/.venv
+if [ -d /opt/smartdns-python/tags ]; then
+    chmod -R a+rX /opt/smartdns-python/tags
+fi
 if [ ! -e /opt/smartdns-python/config.yaml ]; then
     cp /opt/smartdns-python/deploy/config.yaml /opt/smartdns-python/config.yaml
 fi
@@ -102,7 +112,7 @@ chown root:root /opt/smartdns-python/deploy/smartdns.openwrt.capabilities.json
 chmod 0644 /opt/smartdns-python/deploy/smartdns.openwrt.capabilities.json
 ```
 
-仅改变 `UV_PYTHON_INSTALL_DIR` 不会修复已有虚拟环境中的旧解释器链接；确认新服务运行正常后再处理 `.venv.before-local-python` 备份。参见 [uv 的 Python 安装目录说明](https://docs.astral.sh/uv/reference/storage/)。
+仅改变 `UV_PYTHON_INSTALL_DIR` 不会修复已有虚拟环境中的旧解释器链接；确认新服务运行正常后再处理 `.venv.before-local-python` 备份。参见 [uv 的 Python 安装目录说明](https://docs.astral.sh/uv/reference/storage/)。`geosite.trie` 和 `geoip.radix` 必须在目标设备的 Python 与原生依赖就绪后生成；旧 ZIP 或其他架构构建的这两个文件不能作为新设备的已验证缓存。`geoip.metadb` 和 `asn.mmdb` 作为 MaxMind DB 文件继续保留。若配置引用 Geo 数据但没有这些输入文件，先补齐输入再启动服务，不能依赖旧缓存。
 
 启动前还应确认这些检查均成功：
 
@@ -119,7 +129,21 @@ id -u smartdnspy
 
 上面 `ls -ldn` 的首列应为 `-rw-r--r--`，第三、四列数字 UID/GID 应均为 `0`。若使用可选的 `environment` 文件，其首列应为 `-rw-------`，UID/GID 同样为 `0`。
 
-解释器的真实路径必须在 `/opt/smartdns-python` 下，而且 `smartdnspy` 用户必须能读取它。程序目录、Python 安装、虚拟环境和 capability 配置应始终保持 root 拥有且不可由该用户修改。jail 会只读挂载整个程序目录、常见系统库目录、CA 证书及主机解析文件；不再单独挂载解释器文件，因为某些 ujail 构建在处理该 Python 文件时会崩溃。如果原生库放在其他目录，需要把对应目录加入 init 脚本的只读挂载列表。如果上述导入失败，先处理缺失的 Python 包、原生库或 ABI 问题，再启用服务。
+解释器的真实路径必须在 `/opt/smartdns-python` 下，而且 `smartdnspy` 用户必须能读取它。服务用户还必须能穿过程序目录、读取 `smartdns/*.py` 和配置引用的地理数据；仅给 `.python`、`.venv` 加读取权限不足以运行源码。`chmod -R go-w` 只移除写权限，不会给原本是 0600 的文件补上读取权限；因此上面另对源码与地理数据执行 `chmod -R a+rX`，但保留 `config.yaml` 的 0640 和可选 `environment` 的 0600。程序目录、Python 安装、虚拟环境和 capability 配置应始终保持 root 拥有且不可由该用户修改。jail 会只读挂载整个程序目录、常见系统库目录、CA 证书及主机解析文件；不再单独挂载解释器文件，因为某些 ujail 构建在处理该 Python 文件时会崩溃。如果原生库放在其他目录，需要把对应目录加入 init 脚本的只读挂载列表。如果日志出现 `PermissionError: .../smartdns/main.py`，先按本节修复源码读取权限。如果导入仍失败，再检查缺失的 Python 包、原生库或 ABI 问题。
+
+对已安装的实例，遇到上述 `main.py` 权限错误时可直接修复并重新启动，无需重建虚拟环境或覆盖现有配置。如果 dnsmasq 已只转发到 SmartDNS，先按第 5 节撤销转发、确认路由器 DNS 恢复，再执行下列停机命令：
+
+```sh
+/etc/init.d/smartdns-python stop
+chown -R root:root /opt/smartdns-python/smartdns
+chmod -R go-w,a+rX /opt/smartdns-python/smartdns
+if [ -d /opt/smartdns-python/tags ]; then
+    chmod -R a+rX /opt/smartdns-python/tags
+fi
+/etc/init.d/smartdns-python start
+/etc/init.d/smartdns-python status
+logread -e smartdns | tail -n 20
+```
 
 若 DNSCrypt 使用的 libsodium 不在动态库默认搜索路径，可另建 `/opt/smartdns-python/environment`，写入一行 `SMARTDNS_LIBSODIUM_PATH=/绝对路径/libsodium.so`，并执行 `chown root:root /opt/smartdns-python/environment && chmod 0600 /opt/smartdns-python/environment`。init 脚本只读取这个赋值，不执行文件内容；它会拒绝符号链接、非 root:root 0600 文件以及其他配置项，并将该库只读挂载进 jail。启用 DNSCrypt 前，先用相同路径验证 `SMARTDNS_LIBSODIUM_PATH=/绝对路径/libsodium.so /opt/smartdns-python/.venv/bin/python -c 'from smartdns.nameservers._sodium import require_libsodium; require_libsodium()'` 能成功执行。
 

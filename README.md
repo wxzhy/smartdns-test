@@ -255,6 +255,7 @@ match()? → before actions → resolver.query() → after actions → 返回是
 | IPSet | 可选 `.radix`（pickle） | py-radix | `routing/ipset.py` |
 
 标签查询会把一个 IP/域名映射到**一组**标签（如 `1.1.1.1` → `{cloudflare, us}`），匹配即集合相交判断。
+`geosite.trie` 和 `geoip.radix` 是由本机原生扩展生成的运行时数据；跨架构部署时，安装目标平台的 Python 依赖后，应从 `tags/geosite.dat`、`tags/geosite/*.txt`、`tags/geoip/*.txt` 重新生成。`geoip.metadb`、`asn.mmdb` 是独立的 MaxMind DB 数据文件，不需要用 `utils.convert` 重建。进程内 DNS 应答缓存不会写入部署包。
 
 ---
 
@@ -301,7 +302,7 @@ sudo sh deploy/install.sh initd /path/to/your-config.yaml
 sudo sh deploy/install.sh systemd /path/to/your-config.yaml /path/to/environment
 ```
 
-安装脚本将运行代码和 `config.yaml` 都放在 `/opt/smartdns`。systemd 模式要求版本不低于 247，使用 `DynamicUser=yes`，无需创建固定用户；SysV 模式仍会创建无登录权限的 `smartdns` 用户。已有应用目录或服务文件会使脚本停止，避免覆盖现有部署。若源码目录含有 `tags/output`，脚本会一并复制；配置中的相对地理数据路径以 `/opt/smartdns` 为起点。安装时会校验配置及可选的 libsodium 加载。
+安装脚本将运行代码和 `config.yaml` 都放在 `/opt/smartdns`。systemd 模式要求版本不低于 247，使用 `DynamicUser=yes`，无需创建固定用户；SysV 模式仍会创建无登录权限的 `smartdns` 用户。已有应用目录或服务文件会使脚本停止，避免覆盖现有部署。若源码目录含 `tags/geosite.dat`，脚本会复制 Geo 输入并在目标设备安装完依赖后生成 `geosite.trie`、`geoip.radix`；`tags/output` 中仅复制 MaxMind DB 文件，不复制其他设备的构建产物。配置中的相对地理数据路径以 `/opt/smartdns` 为起点。安装时会校验配置及可选的 libsodium 加载。
 
 默认的 [`deploy/config.yaml`](deploy/config.yaml) 只监听 `127.0.0.1:5335` 的 UDP/TCP，并转发到 `1.1.1.1:53`。要对外提供 DNS 服务，请先检查监听地址、端口、上游和主机防火墙，再启动服务。完整功能配置可参考 [`example.yaml`](example.yaml)，其中的占位地址需要按实际环境调整。
 

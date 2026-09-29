@@ -108,18 +108,55 @@ cp -R "$SOURCE_DIR/smartdns" "$APP_DIR/"
 install -m 0644 "$SOURCE_DIR/pyproject.toml" "$APP_DIR/pyproject.toml"
 install -m 0644 "$SOURCE_DIR/uv.lock" "$APP_DIR/uv.lock"
 install -m 0644 "$SOURCE_DIR/README.md" "$APP_DIR/README.md"
+GEODATA_BUILD=0
+if [ -f "$SOURCE_DIR/tags/geosite.dat" ]; then
+    # Copy source inputs and the generated protobuf model, never another
+    # machine's MARISA trie or py-radix pickle. Rebuild after uv sync.
+    install -d -m 0755 "$APP_DIR/tags/geosite" "$APP_DIR/tags/geoip" \
+        "$APP_DIR/utils/mihomo/component/geodata/router"
+    install -m 0644 "$SOURCE_DIR/tags/geosite.dat" "$APP_DIR/tags/geosite.dat"
+    install -m 0644 "$SOURCE_DIR/utils/__init__.py" "$APP_DIR/utils/__init__.py"
+    install -m 0644 "$SOURCE_DIR/utils/convert.py" "$APP_DIR/utils/convert.py"
+    install -m 0644 "$SOURCE_DIR/utils/message_pool.py" "$APP_DIR/utils/message_pool.py"
+    for relative in utils/mihomo/__init__.py \
+        utils/mihomo/component/__init__.py \
+        utils/mihomo/component/geodata/__init__.py \
+        utils/mihomo/component/geodata/router/__init__.py; do
+        install -m 0644 "$SOURCE_DIR/$relative" "$APP_DIR/$relative"
+    done
+    for input in "$SOURCE_DIR"/tags/geosite/*.txt; do
+        [ -f "$input" ] || continue
+        install -m 0644 "$input" "$APP_DIR/tags/geosite/$(basename "$input")"
+    done
+    for input in "$SOURCE_DIR"/tags/geoip/*.txt; do
+        [ -f "$input" ] || continue
+        install -m 0644 "$input" "$APP_DIR/tags/geoip/$(basename "$input")"
+    done
+    GEODATA_BUILD=1
+fi
 if [ -d "$SOURCE_DIR/tags/output" ]; then
-    install -d -m 0755 "$APP_DIR/tags"
-    cp -R "$SOURCE_DIR/tags/output" "$APP_DIR/tags/"
-    chmod -R a+rX,go-w "$APP_DIR/tags"
+    install -d -m 0755 "$APP_DIR/tags/output"
+    for database in geoip.metadb asn.mmdb; do
+        if [ -f "$SOURCE_DIR/tags/output/$database" ]; then
+            install -m 0644 "$SOURCE_DIR/tags/output/$database" \
+                "$APP_DIR/tags/output/$database"
+        fi
+    done
 fi
 chmod -R a+rX,go-w "$APP_DIR/smartdns"
 
 (
     cd "$APP_DIR"
     "$UV" sync --locked --no-dev --python "$PYTHON"
+    if [ "$GEODATA_BUILD" -eq 1 ]; then
+        "$APP_DIR/.venv/bin/python" -m utils.convert \
+            --geodata-path tags/geosite.dat --tag-path tags \
+            --output-path tags/output
+    fi
 )
 chmod -R a+rX,go-w "$APP_DIR/.venv"
+[ ! -d "$APP_DIR/tags" ] || chmod -R a+rX,go-w "$APP_DIR/tags"
+[ ! -d "$APP_DIR/utils" ] || chmod -R a+rX,go-w "$APP_DIR/utils"
 
 if [ "$MODE" = systemd ]; then
     CONFIG_GROUP=root

@@ -27,17 +27,32 @@ sudo install -m 0644 "$SRC/README.md" /opt/smartdns/README.md
 sudo chmod -R a+rX,go-w /opt/smartdns/smartdns
 ```
 
-如果配置引用了相对路径 `tags/output/...` 的 Geo 数据，并且源码目录已有这些本地生成文件，再复制它们：
+如果配置引用 `tags/output/...` 的 Geo 数据，复制原始输入、转换器及 MaxMind DB。不要从另一架构复制 `geosite.trie` 或 `geoip.radix`；前者由 MARISA-Trie 生成，后者是 py-radix 对象的 pickle，下一步会在目标设备重新生成。
 
 ```sh
-if [ -d "$SRC/tags/output" ]; then
-    sudo install -d -m 0755 /opt/smartdns/tags
-    sudo cp -R "$SRC/tags/output" /opt/smartdns/tags/
-    sudo chmod -R a+rX,go-w /opt/smartdns/tags
+if [ -f "$SRC/tags/geosite.dat" ]; then
+    sudo install -d -m 0755 /opt/smartdns/tags /opt/smartdns/utils/mihomo/component/geodata/router
+    sudo install -m 0644 "$SRC/tags/geosite.dat" /opt/smartdns/tags/geosite.dat
+    sudo cp -R "$SRC/tags/geosite" "$SRC/tags/geoip" /opt/smartdns/tags/
+    sudo install -m 0644 "$SRC/utils/__init__.py" /opt/smartdns/utils/__init__.py
+    sudo install -m 0644 "$SRC/utils/convert.py" /opt/smartdns/utils/convert.py
+    sudo install -m 0644 "$SRC/utils/message_pool.py" /opt/smartdns/utils/message_pool.py
+    for relative in utils/mihomo/__init__.py utils/mihomo/component/__init__.py \
+        utils/mihomo/component/geodata/__init__.py \
+        utils/mihomo/component/geodata/router/__init__.py; do
+        sudo install -m 0644 "$SRC/$relative" "/opt/smartdns/$relative"
+    done
 fi
+sudo install -d -m 0755 /opt/smartdns/tags/output
+for database in geoip.metadb asn.mmdb; do
+    if [ -f "$SRC/tags/output/$database" ]; then
+        sudo install -m 0644 "$SRC/tags/output/$database" \
+            "/opt/smartdns/tags/output/$database"
+    fi
+done
 ```
 
-没有这些文件却启用了对应 `geodata` 字段时，配置校验会失败。服务使用 `/opt/smartdns` 作为工作目录，因此相对数据路径也从这里解析。
+若不使用 Geo 数据，可跳过这段命令。没有源文件却启用了对应 `geodata` 字段时，配置校验会失败。服务使用 `/opt/smartdns` 作为工作目录，因此相对数据路径也从这里解析。
 
 ## 3. 安装锁定的运行依赖
 
@@ -46,6 +61,11 @@ UV=$(command -v uv)
 PYTHON=$(command -v python3.14)
 (cd /opt/smartdns && sudo "$UV" sync --locked --no-dev --python "$PYTHON")
 sudo chmod -R a+rX,go-w /opt/smartdns/.venv
+if [ -f /opt/smartdns/tags/geosite.dat ]; then
+    (cd /opt/smartdns && sudo /opt/smartdns/.venv/bin/python -m utils.convert \
+        --geodata-path tags/geosite.dat --tag-path tags --output-path tags/output)
+    sudo chmod -R a+rX,go-w /opt/smartdns/tags /opt/smartdns/utils
+fi
 ```
 
 `--locked` 会在 `pyproject.toml` 与 `uv.lock` 不一致时停止，`--no-dev` 不安装开发依赖，详见 [uv 锁定与同步说明](https://docs.astral.sh/uv/concepts/projects/sync/)。命令完成后，运行解释器应位于 `/opt/smartdns/.venv/bin/python`。若安装的 Python 位于某个用户无权进入的私人目录，服务用户将无法运行该解释器；应改用系统可访问的 Python 路径重新安装虚拟环境。
