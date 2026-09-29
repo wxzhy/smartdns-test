@@ -261,6 +261,29 @@ async def test_nodata_without_soa_gets_bounded_expiration(
     assert response.ans.expiration - time() == pytest.approx(300, abs=5)
 
 
+@pytest.mark.parametrize(("cname_ttl", "expected_ttl"), [(30, 30), (600, 300)])
+async def test_cname_nodata_without_soa_respects_shorter_ttl(
+    monkeypatch: pytest.MonkeyPatch, cname_ttl: int, expected_ttl: int
+) -> None:
+    resolver = _resolver(cache_size=0)
+    qname = from_text("alias.example.com.")
+    message = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR AA RA\n"
+        ";QUESTION\nalias.example.com. IN MX\n;ANSWER\n"
+        f"alias.example.com. {cname_ttl} IN CNAME leaf.example.com.\n"
+    )
+    original = Answer(qname, RdataType.MX, RdataClass.IN, cast("QueryMessage", message))
+    assert original.rrset is None
+
+    async def resolve(*args, **kwargs):
+        return original
+
+    monkeypatch.setattr(resolver, "resolve", resolve)
+    answer = await resolver._resolve_answer(qname, RdataType.MX, RdataClass.IN)
+
+    assert answer.expiration - time() == pytest.approx(expected_ttl, abs=5)
+
+
 async def test_nodata_with_soa_keeps_soa_expiration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

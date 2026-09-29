@@ -96,6 +96,13 @@ nameservers:
     want_get: false
     verify: true
     ech: crypto.cloudflare.com
+  - name: v-dns
+    type: curl
+    url: https://v.recipes/dns-ecs
+    host: v.recipes
+    want_get: false
+    verify: true
+    ech: crypto.cloudflare.com
   - name: nextdns
     type: curl
     url: https://dns.nextdns.io/394f12
@@ -177,8 +184,9 @@ resolvers:
   - name: google-cn
     type: plain
     nameservers:
-      - curl-doh
-    ecs: 58.215.177.0/24
+      - google-1
+      - google-2
+    ecs: 240b:4001:23c::/48
     timeout: 3
     lifetime: 5
   - name: cn
@@ -214,6 +222,7 @@ resolvers:
       - nextdns
     wait_all: true
     actions:
+      - filter
       - replace
       - speedcheck
     timeout: 5
@@ -221,6 +230,13 @@ resolvers:
 actions:
   - name: block
     type: static
+  - name: proxy
+    type: static
+    ipv4:
+      - 192.168.8.64
+    ipv6:
+      # 测试占位地址；实际运行时替换为可达的代理 IPv6 地址。
+      - 2001:db8::64
   - name: speedcheck
     type: speedcheck
     match_ip:
@@ -236,7 +252,6 @@ actions:
         - google-cn
         - category-ntp
         - category-stun
-        - cloudflare-cn
       query_types:
         - A
         - AAAA
@@ -344,6 +359,17 @@ routing:
         - category-ads-all
         - category-ads
         - ads
+  - name: proxy
+    before:
+      - proxy
+    resolver: cn
+    matcher:
+      # 修改 tags/geosite/proxy.txt 后须重新生成 geosite.trie。
+      domain_include:
+        - proxy
+      query_types:
+        - A
+        - AAAA
   - name: google
     matcher:
       domain_include:

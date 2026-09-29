@@ -4,10 +4,15 @@
 error + raise，被 query() 吞成 SERVFAIL，客户端拿不到正确的 NXDOMAIN。
 修复后：ENOTFOUND → 抛 NXDOMAIN（由 query() 转 NXDOMAIN 响应）；
 ENODATA → 空的 NOERROR 应答（NODATA）。
+
+另覆盖否定应答的缓存 TTL：ENODATA 显式取 nodata_ttl（pycares 丢弃上游
+SOA，空报文无记录可压 TTL）；CNAME 末端 NODATA 走成功路径，expiration
+由 authority 区 SOA 与 CNAME TTL 共同约束，不得回落 dnspython 的 MAX_TTL。
 """
 
 from time import time
 
+import pycares
 import pytest
 from aiodns.error import ARES_ENODATA, ARES_ENOTFOUND, DNSError
 from dns.name import from_text
@@ -28,6 +33,16 @@ class _FakeCares:
 
     async def query_dns(self, *args: object) -> object:
         raise DNSError(self._error_code, "fake")
+
+
+class _FakeResultCares:
+    """pycares 替身：query_dns 返回预置 DNSResult（成功路径）。"""
+
+    def __init__(self, result: pycares.DNSResult) -> None:
+        self._result = result
+
+    async def query_dns(self, *args: object) -> object:
+        return self._result
 
 
 def _make(error_code: int) -> AioDNSResolver:
@@ -79,3 +94,84 @@ async def test_enodata_ttl_zero_disables_cache_window() -> None:
     )
     # nodata_ttl=0 时 expiration 为当前时刻，写入 TTLCache 后立即过期。
     assert answer.expiration <= time()
+
+
+def _cname_nodata_result(*, soa_ttl: int | None) -> pycares.DNSResult:
+    """构造 CNAME 末端 NODATA 的成功应答（实测 c-ares 行为）。
+
+    c-ares 仅在 answer 区为空时抛 ENODATA；answer 区含 CNAME 而目标无所查
+    类型时按成功返回，authority 区的 SOA（若上游携带）随 DNSResult 透出。
+    """
+    authority = []
+    if soa_ttl is not None:
+        authority.append(
+            pycares.DNSRecord(
+                name="example.com",
+                type=6,
+                record_class=1,
+                ttl=soa_ttl,
+                data=pycares.SOARecordData(
+                    mname="ns.example.com.",
+                    rname="admin.example.com.",
+                    serial=1,
+                    refresh=7200,
+                    retry=900,
+                    expire=1209600,
+                    minimum=30,
+                ),
+            )
+        )
+    return pycares.DNSResult(
+        answer=[
+            pycares.DNSRecord(
+                name="cname.example.com",
+                type=5,
+                record_class=1,
+                ttl=600,
+                data=pycares.CNAMERecordData(cname="target.example.com."),
+            )
+        ],
+        authority=authority,
+        additional=[],
+    )
+
+
+async def test_cname_nodata_expiration_respects_soa() -> None:
+    """CNAME 末端 NODATA（成功路径）的负缓存 TTL 取 min(CNAME, SOA TTL, SOA.minimum)。
+
+    expiration 由 dnspython 的 chaining_result.minimum_ttl 计算，依赖
+    make_response 把 authority 区 SOA 合入报文；若该环节丢失 SOA，
+    minimum_ttl 回落 MAX_TTL（约 136 年），NODATA 在缓存中永不过期。
+    """
+    before = time()
+    config = AioDNSResolverConfig(name="a", type="aiodns", nameservers=["1.1.1.1"])
+    resolver = AioDNSResolver(config)
+    resolver._resolver = _FakeResultCares(  # ty: ignore[invalid-assignment]
+        _cname_nodata_result(soa_ttl=60)
+    )
+    answer = await resolver.resolve(
+        from_text("cname.example.com."), RdataType.MX, RdataClass.IN
+    )
+    assert answer.rrset is None
+    assert len(answer.chaining_result.cnames) == 1
+    # min(600, 60, 30) = 30。
+    assert 29 <= answer.expiration - before <= 31
+
+
+async def test_cname_nodata_without_soa_bounded_by_cname_ttl() -> None:
+    """CNAME 末端 NODATA 且上游无 SOA 时，TTL 以 CNAME 自身 TTL 为界。
+
+    仍必须有界：一旦回落 MAX_TTL 即为缓存永不过期回归。
+    """
+    before = time()
+    config = AioDNSResolverConfig(name="a", type="aiodns", nameservers=["1.1.1.1"])
+    resolver = AioDNSResolver(config)
+    resolver._resolver = _FakeResultCares(  # ty: ignore[invalid-assignment]
+        _cname_nodata_result(soa_ttl=None)
+    )
+    answer = await resolver.resolve(
+        from_text("cname.example.com."), RdataType.MX, RdataClass.IN
+    )
+    assert answer.rrset is None
+    # min(600) = 600；MAX_TTL 距今约 136 年，远大于 700 秒。
+    assert 599 <= answer.expiration - before <= 700

@@ -78,6 +78,57 @@ async def test_tcp_nameserver_query_uses_remaining_deadline(monkeypatch) -> None
     assert 0.1 <= remaining < 0.9
 
 
+async def test_tcp_nameserver_cancellation_marks_pooled_connection_unhealthy(
+    monkeypatch,
+) -> None:
+    config = TCPNameserverConfig(
+        name="t", type="tcp", address="127.0.0.1", port=53, timeout=5, pool_size=1
+    )
+    nameserver = TCPNameserver(config)
+
+    class _Connection:
+        healthy = True
+
+    connection = _Connection()
+
+    class _Pool:
+        def connection(self, endpoint, timeout: float):
+            class _Ctx:
+                async def __aenter__(self):
+                    return connection
+
+                async def __aexit__(self, *exc_info) -> None:
+                    return None
+
+            return _Ctx()
+
+    nameserver._pool = cast("ConnectionPool", _Pool())
+    started = asyncio.Event()
+
+    async def blocked_query(*args, **kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(nameserver, "_query_on_stream", blocked_query)
+    task = asyncio.create_task(
+        nameserver.async_query(
+            _dns_query(),
+            5,
+            None,
+            0,
+            False,
+            cast("dns.asyncbackend.Backend", object()),
+        )
+    )
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert connection.healthy is False
+
+
 async def test_tcp_nameserver_connect_times_out_without_pool(monkeypatch) -> None:
     """无池路径：黑洞地址建连在配置超时内被取消，而非悬挂到 OS 级超时。"""
     config = TCPNameserverConfig(

@@ -1,0 +1,125 @@
+#!/bin/sh /etc/rc.common
+
+# OpenWrt procd service. Keep these paths in sync with docs/openwrt-installation.md.
+START=95
+STOP=10
+USE_PROCD=1
+
+APP_DIR=/opt/smartdns-python
+PYTHON="$APP_DIR/.venv/bin/python"
+CONFIG="$APP_DIR/config.yaml"
+ENV_FILE="$APP_DIR/environment"
+CAPABILITIES="$APP_DIR/deploy/smartdns.openwrt.capabilities.json"
+RUN_DIR=/var/run/smartdns-python
+RUN_USER=smartdnspy
+
+load_environment() {
+    SMARTDNS_LIBSODIUM_PATH=
+    [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ] || return 0
+
+    # Never execute a writable or symlinked file as root. Only one data key is supported.
+    if [ ! -f "$ENV_FILE" ] || [ -L "$ENV_FILE" ] || \
+        [ "$(stat -c '%u:%g:%a' "$ENV_FILE" 2>/dev/null)" != '0:0:600' ]; then
+        echo "smartdns: environment must be a regular root:root 0600 file" >&2
+        return 1
+    fi
+
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            ''|'#'*) ;;
+            SMARTDNS_LIBSODIUM_PATH=/*)
+                SMARTDNS_LIBSODIUM_PATH=${line#*=}
+                ;;
+            *)
+                echo "smartdns: unsupported environment entry" >&2
+                return 1
+                ;;
+        esac
+    done < "$ENV_FILE"
+
+    if [ -n "${SMARTDNS_LIBSODIUM_PATH:-}" ]; then
+        SMARTDNS_LIBSODIUM_PATH=$(readlink -f "$SMARTDNS_LIBSODIUM_PATH") || return 1
+        case "$SMARTDNS_LIBSODIUM_PATH" in
+            *[[:space:]]*)
+                echo "smartdns: libsodium path cannot contain whitespace" >&2
+                return 1
+                ;;
+        esac
+        if [ ! -f "$SMARTDNS_LIBSODIUM_PATH" ]; then
+            echo "smartdns: libsodium path does not exist" >&2
+            return 1
+        fi
+    fi
+}
+
+start_service() {
+    if [ ! -x "$PYTHON" ] || [ ! -r "$CONFIG" ] || \
+        [ ! -f "$CAPABILITIES" ] || [ -L "$CAPABILITIES" ] || \
+        [ "$(stat -c '%u:%g:%a' "$CAPABILITIES" 2>/dev/null)" != '0:0:644' ] || \
+        ! id -u "$RUN_USER" >/dev/null 2>&1; then
+        echo "smartdns: missing Python, config, capability profile, or service user" >&2
+        return 1
+    fi
+    if [ ! -x /sbin/ujail ]; then
+        echo "smartdns: procd-ujail is required for the OpenWrt service" >&2
+        return 1
+    fi
+    local python_real path
+    python_real=$(readlink -f "$PYTHON") || return 1
+    [ -x "$python_real" ] || return 1
+    case "$python_real" in
+        *[[:space:]]*)
+            echo "smartdns: Python path cannot contain whitespace" >&2
+            return 1
+            ;;
+    esac
+    load_environment || return 1
+
+    # /var/run is root-managed on OpenWrt; reject a substituted leaf symlink.
+    if [ -L "$RUN_DIR" ] || { [ -e "$RUN_DIR" ] && [ ! -d "$RUN_DIR" ]; }; then
+        echo "smartdns: invalid runtime directory" >&2
+        return 1
+    fi
+    umask 077
+    mkdir -p -m 0700 "$RUN_DIR" && \
+        chown "$RUN_USER:$RUN_USER" "$RUN_DIR" && \
+        chmod 0700 "$RUN_DIR" || return 1
+
+    procd_open_instance main
+    # Resolve relative paths from APP_DIR and apply the systemd unit's UMask=0027.
+    procd_set_param command /bin/sh -c \
+        'cd "$1" && umask 027 && exec "$2" -m smartdns.main --config "$3"' \
+        smartdns "$APP_DIR" "$PYTHON" "$CONFIG"
+    procd_set_param user "$RUN_USER"
+    procd_set_param group "$RUN_USER"
+    procd_set_param no_new_privs 1
+    # Keep the profile's capability sets in sync with smartdns.service.
+    procd_set_param capabilities "$CAPABILITIES"
+    if [ -n "${SMARTDNS_LIBSODIUM_PATH:-}" ]; then
+        procd_set_param env "HOME=$RUN_DIR" "TMPDIR=$RUN_DIR" \
+            PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
+            "SMARTDNS_LIBSODIUM_PATH=$SMARTDNS_LIBSODIUM_PATH"
+    else
+        procd_set_param env "HOME=$RUN_DIR" "TMPDIR=$RUN_DIR" \
+            PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
+    fi
+    procd_add_jail smartdns-python ronly log requirejail
+    # The venv Python is normally a symlink to a system interpreter.
+    procd_add_jail_mount "$APP_DIR" "$python_real"
+    for path in /lib /usr/lib /usr/local/lib /usr/share/ca-certificates \
+        /etc/ssl /etc/hosts /etc/resolv.conf /etc/nsswitch.conf \
+        /etc/TZ /etc/localtime /etc/passwd /etc/group; do
+        [ -e "$path" ] && procd_add_jail_mount "$path"
+    done
+    [ -n "${SMARTDNS_LIBSODIUM_PATH:-}" ] && \
+        procd_add_jail_mount "$SMARTDNS_LIBSODIUM_PATH"
+    procd_add_jail_mount_rw "$RUN_DIR"
+    # Give the jailed process the same 35-second stop grace as TimeoutStopSec.
+    procd_set_param term_timeout 35
+    procd_set_param respawn 3600 5 5
+    procd_set_param file "$CONFIG"
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}

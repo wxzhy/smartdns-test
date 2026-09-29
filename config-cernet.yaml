@@ -3,12 +3,12 @@ listeners:
   - name: TCP
     type: tcp
     port: 5335
-    timeout: 10
+    timeout: 5
   - name: UDP
     type: udp
     host: "::"
     port: 5335
-    timeout: 10
+    timeout: 5
 geodata:
   geoip: tags/output/geoip.metadb
   geosite: tags/output/geosite.trie
@@ -142,7 +142,7 @@ resolvers:
     type: aiodns
     nameservers:
       - 221.6.4.66
-      - 221.6.4.67
+      - 58.240.57.33
     timeout: 1
     tries: 4
   - name: cmcc
@@ -182,7 +182,7 @@ resolvers:
     nameservers:
       - google-1
       - google-2
-    ecs: 2001:250:5002::/48
+    ecs: 240b:4001:23c::/48
     timeout: 3
     lifetime: 5
   - name: cn
@@ -196,6 +196,7 @@ resolvers:
     timeout: 2
     wait_all: true
     actions:
+      - filter
       - speedcheck
   - name: global
     type: concurrent
@@ -219,6 +220,7 @@ resolvers:
       - nextdns
     wait_all: true
     actions:
+      - filter
       - replace
       - speedcheck
     timeout: 5
@@ -226,6 +228,13 @@ resolvers:
 actions:
   - name: block
     type: static
+  - name: proxy
+    type: static
+    ipv4:
+      - 192.168.8.64
+    ipv6:
+      # 测试占位地址；实际运行时替换为可达的代理 IPv6 地址。
+      - 2001:db8::64
   - name: speedcheck
     type: speedcheck
     match_ip:
@@ -241,8 +250,6 @@ actions:
         - google-cn
         - category-ntp
         - category-stun
-        - category-ads
-        - cloudflare-cn
       query_types:
         - A
         - AAAA
@@ -268,11 +275,8 @@ actions:
           - 13.33.212.0
           - 3.166.246.0
         ipv6:
-          - "2600:9000:2755::"
-          - "2600:9000:28c2::"
-          - "2600:9000:203f::"
-          - "2600:9000:229f::"
-          - "2600:9000:2078::"
+          - "2600:9000:2939::"
+          - "2600:9000:2079::"
       - match_ip:
           ip_include:
             - github-raw
@@ -320,12 +324,12 @@ actions:
             - category-ntp
             - category-stun
         ipv6:
-          - "2607:f8b0:4023:c0b::ca"
-          - "2607:f8b0:4023:c0d::c3"
-          - "2607:f8b0:4023:c03::c4"
-          - "2607:f8b0:4023:c06::5a"
-          - "2607:f8b0:4023:c0b::c4"
-          - "2607:f8b0:4023:c06::ca"
+          - "2404:6800:4005:800::93"
+          - "2404:6800:4005:c02::94"
+          - "2404:6800:4005:c00::2008"
+          - "2404:6800:4005:c02::2018"
+          - "2404:6800:4005:c02::ca"
+          - "2404:6800:4005:800::b5"
   - name: filter
     type: filter
     filters:
@@ -349,6 +353,17 @@ routing:
         - category-ads-all
         - category-ads
         - ads
+  - name: proxy
+    before:
+      - proxy
+    resolver: cn
+    matcher:
+      # 修改 tags/geosite/proxy.txt 后须重新生成 geosite.trie。
+      domain_include:
+        - proxy
+      query_types:
+        - A
+        - AAAA
   - name: google
     matcher:
       domain_include:

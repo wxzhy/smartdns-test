@@ -1,0 +1,56 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          smartdns
+# Required-Start:    $remote_fs $network $syslog
+# Required-Stop:     $remote_fs $network $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: SmartDNS DNS proxy
+### END INIT INFO
+
+set -eu
+umask 027
+
+APP_DIR=/opt/smartdns
+DAEMON="$APP_DIR/.venv/bin/python"
+CONFIG=/opt/smartdns/config.yaml
+ENV_FILE=/opt/smartdns/environment
+LOG_FILE=/var/log/smartdns.log
+RUN_USER=smartdns
+
+# /opt/smartdns/environment 必须由 root 管理，仅写 KEY=value 的 shell 赋值。
+if [ -r "$ENV_FILE" ]; then
+    set -a
+    . "$ENV_FILE"
+    set +a
+fi
+HOME=/var/lib/smartdns
+PYTHONDONTWRITEBYTECODE=1
+export HOME PYTHONDONTWRITEBYTECODE
+
+case "${1:-}" in
+    start)
+        [ -x "$DAEMON" ] || exit 5
+        [ -r "$CONFIG" ] || exit 6
+        start-stop-daemon --start --quiet --oknodo \
+            --user "$RUN_USER" --exec "$DAEMON" \
+            --background --no-close --chuid "$RUN_USER" --chdir "$APP_DIR" \
+            --startas "$DAEMON" -- -m smartdns.main --config "$CONFIG" \
+            </dev/null >>"$LOG_FILE" 2>&1
+        ;;
+    stop)
+        start-stop-daemon --stop --quiet --oknodo \
+            --retry=INT/30/KILL/5 --user "$RUN_USER" --exec "$DAEMON"
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    status)
+        start-stop-daemon --status --user "$RUN_USER" --exec "$DAEMON"
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}" >&2
+        exit 2
+        ;;
+esac

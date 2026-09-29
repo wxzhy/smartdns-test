@@ -1,0 +1,28 @@
+# 可启动的最小部署配置：仅监听本机 5335，不依赖地理数据或 libsodium。
+# 对外开放服务前，请确认监听地址、上游及访问控制符合自己的网络环境。
+worker_count: 1
+
+listeners:
+  - name: local-udp
+    type: udp
+    host: 127.0.0.1
+    port: 5335
+  - name: local-tcp
+    type: tcp
+    host: 127.0.0.1
+    port: 5335
+
+nameservers:
+  - name: upstream-udp
+    type: udp
+    address: 1.1.1.1
+    port: 53
+
+resolvers:
+  - name: upstream
+    type: plain
+    nameservers: [upstream-udp]
+
+routing:
+  - name: default
+    resolver: upstream

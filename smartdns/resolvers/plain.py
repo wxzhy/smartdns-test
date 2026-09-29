@@ -140,7 +140,8 @@ class PlainResolver(BaseResolver, Resolver):
             rrset.rdtype == dns.rdatatype.SOA for rrset in answer.response.authority
         ):
             return
-        answer.expiration = time() + self._nodata_ttl
+        # CNAME 链本身可能有比负缓存上限更短的 TTL，不能将其延长。
+        answer.expiration = min(answer.expiration, time() + self._nodata_ttl)
 
     def _nxdomain_answer(
         self, error: NXDOMAIN, qname: Name, rdtype: RdataType, rdclass: RdataClass

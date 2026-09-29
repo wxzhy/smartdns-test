@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from anyio import ClosedResourceError, Semaphore, create_task_group, fail_after, sleep
 from anyio.abc import UDPSocket
 from dns.asyncquery import receive_udp, send_udp
+from dns.exception import FormError
 from dns.inet import af_for_address
 from loguru import logger
 
@@ -133,8 +134,21 @@ class UDPListener(BaseListener):
                         )
                     except ClosedResourceError:
                         break
-                    except Exception:
-                        logger.warning("UDP监听器 {} 接收请求失败", self.name)
+                    except FormError as error:
+                        # 单个畸形报文不代表套接字故障，直接丢弃并继续接收，避免
+                        # 任意客户端通过坏包触发整个监听器的全局退避。
+                        logger.debug(
+                            "UDP监听器 {} 丢弃格式错误请求: {}", self.name, error
+                        )
+                        continue
+                    except Exception as error:
+                        # 套接字及其他持续性接收故障采用短退避，避免错误热循环。
+                        logger.warning(
+                            "UDP监听器 {} 接收请求失败: {}: {}",
+                            self.name,
+                            type(error).__name__,
+                            error,
+                        )
                         await sleep(_RECEIVE_ERROR_BACKOFF)
                         continue
                     await limiter.acquire()

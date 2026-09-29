@@ -101,9 +101,9 @@ class TCPNameserver(BaseAddressNameserver):
                             one_rr_per_rrset,
                             ignore_trailing,
                         )
-                    except Exception:
-                        # 交换中途失败（如超时打断半读应答）后帧对齐不可信，
-                        # 标记脏连接，归还池后由健康检查在下次获取时重建。
+                    except BaseException:
+                        # 交换中途失败（包括任务取消）后帧对齐不可信，标记脏连接，
+                        # 归还池后由健康检查在下次获取时重建。
                         raw_sock.healthy = False
                         raise
             # 无池路径：建连与查询共用同一截止时刻，黑洞地址不会挂到 OS 级超时。

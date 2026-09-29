@@ -1,0 +1,194 @@
+#!/bin/sh
+# 从当前源码目录首次安装到固定路径；不覆盖既有应用或服务配置。
+set -eu
+umask 022
+
+usage() {
+    echo "Usage: sudo sh deploy/install.sh {systemd|initd} [config.yaml] [environment]" >&2
+    exit 2
+}
+
+[ "$#" -ge 1 ] && [ "$#" -le 3 ] || usage
+case "$1" in
+    systemd)
+        SERVICE_FILE=/etc/systemd/system/smartdns.service
+        ;;
+    initd)
+        SERVICE_FILE=/etc/init.d/smartdns
+        ;;
+    *) usage ;;
+esac
+MODE=$1
+SOURCE_DIR=$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)
+CONFIG_SOURCE=${2:-"$SOURCE_DIR/deploy/config.yaml"}
+ENV_SOURCE=${3:-}
+APP_DIR=/opt/smartdns
+RUN_USER=smartdns
+
+[ "$(uname -s)" = Linux ] || { echo "This installer is for Linux." >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || { echo "Run this installer as root." >&2; exit 1; }
+[ -f "$CONFIG_SOURCE" ] || { echo "Config file not found: $CONFIG_SOURCE" >&2; exit 1; }
+[ -z "$ENV_SOURCE" ] || [ -f "$ENV_SOURCE" ] || {
+    echo "Environment file not found: $ENV_SOURCE" >&2
+    exit 1
+}
+[ ! -e "$APP_DIR" ] && [ ! -L "$APP_DIR" ] || {
+    echo "$APP_DIR already exists; this example installer only performs a fresh install." >&2
+    exit 1
+}
+[ ! -e "$SERVICE_FILE" ] && [ ! -L "$SERVICE_FILE" ] || {
+    echo "$SERVICE_FILE already exists; refusing to overwrite it." >&2
+    exit 1
+}
+
+UV=$(command -v uv) || { echo "Install uv and add it to root's PATH first." >&2; exit 1; }
+PYTHON=$(command -v python3.14) || {
+    echo "Install a system-accessible Python 3.14 first." >&2
+    exit 1
+}
+"$PYTHON" -c 'import sys; assert sys.version_info >= (3, 14)'
+if [ "$MODE" = systemd ]; then
+    command -v systemctl >/dev/null || { echo "systemctl is required." >&2; exit 1; }
+    command -v systemd-analyze >/dev/null || {
+        echo "systemd-analyze is required." >&2
+        exit 1
+    }
+    SYSTEMD_VERSION=$(systemctl --version | sed -n '1s/^systemd \([0-9][0-9]*\).*/\1/p')
+    case "$SYSTEMD_VERSION" in
+        ''|*[!0-9]*) echo "Cannot determine the systemd version." >&2; exit 1 ;;
+    esac
+    [ "$SYSTEMD_VERSION" -ge 247 ] || {
+        echo "The DynamicUser/LoadCredential example requires systemd 247 or newer." >&2
+        exit 1
+    }
+else
+    command -v start-stop-daemon >/dev/null || {
+        echo "The init.d example requires Debian's start-stop-daemon." >&2
+        exit 1
+    }
+    command -v getent >/dev/null || { echo "getent is required." >&2; exit 1; }
+    command -v runuser >/dev/null || { echo "runuser is required." >&2; exit 1; }
+    command -v useradd >/dev/null || { echo "useradd is required." >&2; exit 1; }
+    command -v groupadd >/dev/null || { echo "groupadd is required." >&2; exit 1; }
+    if ! getent group "$RUN_USER" >/dev/null; then
+        groupadd --system "$RUN_USER"
+    fi
+    if ! id -u "$RUN_USER" >/dev/null 2>&1; then
+        NOLOGIN=$(command -v nologin) || { echo "nologin is required." >&2; exit 1; }
+        useradd --system --gid "$RUN_USER" --home-dir /var/lib/smartdns \
+            --no-create-home --shell "$NOLOGIN" "$RUN_USER"
+    fi
+    if ! id -nG "$RUN_USER" | tr ' ' '\n' | grep -qx "$RUN_USER"; then
+        echo "Existing $RUN_USER user must belong to the $RUN_USER group." >&2
+        exit 1
+    fi
+fi
+
+APP_CREATED=0
+SERVICE_CREATED=0
+cleanup_on_error() {
+    status=$?
+    trap - EXIT
+    if [ "$status" -ne 0 ]; then
+        echo "Installation failed; removing the new application and service files." >&2
+        if [ "$SERVICE_CREATED" -eq 1 ]; then
+            rm -f "$SERVICE_FILE"
+        fi
+        if [ "$APP_CREATED" -eq 1 ]; then
+            rm -rf "$APP_DIR"
+        fi
+    fi
+    exit "$status"
+}
+trap cleanup_on_error EXIT
+
+mkdir -m 0755 "$APP_DIR"
+APP_CREATED=1
+cp -R "$SOURCE_DIR/smartdns" "$APP_DIR/"
+install -m 0644 "$SOURCE_DIR/pyproject.toml" "$APP_DIR/pyproject.toml"
+install -m 0644 "$SOURCE_DIR/uv.lock" "$APP_DIR/uv.lock"
+install -m 0644 "$SOURCE_DIR/README.md" "$APP_DIR/README.md"
+if [ -d "$SOURCE_DIR/tags/output" ]; then
+    install -d -m 0755 "$APP_DIR/tags"
+    cp -R "$SOURCE_DIR/tags/output" "$APP_DIR/tags/"
+    chmod -R a+rX,go-w "$APP_DIR/tags"
+fi
+chmod -R a+rX,go-w "$APP_DIR/smartdns"
+
+(
+    cd "$APP_DIR"
+    "$UV" sync --locked --no-dev --python "$PYTHON"
+)
+chmod -R a+rX,go-w "$APP_DIR/.venv"
+
+if [ "$MODE" = systemd ]; then
+    CONFIG_GROUP=root
+    CONFIG_FILE_MODE=0600
+else
+    CONFIG_GROUP=$RUN_USER
+    CONFIG_FILE_MODE=0640
+fi
+install -o root -g "$CONFIG_GROUP" -m "$CONFIG_FILE_MODE" \
+    "$CONFIG_SOURCE" "$APP_DIR/config.yaml"
+if [ -n "$ENV_SOURCE" ]; then
+    install -o root -g root -m 0600 "$ENV_SOURCE" "$APP_DIR/environment"
+fi
+if [ "$MODE" = systemd ]; then
+    CONFIG_BYTES=$(wc -c < "$APP_DIR/config.yaml")
+    [ "$CONFIG_BYTES" -le 1000000 ] || {
+        echo "This installer limits config.yaml to 1 MB for LoadCredential." >&2
+        exit 1
+    }
+fi
+if [ "$MODE" = initd ]; then
+    install -d -o "$RUN_USER" -g "$RUN_USER" -m 0750 /var/lib/smartdns
+fi
+if [ -r "$APP_DIR/environment" ]; then
+    set -a
+    . "$APP_DIR/environment"
+    set +a
+fi
+
+(
+    cd "$APP_DIR"
+    if [ "$MODE" = systemd ]; then
+        set -- env SMARTDNS_INSTALL_MODE="$MODE" "$APP_DIR/.venv/bin/python" -
+    else
+        set -- runuser -u "$RUN_USER" -- env SMARTDNS_INSTALL_MODE="$MODE" \
+            "$APP_DIR/.venv/bin/python" -
+    fi
+    "$@" <<'PY'
+import os
+from pathlib import Path
+
+from smartdns.models.config import Config
+from smartdns.models.nameserver import DNSCryptNameserverConfig
+
+Config.set_config_file(Path('/opt/smartdns/config.yaml'))
+config = Config()
+if os.environ['SMARTDNS_INSTALL_MODE'] == 'initd' and any(
+    listener.port < 1024 for listener in config.listeners
+):
+    raise SystemExit('init.d example runs unprivileged; listener ports must be >= 1024')
+if any(isinstance(server, DNSCryptNameserverConfig) for server in config.nameservers):
+    from smartdns.nameservers._sodium import require_libsodium
+
+    require_libsodium()
+print('Configuration references validated.')
+PY
+)
+
+if [ "$MODE" = systemd ]; then
+    SERVICE_CREATED=1
+    install -m 0644 "$SOURCE_DIR/deploy/smartdns.service" "$SERVICE_FILE"
+    systemd-analyze verify "$SERVICE_FILE"
+    systemctl daemon-reload
+    echo "Installed. Review $APP_DIR/config.yaml, then run: systemctl enable --now smartdns"
+else
+    if [ ! -e /var/log/smartdns.log ]; then
+        install -o "$RUN_USER" -g "$RUN_USER" -m 0640 /dev/null /var/log/smartdns.log
+    fi
+    SERVICE_CREATED=1
+    install -m 0755 "$SOURCE_DIR/deploy/smartdns.init" "$SERVICE_FILE"
+    echo "Installed. Review $APP_DIR/config.yaml, then run: update-rc.d smartdns defaults && service smartdns start"
+fi

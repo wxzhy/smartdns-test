@@ -29,6 +29,8 @@ class _FakeStream:
 
     def signal_eof(self) -> None:
         self._eof.set()
+        # 真实套接字关闭会唤醒正在等待的 receive；测试替身需保持同样语义。
+        self._blocked.set()
 
     def extra(self, attribute: object, default: object = None) -> object:
         if attribute is SocketAttribute.family:
@@ -108,6 +110,110 @@ async def test_handle_connection_drops_empty_question_query() -> None:
     assert monotonic() - started < 5
     assert calls == []
     assert stream.sent == []
+
+
+async def test_handle_connection_processes_pipelined_queries_concurrently() -> None:
+    first = dns.message.make_query("first.example.com.", "A")
+    second = dns.message.make_query("second.example.com.", "A")
+    first.id = 0x1001
+    second.id = 0x1002
+    payload = b"".join(
+        len(wire).to_bytes(2, "big") + wire
+        for wire in (first.to_wire(), second.to_wire())
+    )
+    stream = _FakeStream(payload)
+    stream.signal_eof()
+    listener = _listener(timeout=1)
+    release_first = Event()
+    second_started = Event()
+
+    async def handler(request: Request):
+        if request.msg.id == first.id:
+            await release_first.wait()
+        else:
+            second_started.set()
+            release_first.set()
+        return dns.message.make_response(request.msg)
+
+    listener.handler = handler
+    with fail_after(2):
+        await listener.handle_connection(cast("SocketStream", stream))
+
+    assert second_started.is_set()
+    assert len(stream.sent) == 2
+    for frame in stream.sent:
+        assert int.from_bytes(frame[:2], "big") == len(frame) - 2
+    response_ids = {dns.message.from_wire(frame[2:]).id for frame in stream.sent}
+    assert response_ids == {first.id, second.id}
+
+
+async def test_pipelined_handler_error_is_isolated_to_one_query() -> None:
+    failed = dns.message.make_query("failed.example.com.", "A")
+    successful = dns.message.make_query("successful.example.com.", "A")
+    failed.id = 0x2001
+    successful.id = 0x2002
+    payload = b"".join(
+        len(wire).to_bytes(2, "big") + wire
+        for wire in (failed.to_wire(), successful.to_wire())
+    )
+    stream = _FakeStream(payload)
+    stream.signal_eof()
+    listener = _listener(timeout=1)
+
+    async def handler(request: Request):
+        if request.msg.id == failed.id:
+            raise RuntimeError("query failed")
+        return dns.message.make_response(request.msg)
+
+    listener.handler = handler
+    with fail_after(2):
+        await listener.handle_connection(cast("SocketStream", stream))
+
+    assert len(stream.sent) == 1
+    assert dns.message.from_wire(stream.sent[0][2:]).id == successful.id
+
+
+async def test_partial_response_write_closes_pipelined_connection() -> None:
+    first = dns.message.make_query("first.example.com.", "A")
+    second = dns.message.make_query("second.example.com.", "A")
+    payload = b"".join(
+        len(wire).to_bytes(2, "big") + wire
+        for wire in (first.to_wire(), second.to_wire())
+    )
+
+    class _PartiallyFailingStream(_FakeStream):
+        def __init__(self) -> None:
+            super().__init__(payload)
+            self.send_calls = 0
+            self.sent_bytes = bytearray()
+
+        async def send(self, data: bytes) -> None:
+            self.send_calls += 1
+            if self.send_calls == 1:
+                self.sent_bytes.extend(data[:4])
+                raise OSError("partial write")
+            self.sent_bytes.extend(data)
+
+    stream = _PartiallyFailingStream()
+    stream.signal_eof()
+    listener = _listener(timeout=1)
+    second_started = Event()
+
+    async def handler(request: Request):
+        if request.qname == first.question[0].name:
+            await second_started.wait()
+        else:
+            second_started.set()
+            await sleep(0.1)
+        return dns.message.make_response(request.msg)
+
+    listener.handler = handler
+    with fail_after(2):
+        await listener.handle_connection(cast("SocketStream", stream))
+
+    assert second_started.is_set()
+    assert stream.send_calls == 1
+    assert stream.closed
 
 
 class _FakeAcceptor:

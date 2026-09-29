@@ -46,16 +46,13 @@ def _a_response() -> Response:
 
 
 def _cname_response(*, with_address: bool = True) -> Response:
-    answer = (
-        "leaf.example.org. 120 IN A 192.0.2.1\n" if with_address else ""
-    )
+    answer = "leaf.example.org. 120 IN A 192.0.2.1\n" if with_address else ""
     return _response(
         "A",
         "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
         ";QUESTION\nexample.com. IN A\n;ANSWER\n"
         "example.com. 300 IN CNAME edge.example.net.\n"
-        "edge.example.net. 180 IN CNAME leaf.example.org.\n"
-        + answer,
+        "edge.example.net. 180 IN CNAME leaf.example.org.\n" + answer,
     )
 
 
@@ -114,9 +111,7 @@ def test_replace_response_ip_uses_cname_leaf_for_nodata_fallback() -> None:
     assert response.ans is not None
     assert response.ans.rrset is None
 
-    result = replace_response_ip(
-        response, {IPv4Address("203.0.113.10")}, ttl=60
-    )
+    result = replace_response_ip(response, {IPv4Address("203.0.113.10")}, ttl=60)
 
     assert result.ans is not None
     assert result.ans.rrset is not None
