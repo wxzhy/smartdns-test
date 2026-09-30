@@ -71,7 +71,13 @@ class UDPListener(BaseListener):
     def _serialize_response(request: Message, response: Message) -> bytes:
         """按客户端声明的 UDP 容量序列化，超限时返回带 TC 的合法响应。"""
         max_size = request.payload if request.edns >= 0 else 512
-        return response.to_wire(max_size=max_size, prefer_truncation=True)
+        # 保留 speedcheck 等动作排定的记录顺序。
+        return response.to_wire(
+            max_size=max_size,
+            prefer_truncation=True,
+            # dnspython 误标 **kw 类型；Rdataset.to_wire 接受 bool。
+            want_shuffle=False,  # ty: ignore[invalid-argument-type]
+        )
 
     async def start(self, handler: Handler):
         """启动UDP监听器并进入接收循环。"""

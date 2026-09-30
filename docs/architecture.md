@@ -297,7 +297,9 @@ Action 放在没有实现的阶段时是 no-op，不会报错。
 
 ### speedcheck
 
-`on_resolver` 对 A/AAAA 候选 IP 进行 ICMP ping 和/或多个 TCP 端口连接测试；任一方式成功即采用该结果。`on_response` 选择最低 RTT 所属 Resolver 的候选，并保留与最佳结果标签集合相同、RTT 差不超过 `threshold` 的前 `max_num` 个地址。
+`on_resolver` 收集 A/AAAA 候选 IP，启用测速时进行 ICMP ping 和/或多个 TCP 端口连接测试；任一方式成功即采用该结果。排序倍率先按 `tag_multipliers` 的配置顺序寻找首个命中的标签，再查 `asn_multipliers`，均未命中时为 `1`。`on_response` 优先选择有有效 RTT（非空且有限，包括 `0`）的 IP，按原始 RTT 乘倍率升序排序，并保留与最佳结果标签集合相同、加权 RTT 差不超过 `threshold` 的前 `max_num` 个地址。所有候选都没有有效 RTT 时，仅按倍率升序保留前 `max_num` 个地址，不限制标签集合，忽略 `threshold`。缺失、无穷大及 NaN 均不算有效 RTT；原始 RTT 不变。ICMP 和 TCP 均关闭时不发起新探测，但上下文已有的有效 RTT 仍按上述规则优先使用。
+
+重建应答时保留排序顺序，UDP/TCP 监听器序列化时关闭记录随机打乱，避免发送阶段破坏排序。
 
 ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使用非特权模式还是原始 ICMP socket。任一探测成功后取消其余探测；结果缓存 1800 秒，键包含 IP、是否 ICMP、ICMP 特权模式、TCP 端口集合和超时配置。同一事件循环内的同键请求还会复用正在进行的测速任务。
 

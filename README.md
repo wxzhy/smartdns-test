@@ -189,9 +189,9 @@
 | `static` | `StaticAction` | before | 用配置的 `ipv4/ipv6` 直接生成应答并 `stop`，用于屏蔽（示例里配合 `ads` 路由实现广告拦截） |
 | `log` | `LogAction` | before | 打印请求摘要 |
 | `replace` | `ReplaceAction` | on_resolver | 命中 IP 标签的应答按映射改写 IP，**保留主机位**：用原 IP 在 `prefixlen` 外的主机位作偏移叠加到新基址上（用于把 CDN IP 重定向到自有优选 IP 段） |
-| `speedcheck` | `SpeedcheckAction` | on_resolver + on_response | on_resolver 阶段对每个候选 IP 并发 `ping`/`tcping` 测速；ICMP 可用 `privileged` 选择原始 socket；on_response 阶段按 RTT 排序，选最优解析器的候选应答，并在同国家、阈值内的 IP 里取前 N 个重写应答 |
+| `speedcheck` | `SpeedcheckAction` | on_resolver + on_response | 优先选择有有效 RTT 的 IP，按 RTT × 倍率排序并在相同标签集合、加权 RTT 阈值内取前 N 个；所有候选都没有有效 RTT 时仅按倍率排序取前 N 个。倍率先查 `tag_multipliers`，再查 `asn_multipliers`，默认 1；关闭探测后仍可使用已有 RTT。应答发送时保留排序顺序 |
 | `https` | `HTTPSAction` | on_response | 处理 HTTPS(SVCB) 记录：可选移除 ipv4/ipv6 hint、把 ALPN 的 h3 改成 h2，并为命中域名+IP 标签的记录**注入 ECH 密钥**（从配置的 ECH 域名现查） |
-| `fallback` | `FallbackAction` | on_response | 若应答 IP 测速**全部失败**（无有效 RTT），则命中映射的域名回退到静态 IP 列表 |
+| `fallback` | `FallbackAction` | on_response | 若应答无 IP 或候选 IP 测速**全部失败**，则命中映射的域名回退到静态 IP 列表；未测速的 IP 仍视为可用候选 |
 
 > ECH 查询带缓存与同键 in-flight 去重。测速结果缓存 1800 秒，并按 IP、协议方式、ICMP 特权模式、端口和超时配置区分；同一事件循环内还会合并进行中的同键测速。
 

@@ -243,7 +243,9 @@ actions:
         ttl: 86400
 
   # 测速选优：on_resolver 阶段对候选 IP 并发 ICMP/TCP 探测（任一成功即取消其余），
-  # on_response 阶段保留与最优 RTT 差不超过 threshold 的前 max_num 个地址。
+  # on_response 优先选择有有效 RTT 的 IP，按 RTT × 倍率升序选择，
+  # 同标签集合内的加权 RTT 差不超过 threshold；没有有效 RTT 时仅按倍率升序。
+  # ping=false 且 port 为空时不发起新探测，但仍优先使用上下文已有的有效 RTT。
   # 通常同时放入 ConcurrentResolver 的 actions 与路由 after：前者采样，后者择优。
   - name: speed
     type: speedcheck
@@ -263,8 +265,13 @@ actions:
         - 13335
       asn_exclude:
         - 64512
+    tag_multipliers:       # 先按配置顺序采用首个命中的 IP 标签倍率
+      cloudflare: 0.8
+      fastly: 1.2
+    asn_multipliers:       # 未命中标签倍率时再查 ASN；均未命中时倍率为 1
+      13335: 0.9
     max_num: 2
-    threshold: 50         # 毫秒
+    threshold: 50         # 加权 RTT 差（毫秒）；无有效 RTT 时忽略
 
   # 候选过滤：域名标签链与响应 IP 标签均命中时标记候选 invalid 并丢弃
   # （查询类型固定为 A/AAAA/HTTPS；仅 ConcurrentResolver 的 actions 阶段生效）。

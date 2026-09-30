@@ -237,6 +237,9 @@ actions:
       - 2001:db8::64
   - name: speedcheck
     type: speedcheck
+    # 标签倍率优先于 ASN 倍率；均未命中时为 1。
+    tag_multipliers: {}
+    asn_multipliers: {}
     match_ip:
       ip_exclude:
         - private

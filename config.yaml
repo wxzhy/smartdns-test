@@ -53,7 +53,14 @@ client:
       - "2001:b000:168::2"
       - 168.95.1.1
       - 168.95.192.1
-
+    v.recipes:
+      - 172.64.145.0
+      - 172.64.146.0
+      - 104.18.38.0
+      - 104.18.39.0
+      - "2606:4700:52::"
+      - "2606:4700:57::"
+      - "2606:4700:5a::"
 nameservers:
   - name: test-tcp
     type: tcp
@@ -99,6 +106,13 @@ nameservers:
   - name: v-dns
     type: curl
     url: https://v.recipes/dns-ecs
+    host: v.recipes
+    want_get: false
+    verify: true
+    ech: crypto.cloudflare.com
+  - name: v-cn
+    type: curl
+    url: https://v.recipes/dns-cn
     host: v.recipes
     want_get: false
     verify: true
@@ -177,6 +191,16 @@ resolvers:
     type: plain
     nameservers:
       - hinet
+  - name: v-dns
+    type: plain
+    nameservers:
+      - v-dns
+    edns: false
+  - name: v-cn
+    type: plain
+    nameservers:
+      - v-cn
+    edns: false
   - name: iij
     type: plain
     nameservers:
@@ -208,6 +232,7 @@ resolvers:
     wait_all: true
     actions:
       - replace
+      - twitter
       - speedcheck
     timeout: 5
   - name: default
@@ -233,12 +258,14 @@ actions:
   - name: proxy
     type: static
     ipv4:
-      - 192.168.8.64
+      - 9.0.0.0
     ipv6:
-      # 测试占位地址；实际运行时替换为可达的代理 IPv6 地址。
-      - 2001:db8::64
+      - "2620::"
   - name: speedcheck
     type: speedcheck
+    # 标签倍率优先于 ASN 倍率；均未命中时为 1。
+    tag_multipliers:
+      fastly: 2
     match_ip:
       ip_exclude:
         - private
@@ -309,6 +336,38 @@ actions:
           - 146.75.48.0
         ipv6:
           - "2a04:4e42:7c::"
+  - name: twitter
+    type: replace
+    match_name:
+      domain_include:
+        - twitter
+      query_types:
+        - A
+        - AAAA
+    replace_map:
+      - match_ip:
+          ip_include:
+            - fastly
+            - cloudflare
+        ipv4:
+          - 172.64.145.0
+          - 172.64.146.0
+          - 104.18.38.0
+          - 104.18.39.0
+        ipv6:
+          - "2606:4700:52::"
+          - "2606:4700:57::"
+          - "2606:4700:5a::"
+  - name: https-cn
+    type: https
+    match_name:
+      domain_exclude:
+        - cn
+    match_ip:
+      ip_include:
+        - cloudflare
+    ech_domain: crypto.cloudflare.com
+    enable_subquery: false
   - name: https
     type: https
     match_name:
@@ -318,6 +377,7 @@ actions:
       ip_include:
         - cloudflare
     ech_domain: crypto.cloudflare.com
+    enable_subquery: true
   - name: fallback
     type: fallback
     map:
@@ -374,9 +434,9 @@ routing:
     matcher:
       domain_include:
         - google-cn
-    resolver: google-cn
     after:
-      - https
+      - https-cn
+    resolver: google-cn
   - name: rule1
     resolver: cn
     matcher:
@@ -386,7 +446,7 @@ routing:
         - apple-cn
     after:
       - speedcheck
-      - https
+      - https-cn
   #    resolver: doh-test
   - name: rule3
     matcher:

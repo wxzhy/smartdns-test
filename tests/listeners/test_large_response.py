@@ -73,3 +73,35 @@ def test_tcp_serialization_can_return_the_full_large_response() -> None:
     assert len(wire) > 1232
     assert not parsed.flags & dns.flags.TC
     assert sum(len(rrset) for rrset in parsed.answer) == 14
+
+
+@pytest.mark.parametrize("protocol", ["udp", "tcp"])
+@pytest.mark.parametrize(
+    ("rdtype", "addresses"),
+    [
+        ("A", ["192.0.2.3", "192.0.2.1", "192.0.2.2"]),
+        ("AAAA", ["2001:db8::3", "2001:db8::1", "2001:db8::2"]),
+    ],
+)
+def test_serialization_preserves_sorted_address_order(
+    monkeypatch, protocol: str, rdtype: str, addresses: list[str]
+) -> None:
+    # 若序列化仍启用随机打乱，则用确定性的逆序替身让测试必然失败。
+    monkeypatch.setattr(
+        "dns.rdataset.random.shuffle", lambda records: records.reverse()
+    )
+    query = dns.message.make_query("example.com.", rdtype)
+    records = "".join(f"example.com. 300 IN {rdtype} {ip}\n" for ip in addresses)
+    response = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
+        f";QUESTION\nexample.com. IN {rdtype}\n;ANSWER\n" + records
+    )
+
+    wire = (
+        _udp_listener()._serialize_response(query, response)
+        if protocol == "udp"
+        else _tcp_listener()._serialize_response(response)
+    )
+    parsed = dns.message.from_wire(wire)
+
+    assert [record.address for record in parsed.answer[0]] == addresses

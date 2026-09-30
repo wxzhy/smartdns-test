@@ -123,8 +123,24 @@ class SpeedcheckActionConfig(BaseActionConfig):
     match_ip: ResponseIPMatcher = Field(
         default_factory=ResponseIPMatcher, description="测速匹配器"
     )
-    max_num: int = Field(default=1, ge=1, description="测速后保留的IP最大数量")
-    threshold: float = Field(default=100.0, ge=0.0, description="rtt延迟阈值（毫秒）")
+    tag_multipliers: dict[str, Annotated[float, Field(gt=0, allow_inf_nan=False)]] = (
+        Field(
+            default_factory=dict,
+            description="IP 标签对应的倍率；按配置顺序采用首个命中的标签",
+        )
+    )
+    asn_multipliers: dict[int, Annotated[float, Field(gt=0, allow_inf_nan=False)]] = (
+        Field(
+            default_factory=dict,
+            description="未命中标签倍率时使用的 ASN 倍率；均未命中时为 1",
+        )
+    )
+    max_num: int = Field(default=1, ge=1, description="排序后保留的IP最大数量")
+    threshold: float = Field(
+        default=100.0,
+        ge=0.0,
+        description="加权 RTT 延迟阈值（毫秒）；无有效 RTT 时忽略",
+    )
 
 
 class FallbackActionConfig(BaseActionConfig):

@@ -50,7 +50,12 @@ class TCPListener(BaseListener):
     @staticmethod
     def _serialize_response(response: Message) -> bytes:
         """序列化完整 TCP DNS 响应，不继承 UDP EDNS payload 限制。"""
-        return response.to_wire(max_size=65535)
+        # 保留 speedcheck 等动作排定的记录顺序。
+        return response.to_wire(
+            max_size=65535,
+            # dnspython 误标 **kw 类型；Rdataset.to_wire 接受 bool。
+            want_shuffle=False,  # ty: ignore[invalid-argument-type]
+        )
 
     async def start(self, handler: Handler):
         """启动TCP监听器并进入接收循环。"""

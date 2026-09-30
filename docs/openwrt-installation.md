@@ -66,9 +66,9 @@ test -f /opt/smartdns-python/deploy/smartdns.openwrt.capabilities.json
 ```sh
 cd /opt/smartdns-python
 UV_CACHE_DIR=/opt/smartdns-python/.uv-cache \
-UV_PYTHON_INSTALL_DIR=/opt/smartdns-python/.python uv python install 3.14
+UV_PYTHON_INSTALL_DIR=/opt/smartdns-python/.python uv python install 3.14t
 PYTHON_PATH=$(UV_PYTHON_INSTALL_DIR=/opt/smartdns-python/.python \
-    uv python find --directory /tmp --managed-python --no-python-downloads 3.14)
+    uv python find --directory /tmp --managed-python --no-python-downloads 3.14t)
 case "$(readlink -f "$PYTHON_PATH")" in
     /opt/smartdns-python/*) ;;
     *) echo "Python is outside /opt/smartdns-python" >&2; exit 1 ;;

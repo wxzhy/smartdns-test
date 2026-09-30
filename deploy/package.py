@@ -105,8 +105,8 @@ dependencies after uv sync, before starting a geodata-enabled configuration:
 For OpenWrt, follow docs/openwrt-installation.md. Keep dnsmasq on a working
 independent upstream until direct DNS queries to SmartDNS pass. For an existing
 installation, copy only the required files and preserve config.yaml and any
-newer local MaxMind DBs. The bundled config.yaml contains network-specific
-endpoints and a 2001:db8::64 test-only proxy IPv6 placeholder.
+newer local MaxMind DBs. Review the bundled config.yaml's network-specific
+DNS endpoints and proxy addresses for the target network before deployment.
 
 For Linux systemd or init.d, see docs/manual-installation.md or use
 deploy/install.sh for a fresh installation. Install Python and native

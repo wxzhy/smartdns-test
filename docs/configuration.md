@@ -357,6 +357,11 @@ match_ip:
     port: [443]
     timeout: 0.3
   match_ip: {}
+  tag_multipliers:
+    cloudflare: 0.8
+    cn: 1.0
+  asn_multipliers:
+    15169: 1.2
   max_num: 2
   threshold: 50
 ```
@@ -364,6 +369,12 @@ match_ip:
 `privileged: true`（默认）使用原始 ICMP socket；设为 `false` 时使用 icmplib 的非特权 ICMP 模式。原始模式要求进程具备平台要求的 root、管理员权限或 `CAP_NET_RAW`。它只影响 ICMP，不影响 TCP 端口测速。
 
 通常同时放在 ConcurrentResolver 的 `actions` 和路由 `after`：前者采样，后者择优。若只放在路由 `after`，没有 `context.ip_infos` 可供选择。
+
+`tag_multipliers` 和 `asn_multipliers` 均为可省略的字典，默认为空。先匹配 IP 的标签；多个配置标签命中时，按字典顺序采用第一个。没有配置标签命中时再查 ASN，均未命中时倍率为 `1`。倍率必须为大于 `0` 的有限数；小于 `1` 提高优先级，大于 `1` 降低优先级，标签与 ASN 的倍率不叠乘。
+
+只要候选中存在有效 RTT（非空的有限数，包括 `0`），就优先选择有有效 RTT 的 IP，并按 `实际 RTT × 倍率` 升序排序。仍只保留与最佳 IP 标签集合相同的地址，`threshold` 限制它们与最佳 IP 的加权 RTT 差，`max_num` 限制数量；没有有效 RTT 的 IP 不会因倍率更低而抢占它们的位置。若所有候选都没有有效 RTT，则直接按倍率升序保留前 `max_num` 个 IP，不限制标签集合，忽略 `threshold`。缺失 RTT、失败返回的无穷大及 NaN 均视为没有有效 RTT。原始 RTT 和测速缓存不变，返回的地址保持排序顺序，同分时保留候选收集顺序。
+
+设 `ping_config.ping: false` 且省略 `port`（或设 `port: []`）可关闭全部主动测速；此时不发起探测，但上下文中已有的有效 RTT 仍会优先用于排序。若 ICMP 关闭但配置了 TCP 端口，仍会测量 TCP RTT。排序方式取决于候选实际是否有有效 RTT；即使启用了测速，只要全部候选没有有效 RTT，也会按倍率升序选择。
 
 ### https
 

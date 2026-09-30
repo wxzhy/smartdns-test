@@ -4,6 +4,7 @@ from ipaddress import IPv4Address
 from typing import TYPE_CHECKING, cast
 
 import dns.message
+import pytest
 from dns.name import from_text
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
@@ -123,9 +124,10 @@ async def test_fallback_default_ttl_is_one_day() -> None:
     assert answer.rrset.ttl == 86400
 
 
-async def test_fallback_keeps_response_when_rtt_available() -> None:
+@pytest.mark.parametrize("rtt", [10.0, None])
+async def test_fallback_keeps_response_when_ip_available(rtt: float | None) -> None:
     action = FallbackAction(_config())
-    context = _context(rtt=10.0)
+    context = _context(rtt=rtt)
     original = context.response
 
     await action.on_response(context)

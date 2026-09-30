@@ -1,3 +1,4 @@
+from math import isfinite
 from threading import BoundedSemaphore
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ from smartdns.routing.matcher import match_response
 if TYPE_CHECKING:
     from smartdns.models.action import SpeedcheckActionConfig
     from smartdns.models.context import Context, Response
+    from smartdns.models.geodata import IPInfo
 
 # 槽位占满时的等待间隔（秒）：线程信号量无跨线程通知，轮询之间让出事件循环，
 # 避免纯 checkpoint 自旋空转 CPU。
@@ -48,14 +50,33 @@ _MEASURE_LIMIT = _GlobalMeasureLimit(128)
 
 
 class SpeedcheckAction(BaseAction):
-    """对候选 IP 测速，并用最佳候选的复制结果作为最终响应。"""
+    """优先选择有有效 RTT 的 IP；没有有效 RTT 时按标签/ASN 倍率排序。"""
 
     def __init__(self, config: SpeedcheckActionConfig) -> None:
         super().__init__(config)
         self._speedtest = config.ping_config
+        self._measure_enabled = self._speedtest.ping or bool(self._speedtest.port)
         self._matcher = config.match_ip
+        self._tag_multipliers = dict(config.tag_multipliers)
+        self._asn_multipliers = dict(config.asn_multipliers)
         self._num = config.max_num
         self._threshold = config.threshold
+
+    def _multiplier(self, info: IPInfo) -> float:
+        """标签优先于 ASN；多个标签命中时以配置顺序确定倍率。"""
+        for tag, multiplier in self._tag_multipliers.items():
+            if info.country and tag in info.country:
+                return multiplier
+        if info.asn is not None:
+            return self._asn_multipliers.get(info.asn, 1.0)
+        return 1.0
+
+    def _rank(self, info: IPInfo) -> tuple[bool, float]:
+        """有有效 RTT 的 IP 排在前面；无有效 RTT 的 IP 按倍率排序。"""
+        multiplier = self._multiplier(info)
+        if info.rtt is not None and isfinite(info.rtt):
+            return False, info.rtt * multiplier
+        return True, multiplier
 
     async def start(self) -> None:
         logger.info("Speedcheck Action {} 已启动", self.name)
@@ -76,6 +97,9 @@ class SpeedcheckAction(BaseAction):
                 context.ip_infos[info.ip] = info
                 pending.append(info)
 
+        if not self._measure_enabled:
+            return
+
         async def measure(info) -> None:
             try:
                 # Worker 运行在多个独立事件循环/线程；使用线程级信号量而非
@@ -92,22 +116,24 @@ class SpeedcheckAction(BaseAction):
     async def on_response(self, context: Context) -> None:
         if not context.candidates or not context.ip_infos:
             return
-        infos = sorted(
-            context.ip_infos.values(),
-            key=lambda info: info.rtt if info.rtt is not None else float("inf"),
+        ranked = sorted(
+            ((self._rank(info), info) for info in context.ip_infos.values()),
+            key=lambda item: item[0],
         )
-        logger.debug("Speedcheck Action {} 测速结果：{}", self.name, infos)
-        best = infos[0]
-        if best.rtt is None or best.rtt == float("inf") or best.resolver is None:
+        logger.debug("Speedcheck Action {} 排序结果：{}", self.name, ranked)
+        (best_missing_rtt, best_rank), best = ranked[0]
+        if best.resolver is None:
             return
         candidate = context.candidates.get(best.resolver)
         if candidate is None:
             return
         selected = {}
-        for info in infos:
-            if info.country != best.country:
-                continue
-            if info.rtt is None or info.rtt - best.rtt > self._threshold:
+        for (missing_rtt, rank), info in ranked:
+            if not best_missing_rtt and (
+                missing_rtt
+                or info.country != best.country
+                or rank - best_rank > self._threshold
+            ):
                 continue
             selected[info.ip] = info
             if len(selected) >= self._num:

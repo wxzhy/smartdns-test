@@ -14,6 +14,8 @@ from dns.rrset import RRset
 from smartdns.models.context import Response
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from smartdns.models.geodata import IPInfo
 
 
@@ -63,10 +65,10 @@ def replace_answer_rrset(
 
 def replace_response_ip(
     response: Response,
-    ips: set[IPv4Address] | set[IPv6Address],
+    ips: Collection[IPv4Address | IPv6Address],
     ttl: int | None = None,
 ) -> Response:
-    """用静态 IP 集合返回新的响应；空集合时保留原响应。
+    """按传入 IP 的迭代顺序返回新的响应；空集合时保留原响应。
 
     NODATA 空应答（无 rrset）也允许替换：以 CNAME 链的最终规范名称和
     请求 rdtype 新建 RRset，供 fallback 之类的静态回退产出有记录的应答。
@@ -149,7 +151,7 @@ def replace_response_ipinfo(
     if answer is None:
         return response
     if answer.rdtype == RdataType.A:
-        selected = {ip for ip in ips if isinstance(ip, IPv4Address)}
+        selected = [ip for ip in ips if isinstance(ip, IPv4Address)]
     else:
-        selected = {ip for ip in ips if isinstance(ip, IPv6Address)}
+        selected = [ip for ip in ips if isinstance(ip, IPv6Address)]
     return replace_response_ip(response, selected)
