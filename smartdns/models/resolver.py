@@ -51,6 +51,11 @@ class AioDNSResolverConfig(BaseResolverConfig):
     edns: bool = Field(default=True, description="是否启用EDNS")
     tcp: bool = Field(default=False, description="是否启用TCP")
     tries: int = Field(default=5, ge=1, description="请求尝试次数")
+    max_queries: int = Field(
+        default=16,
+        ge=1,
+        description="每个 Worker 中此解析器的最大原生并发查询/通道数，按需创建并复用",
+    )
     nodata_ttl: int = Field(
         default=300,
         ge=0,

@@ -7,10 +7,13 @@
 阶段完成 match_ip 判定与统一重写。
 """
 
-from time import time
+from time import monotonic, time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 import dns.message
+import pytest
+from anyio import sleep
 from dns.name import from_text, root
 from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
@@ -19,6 +22,7 @@ from dns.rdtypes.svcbbase import ParamKey
 from dns.resolver import Answer
 
 from smartdns.actions.https import HTTPSAction
+from smartdns.core.master import Master
 from smartdns.models.action import HTTPSActionConfig
 from smartdns.models.context import Context, Request, Response
 from smartdns.models.rule import RequestMatcher, ResponseIPMatcher, Rule
@@ -29,6 +33,7 @@ if TYPE_CHECKING:
     from dns.rrset import RRset
 
     from smartdns.actions.manager import ActionManager
+    from smartdns.models.config import Config
     from smartdns.nameservers.client import HTTPClient
     from smartdns.resolvers.manager import ResolverManager
 
@@ -149,6 +154,72 @@ class _Lookup:
         if name == self._resolver.name:
             return self._resolver
         return self._actions.get(name)
+
+
+@pytest.mark.parametrize("waiting", ["ech", "subquery_ech", "subquery"])
+async def test_timeout_caches_cleaned_https_answer(waiting: str) -> None:
+    class SlowClient(_FakeClient):
+        async def get_ech_key(self, domain: str) -> str | None:
+            self.calls += 1
+            await sleep(10)
+            return self._ech
+
+    class Resolver(_TypedResolver):
+        async def query(
+            self, request: Request, context: Context | None = None
+        ) -> Response:
+            if waiting == "subquery" and request.rdtype == RdataType.A:
+                await sleep(10)
+            return await super().query(request, context)
+
+    client = SlowClient()
+    hint = " ipv4hint=192.0.2.1" if waiting == "ech" else ""
+    response = _https_response(f"1 . alpn=h2,h3{hint}")
+    action = _action(
+        enable_subquery=waiting != "ech",
+        client=cast("HTTPClient", client),
+        match_ip=ResponseIPMatcher()
+        if waiting == "ech"
+        else ResponseIPMatcher(ip_include={"allowed"}),
+    )
+    resolver = Resolver(
+        "up",
+        {
+            RdataType.HTTPS: response,
+            RdataType.A: _with_tags(_a_response("192.0.2.1"), {"allowed"}),
+        },
+    )
+    lookup = _Lookup(resolver, [action])
+    router = Router(
+        Rule(name="test", resolver="up", after=["h"]),
+        cast("ResolverManager", lookup),
+        cast("ActionManager", lookup),
+    )
+
+    class RoutedMaster(Master):
+        async def _query_worker(self, request: Request) -> Response:
+            context = Context(worker_id=0, request=request)
+            await router.query(context)
+            assert context.response is not None
+            return context.response
+
+    master = RoutedMaster(
+        cast("Config", SimpleNamespace(worker_count=1, cache_size=10))
+    )
+    first = _https_request()
+    first.deadline = monotonic() + 0.2
+    first_reply = await master.dispatch(first)
+    second_reply = await master.dispatch(_https_request())
+    for reply in (first_reply, second_reply):
+        assert reply is not None
+        rr = next(iter(reply.answer[0]))
+        assert ParamKey.IPV4HINT not in rr.params
+        assert rr.params[ParamKey.ALPN].ids == (b"h2",)
+        assert ParamKey.ECH not in rr.params
+    assert client.calls == (0 if waiting == "subquery" else 1)
+    assert len(resolver.contexts) == (2 if waiting == "subquery_ech" else 1)
+    assert master._cache is not None
+    assert len(master._cache) == 1
 
 
 async def test_all_https_records_processed() -> None:

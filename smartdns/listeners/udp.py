@@ -8,7 +8,7 @@ from socket import (
     socket,
 )
 from sys import platform
-from time import time
+from time import monotonic, time
 from typing import TYPE_CHECKING
 
 from anyio import ClosedResourceError, Semaphore, create_task_group, fail_after, sleep
@@ -98,16 +98,19 @@ class UDPListener(BaseListener):
             anyio_socket = AnyioDatagramSocket(self._listener)
             limiter = Semaphore(256)
 
-            async def process(msg, client) -> None:
+            async def process(msg, client, deadline: float) -> None:
                 try:
                     if not msg.question:
                         logger.debug("UDP监听器 {} 丢弃无 question 报文", self.name)
                         return
-                    with fail_after(self.timeout):
+                    if deadline <= monotonic():
+                        return
+                    with fail_after(max(0.0, deadline - monotonic())):
                         request = Request.from_message(
                             msg=msg,
                             listener=self.name,
                             remote_address=client[0],
+                            deadline=deadline,
                         )
                         response = await handler(request)
                         if response is not None:
@@ -116,7 +119,7 @@ class UDPListener(BaseListener):
                                 anyio_socket,
                                 wire,
                                 client,
-                                expiration=time() + self.timeout,
+                                expiration=time() + max(0.0, deadline - monotonic()),
                             )
                 except TimeoutError:
                     logger.warning("UDP监听器 {} 请求处理超时", self.name)
@@ -157,9 +160,15 @@ class UDPListener(BaseListener):
                         )
                         await sleep(_RECEIVE_ERROR_BACKOFF)
                         continue
-                    await limiter.acquire()
+                    deadline = monotonic() + self.timeout
                     try:
-                        tg.start_soon(process, msg, client)
+                        with fail_after(max(0.0, deadline - monotonic())):
+                            await limiter.acquire()
+                    except TimeoutError:
+                        logger.warning("UDP监听器 {} 请求排队超时", self.name)
+                        continue
+                    try:
+                        tg.start_soon(process, msg, client, deadline)
                     except BaseException:
                         limiter.release()
                         raise

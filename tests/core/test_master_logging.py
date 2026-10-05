@@ -1,7 +1,8 @@
 """Master 错误应答日志级别回归测试。"""
 
+from concurrent.futures import Future
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import dns.message
 from dns.rcode import Rcode
@@ -11,23 +12,25 @@ from smartdns.core.master import Master
 from smartdns.models.context import Request, Response
 
 if TYPE_CHECKING:
-    from anyio.from_thread import BlockingPortal
+    from collections.abc import Coroutine
+    from typing import Any
 
     from smartdns.core.worker import Worker
     from smartdns.models.config import Config
 
 
-class _Portal:
+class _Worker:
     def __init__(self, response: Response) -> None:
         self.response = response
 
-    def start_task_soon(self, *args: object) -> Response:
-        return self.response
+    def submit(self, coroutine: Coroutine[Any, Any, Response]) -> Future[Response]:
+        coroutine.close()
+        future: Future[Response] = Future()
+        future.set_result(self.response)
+        return future
 
-
-class _Worker:
     async def handle(self, request: Request) -> Response:
-        raise AssertionError("portal stub should provide the response")
+        raise AssertionError("submission stub should provide the response")
 
 
 class _LogCapture:
@@ -54,14 +57,7 @@ async def _query_with_response(monkeypatch, response: Response, capture: _LogCap
     config = SimpleNamespace(worker_count=1, cache_size=0)
     master = Master(cast("Config", config))
     master.worker_count = 1
-    master.workers = [cast("Worker", _Worker())]
-    master.portals = [cast("BlockingPortal", _Portal(response))]
-
-    async def fake_wrap_future(value: Any) -> Response:
-        assert isinstance(value, Response)
-        return value
-
-    monkeypatch.setattr(master_module, "wrap_future", fake_wrap_future)
+    master.workers = [cast("Worker", _Worker(response))]
     monkeypatch.setattr(master_module, "logger", capture)
     # `_query_worker` invokes the module logger; retain the capture object for
     # assertions while avoiding any dependency on Loguru's sink internals.

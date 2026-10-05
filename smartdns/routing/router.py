@@ -5,6 +5,7 @@ from loguru import logger
 
 from smartdns.models.context import Context, Response
 from smartdns.routing.matcher import match_request
+from smartdns.utils.deadline import response_scope
 
 if TYPE_CHECKING:
     from smartdns.actions.manager import ActionManager
@@ -72,15 +73,17 @@ class Router:
         if context.response.rcode != Rcode.NOERROR:
             # 权威否定/失败应答（NXDOMAIN 等）作为最终结果，跳过 after 动作。
             return True
-        for action in self.after:
-            await action.on_response(context)
-            if context.stop:
-                return True
-        if context.subquery is not None:
-            if self.resolver is None:
-                logger.debug("路由 {} 无上游解析器，忽略子查询", self.config.name)
-            else:
-                await self._run_subquery(context, context.subquery, self.resolver)
+        # 后处理/子查询到期时保留最后一个完整应答，给 Master 和监听器留出回包时间。
+        with response_scope(request, response_ready=True):
+            for action in self.after:
+                await action.on_response(context)
+                if context.stop:
+                    return True
+            if context.subquery is not None:
+                if self.resolver is None:
+                    logger.debug("路由 {} 无上游解析器，忽略子查询", self.config.name)
+                else:
+                    await self._run_subquery(context, context.subquery, self.resolver)
         return True
 
     async def _run_subquery(

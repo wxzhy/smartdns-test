@@ -1,6 +1,7 @@
 from socket import SOCK_DGRAM, SOCK_STREAM
+from time import monotonic
 
-from anyio import EndOfStream, Lock, fail_after
+from anyio import CancelScope, EndOfStream, Lock, current_time, fail_after
 from anyio.abc import SocketAttribute
 from dns._asyncbackend import DatagramSocket, StreamSocket
 from dns.exception import Timeout
@@ -53,9 +54,17 @@ class AnyioStreamSocket(StreamSocket):
 
     def __init__(self, stream):
         self._stream = stream
+        self.request_started: float | None = None
+        self._receive_scope: CancelScope | None = None
+        self._receive_timeout = 0.0
         super().__init__(
             family=stream.extra(SocketAttribute.family, None), type=SOCK_STREAM
         )
+
+    def begin_request(self, scope: CancelScope, timeout: float) -> None:
+        self.request_started = None
+        self._receive_scope = scope
+        self._receive_timeout = timeout
 
     async def sendall(self, what, timeout):
         try:
@@ -67,7 +76,15 @@ class AnyioStreamSocket(StreamSocket):
     async def recv(self, size, timeout):
         try:
             with fail_after(timeout):
-                return await self._stream.receive(size)
+                data = await self._stream.receive(size)
+                if data and self.request_started is None:
+                    self.request_started = monotonic()
+                    if self._receive_scope is not None:
+                        # 空闲连接等待与单条帧的接收预算分别计时。
+                        self._receive_scope.deadline = (
+                            current_time() + self._receive_timeout
+                        )
+                return data
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err
         except EndOfStream:

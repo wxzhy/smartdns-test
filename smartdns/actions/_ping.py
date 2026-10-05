@@ -13,6 +13,7 @@ from anyio import (
 from icmplib import async_ping
 
 from smartdns.utils.cache_async import cached
+from smartdns.utils.concurrency import GlobalCapacityLimiter
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, MutableMapping
@@ -28,6 +29,7 @@ class _CacheHolder:
 
 
 _cache_lock = Lock()
+_MEASURE_LIMIT = GlobalCapacityLimiter(128)
 
 
 def set_cache(cache: MutableMapping[SpeedtestKey, float] | None) -> None:
@@ -116,4 +118,6 @@ async def _measure(ip: str, config: PingConfig) -> float:
 @cached(_get_cache, key=_speedtest_key, lock=_cache_lock)
 async def speedtest(ip: str | IPv4Address | IPv6Address, config: PingConfig) -> float:
     """测速指定 IP；结果缓存和同键调用合并由 decorator 统一处理。"""
-    return await _measure(str(ip), config)
+    # 缓存命中和同键等待者不占测速名额，只有实际执行探测时才限流。
+    async with _MEASURE_LIMIT:
+        return await _measure(str(ip), config)

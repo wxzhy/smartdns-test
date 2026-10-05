@@ -4,7 +4,6 @@ import dns.asyncbackend
 import dns.asyncquery
 import dns.message
 from anyio import connect_tcp, fail_after
-from generic_connection_pool.asyncio import ConnectionPool
 from loguru import logger
 
 from smartdns.nameservers._pool import (
@@ -12,6 +11,7 @@ from smartdns.nameservers._pool import (
     TcpEndpoint,
     TrackedStream,
 )
+from smartdns.nameservers._pool_compat import CancellationSafeConnectionPool
 from smartdns.nameservers._socket import AnyioStreamSocket
 from smartdns.nameservers.base import (
     BaseAddressNameserver,
@@ -21,6 +21,7 @@ from smartdns.nameservers.base import (
 
 if TYPE_CHECKING:
     from anyio.abc import SocketStream
+    from generic_connection_pool.asyncio import ConnectionPool
 
     from smartdns.models.nameserver import TCPNameserverConfig
 
@@ -42,7 +43,7 @@ class TCPNameserver(BaseAddressNameserver):
     async def start(self):
         """启动 TCP 上游；pool_size>0 时创建连接池以复用连接。"""
         if self._pool_size:
-            self._pool = ConnectionPool(
+            self._pool = CancellationSafeConnectionPool(
                 HealthCheckedTCPConnectionManager(connect_timeout=self.timeout),
                 min_idle=1,
                 max_size=self._pool_size,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from asyncio import current_task, gather, get_running_loop, run_coroutine_threadsafe
 from typing import TYPE_CHECKING
 
 from aiofastnet import patch_loop
@@ -15,6 +16,11 @@ from smartdns.resolvers.manager import ResolverManager
 from smartdns.routing.router import Router
 
 if TYPE_CHECKING:
+    from asyncio import AbstractEventLoop, Task
+    from collections.abc import Coroutine
+    from concurrent.futures import Future
+    from typing import Any
+
     from smartdns.models.config import Config
     from smartdns.models.context import Request
 
@@ -33,10 +39,27 @@ class Worker:
         self._actions: ActionManager | None = None
         self._rules: list[Router] = []
         self._client: HTTPClient | None = None
+        self._loop: AbstractEventLoop | None = None
+        self._tasks: set[Task[Any]] = set()
+        self._stopping = False
+
+    def submit[T](self, coroutine: Coroutine[Any, Any, T]) -> Future[T]:
+        """从 Master 非阻塞地提交任务；Future 取消会传递给 Worker 任务。"""
+        loop = self._loop
+        if loop is None or self._stopping:
+            coroutine.close()
+            raise RuntimeError(f"Worker {self.worker_id} 未运行或正在停止")
+        try:
+            return run_coroutine_threadsafe(coroutine, loop)
+        except BaseException:
+            coroutine.close()
+            raise
 
     async def start(self) -> None:
         """启动 Worker 服务"""
         patch_loop()
+        self._loop = get_running_loop()
+        self._stopping = False
         logger.info("Worker {} 启动", self.worker_id)
         try:
             self._client = HTTPClient(config=self.config.client)
@@ -65,6 +88,16 @@ class Worker:
     async def stop(self) -> None:
         """停止 Worker：按依赖逆序停止各管理器并释放 HTTP 客户端。"""
         logger.info("Worker {} 停止", self.worker_id)
+        self._stopping = True
+        # submit() 不再把请求挂在 BlockingPortal 的任务组上，停机时须先等
+        # 在途请求完成取消清理，再关闭它们使用的解析器、连接池与 HTTP 会话。
+        tasks = list(getattr(self, "_tasks", ()))
+        for task in tasks:
+            if not task.cancelling():
+                task.cancel()
+        if tasks:
+            with CancelScope(shield=True):
+                await gather(*tasks, return_exceptions=True)
         components = (
             ("Resolver", self._resolvers, "stop_all"),
             ("Action", self._actions, "stop_all"),
@@ -85,15 +118,24 @@ class Worker:
         self._nameservers = None
         self._actions = None
         self._client = None
+        self._loop = None
 
     async def handle(self, request: Request) -> Response:
         """处理请求"""
-        ctx = Context(worker_id=self.worker_id, request=request)
-        await self.process(ctx)
-        if ctx.response is not None:
-            return ctx.response
-        logger.debug("Worker {} 无法处理请求: {}", self.worker_id, request.qname)
-        return _servfail()
+        if self._stopping:
+            return _servfail()
+        task = current_task()
+        assert task is not None
+        self._tasks.add(task)
+        try:
+            ctx = Context(worker_id=self.worker_id, request=request)
+            await self.process(ctx)
+            if ctx.response is not None:
+                return ctx.response
+            logger.debug("Worker {} 无法处理请求: {}", self.worker_id, request.qname)
+            return _servfail()
+        finally:
+            self._tasks.discard(task)
 
     async def process(self, context: Context) -> None:
         """按路由表依次处理请求上下文"""

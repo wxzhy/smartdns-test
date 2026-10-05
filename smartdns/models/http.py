@@ -11,7 +11,9 @@ class HTTPClientConfig(StrictModel):
     resolver: AioDNSResolverConfig | None = Field(
         default=None, description="HTTP客户端使用的上游DNS解析器配置"
     )
-    max_clients: int = Field(default=65536, ge=1, description="HTTP客户端的最大连接数")
+    max_clients: int = Field(
+        default=256, ge=1, description="每个 Worker 中每个 DoH 会话的最大并发请求数"
+    )
     hosts: dict[str, set[IPvAnyAddress]] | None = Field(
         default=None, description="自定义hosts映射列表"
     )

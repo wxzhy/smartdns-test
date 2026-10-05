@@ -1,8 +1,8 @@
 from math import isfinite
-from threading import BoundedSemaphore
 from typing import TYPE_CHECKING
 
-from anyio import create_task_group, sleep
+from anyio import create_task_group
+from dns.rcode import Rcode
 from dns.rdatatype import RdataType
 from loguru import logger
 
@@ -15,38 +15,6 @@ if TYPE_CHECKING:
     from smartdns.models.action import SpeedcheckActionConfig
     from smartdns.models.context import Context, Response
     from smartdns.models.geodata import IPInfo
-
-# 槽位占满时的等待间隔（秒）：线程信号量无跨线程通知，轮询之间让出事件循环，
-# 避免纯 checkpoint 自旋空转 CPU。
-_SLOT_POLL_INTERVAL = 0.05
-
-
-class _GlobalMeasureLimit:
-    """在多个 Worker 事件循环之间共享的可取消并发限制。"""
-
-    def __init__(self, value: int) -> None:
-        self._semaphore = BoundedSemaphore(value)
-
-    async def acquire(self) -> None:
-        # 跨线程 BoundedSemaphore 无事件循环级通知可用，轮询等待是刻意设计；
-        # sleep 间隔让出事件循环，避免纯 checkpoint 自旋空转 CPU。
-        while not self._semaphore.acquire(  # noqa: ASYNC110
-            blocking=False
-        ):
-            await sleep(_SLOT_POLL_INTERVAL)
-
-    def release(self) -> None:
-        self._semaphore.release()
-
-    async def __aenter__(self) -> _GlobalMeasureLimit:
-        await self.acquire()
-        return self
-
-    async def __aexit__(self, *exc_info: object) -> None:
-        self.release()
-
-
-_MEASURE_LIMIT = _GlobalMeasureLimit(128)
 
 
 class SpeedcheckAction(BaseAction):
@@ -89,42 +57,61 @@ class SpeedcheckAction(BaseAction):
             or not match_response(self._matcher, response)
         ):
             return
-        if context.ip_infos is None:
-            context.ip_infos = {}
-        pending = []
-        for info in response.ip_infos:
-            if info.ip not in context.ip_infos:
-                context.ip_infos[info.ip] = info
-                pending.append(info)
-
-        if not self._measure_enabled:
-            return
 
         async def measure(info) -> None:
             try:
-                # Worker 运行在多个独立事件循环/线程；使用线程级信号量而非
-                # event-loop 绑定的 AnyIO Semaphore，才能提供进程级上限。
-                async with _MEASURE_LIMIT:
-                    info.rtt = await speedtest(info.ip, self._speedtest)
+                # 相同 IP 的候选各自取得完整 RTT；speedtest 合并实际探测，
+                # 候选不能因另一个上游尚在测速而跳过等待。
+                info.rtt = await speedtest(info.ip, self._speedtest)
             except Exception:
                 info.rtt = float("inf")
 
-        async with create_task_group() as tg:
-            for info in pending:
-                tg.start_soon(measure, info)
+        if self._measure_enabled:
+            async with create_task_group() as tg:
+                for info in response.ip_infos:
+                    tg.start_soon(measure, info)
+        # 整个候选完成测速后再发布，取消的候选不会留下半完成的 IP 信息。
+        if context.ip_infos is None:
+            context.ip_infos = {}
+        for info in response.ip_infos:
+            context.ip_infos[info.ip] = info
 
     async def on_response(self, context: Context) -> None:
         if not context.candidates or not context.ip_infos:
             return
+        candidates = {
+            name: candidate
+            for name, candidate in context.candidates.items()
+            if not candidate.invalid
+            and candidate.rcode == Rcode.NOERROR
+            and candidate.ans is not None
+        }
+        valid_ips = {
+            (name, info.ip)
+            for name, candidate in candidates.items()
+            for info in candidate.ip_infos or ()
+        }
+        available = {
+            ip: info
+            for ip, info in context.ip_infos.items()
+            if (info.resolver, ip) in valid_ips
+        }
+        # 同 IP 的后到候选可能在发布应答前被取消；保留已完成候选自己的信息。
+        for candidate in candidates.values():
+            for info in candidate.ip_infos or ():
+                if info.ip in context.ip_infos:
+                    available.setdefault(info.ip, info)
+        if not available:
+            return
         ranked = sorted(
-            ((self._rank(info), info) for info in context.ip_infos.values()),
+            ((self._rank(info), info) for info in available.values()),
             key=lambda item: item[0],
         )
         logger.debug("Speedcheck Action {} 排序结果：{}", self.name, ranked)
         (best_missing_rtt, best_rank), best = ranked[0]
         if best.resolver is None:
             return
-        candidate = context.candidates.get(best.resolver)
+        candidate = candidates.get(best.resolver)
         if candidate is None:
             return
         selected = {}

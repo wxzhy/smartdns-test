@@ -3,8 +3,9 @@
 from socket import AF_INET
 
 import dns.exception
+import dns.message
 import pytest
-from anyio import ClosedResourceError
+from anyio import ClosedResourceError, Semaphore, sleep
 from anyio.abc import SocketAttribute
 
 from smartdns.listeners.udp import UDPListener
@@ -111,3 +112,63 @@ async def test_receive_error_backoff_policy(
 
     assert calls == 2
     assert sleeps == expected_sleeps
+
+
+async def test_udp_queue_and_processing_share_one_deadline(monkeypatch) -> None:
+    listener = _listener()
+    listener.timeout = 0.18
+    raw = _RawSocket()
+    monkeypatch.setattr(listener, "_create_socket", lambda: raw)
+    monkeypatch.setattr(
+        "smartdns.listeners.udp.Semaphore", lambda capacity: Semaphore(1)
+    )
+
+    class Datagram:
+        def extra(self, attribute, default=None):
+            return AF_INET if attribute is SocketAttribute.family else default
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return None
+
+        async def aclose(self):
+            return None
+
+    datagram = Datagram()
+
+    class Factory:
+        @classmethod
+        async def from_socket(cls, sock):
+            return datagram
+
+    first, second = (
+        dns.message.make_query(name, "A")
+        for name in ("first.example.com.", "second.example.com.")
+    )
+    first.id, second.id = 1, 2
+    queries = iter([first, second])
+    sent: list[int] = []
+
+    async def receive(*args, **kwargs):
+        message = next(queries, None)
+        if message is None:
+            raise ClosedResourceError
+        return message, 0, ("127.0.0.1", 12345)
+
+    async def send(sock, wire, client, **kwargs):
+        sent.append(dns.message.from_wire(wire).id)
+
+    async def handler(request):
+        await sleep(0.11 if request.id == first.id else 0.10)
+        return dns.message.make_response(request.msg)
+
+    monkeypatch.setattr("smartdns.listeners.udp.UDPSocket", Factory)
+    monkeypatch.setattr("smartdns.listeners.udp.receive_udp", receive)
+    monkeypatch.setattr("smartdns.listeners.udp.send_udp", send)
+    try:
+        await listener.start(handler)
+        assert sent == [first.id]
+    finally:
+        await listener.stop()

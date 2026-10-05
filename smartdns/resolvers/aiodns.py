@@ -55,6 +55,7 @@ from pycares import (
 
 from smartdns.actions._helper import clone_answer
 from smartdns.models.context import Request, Response
+from smartdns.resolvers._aiodns_pool import AioDNSPool
 from smartdns.resolvers.base import BaseResolver
 from smartdns.utils.cache_async import AnswerCache
 
@@ -80,9 +81,10 @@ class AioDNSResolver(BaseResolver):
         self.tcp = config.tcp
         self.rotate = config.rotate
         self.tries = config.tries
+        self.max_queries = config.max_queries
         self.nodata_ttl = config.nodata_ttl
         self.nameservers = [str(address) for address in config.nameservers]
-        self._resolver: DNSResolver | None = None
+        self._resolver: AioDNSPool | None = None
         # 应答缓存（AnswerCache）：相同完整配置跨 Worker 线程共享；同名但配置
         # 不同的解析器彼此隔离。cache_size=0 关闭。挂在 resolve() 边界，
         # query() 与 HTTPClient 的 ECH 引导查询共用同一缓存。
@@ -100,14 +102,17 @@ class AioDNSResolver(BaseResolver):
             flags |= ARES_FLAG_EDNS
         if self.tcp:
             flags |= ARES_FLAG_USEVC
-        self._resolver = DNSResolver(
-            nameservers=self.nameservers,
-            timeout=self.timeout,
-            flags=flags,
-            tries=self.tries,
-            rotate=self.rotate,
-            tcp_port=self.port,
-            udp_port=self.port,
+        self._resolver = AioDNSPool(
+            lambda: DNSResolver(
+                nameservers=self.nameservers,
+                timeout=self.timeout,
+                flags=flags,
+                tries=self.tries,
+                rotate=self.rotate,
+                tcp_port=self.port,
+                udp_port=self.port,
+            ),
+            self.max_queries,
         )
 
     async def stop(self):

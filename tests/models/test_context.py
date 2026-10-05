@@ -13,6 +13,7 @@ from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
 from smartdns.models.context import Context, Request, Response
+from smartdns.utils.deadline import SharedDeadline
 
 if TYPE_CHECKING:
     from dns.message import QueryMessage
@@ -71,6 +72,13 @@ def test_make_answer_keeps_noerror_regression() -> None:
     assert message.answer
 
 
+def test_response_keeps_ip_resolver_without_geo_data(monkeypatch) -> None:
+    monkeypatch.setattr("smartdns.models.geodata.get_geo_manager", lambda: None)
+    response = Response.from_answer(_noerror_answer(), upstream="leaf")
+    assert response.ip_infos is not None
+    assert [info.resolver for info in response.ip_infos] == ["leaf"]
+
+
 def test_from_message_rejects_empty_question() -> None:
     msg = dns.message.make_query("example.com.", "A")
     msg.question = []
@@ -79,10 +87,13 @@ def test_from_message_rejects_empty_question() -> None:
 
 
 def test_for_subquery_derives_request_from_context() -> None:
+    shared_deadline = SharedDeadline()
     request = Request.from_message(
         dns.message.make_query("example.com.", "A"),
         "test",
         IPv4Address("192.0.2.7"),
+        deadline=123.5,
+        shared_deadline=shared_deadline,
     )
     context = Context(worker_id=3, request=request)
     sub = Context.for_subquery(context)
@@ -95,6 +106,8 @@ def test_for_subquery_derives_request_from_context() -> None:
     assert sub.request.rdclass == RdataClass.IN
     assert sub.request.listener == "test"
     assert sub.request.remote_address == IPv4Address("192.0.2.7")
+    assert sub.request.deadline == request.deadline
+    assert sub.request.shared_deadline is shared_deadline
     assert sub.request.name_info is not None
 
 

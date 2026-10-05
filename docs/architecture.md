@@ -82,7 +82,9 @@ uv run python -m smartdns.main --config example.yaml
 
 这里的 `worker_count` 是 Worker 线程/事件循环数量，不是操作系统进程数。每个 Worker 都会单独创建上游对象、TCP 连接池和 curl 会话；增大数量会提高并行度，也会按 Worker 数复制这些资源。
 
-停机时，Master 先关闭监听器，再让各 Worker 按 Resolver、Nameserver、Action、HTTPClient 的顺序释放资源，最后退出各 BlockingPortal。
+请求经 `Worker.submit()` 使用 `asyncio.run_coroutine_threadsafe()` 排入目标循环，Master 异步等待返回的 Future；提交本身不等待 Worker 确认，因此 Worker 忙碌不会阻塞 Master 的监听和其他请求。取消 Future 会传递给 Worker 中的请求任务。
+
+停机时，Master 先拒绝新请求，取消监听器任务组并等待已有 TCP 连接、查询任务和套接字完成清理，再让各 Worker 拒绝新任务、取消并等待在途请求完成清理，然后按 Resolver、Action、Nameserver、HTTPClient 的顺序释放资源，最后退出各 BlockingPortal。多个 `stop()` 调用串行执行，都会等待资源释放完成。
 
 ## 4. DNS 请求处理流程
 
@@ -118,6 +120,7 @@ Master.dispatch()
 
 - UDP Listener 逐包接收 DNS 消息，每个包独立调用处理器。
 - TCP Listener 接受长连接，并在同一连接内循环处理多个 DNS 消息。
+- UDP 完整请求接收后、TCP 帧首字节收到后开始计算单请求期限；接收剩余帧、等待并发名额、处理、等待写锁和回写共用该期限。TCP 连接空闲等待单独计时，已接受连接等待连接名额也受 `timeout` 限制。排队到期的请求直接丢弃，不进入 Worker。
 - 两者都使用 dnspython 的 `receive_*`/`send_*`，底层通过 AnyIO socket 适配器接入。
 - UDP 响应按客户端 EDNS payload 序列化；无 EDNS 时使用传统 512 字节上限。超限时返回 `TC=1` 的截断响应，由客户端改用 TCP 重试，而不是丢包超时。
 - UDP 请求处理保持并发，但共享 Listener socket 的 datagram 写入会在适配器内排队，避免 AnyIO 对并发写入抛出 `BusyResourceError`。
@@ -135,7 +138,7 @@ Master 的应答缓存经 `cached()` 装饰 `_query_answer()` 实现：持久层
 (qname, rdtype, rdclass, listener, ecs)
 ```
 
-命中时会按剩余有效期刷新 answer、authority 和 additional 中 RRset 的 TTL（复制回放，缓存内原件不外泄），然后基于原始请求构造响应。未命中时使用随机策略选择一个 Worker；dispatch 仅运行于 Master 主循环，同缓存键并发请求会合并为一次 Worker 查询，等待者再用各自的 DNS 请求 ID 构造响应。
+命中时会按剩余有效期刷新 answer、authority 和 additional 中 RRset 的 TTL，然后基于原始请求构造响应。复制回放只重建可变的 Message、section 列表和 RRset 容器，复用 dnspython 的不可变 Name/Rdata；EDNS Option 仍完整复制，带签名或解析错误的特殊报文继续使用完整复制。未命中时使用随机策略选择一个 Worker；dispatch 仅运行于 Master 主循环，同缓存键并发请求会合并为一次 Worker 查询，等待者再用各自的 DNS 请求 ID 构造响应。
 
 Worker 返回带 `Answer` 的 NOERROR 或 NXDOMAIN 时，Master 会原样透传并写缓存；NXDOMAIN 的 authority 区 SOA 与负缓存 TTL 因而得以保留。没有 `Answer` 的错误响应（含 SERVFAIL/REFUSED 等瞬态失败）经异常通道回传、只按 RCODE 构造，不进缓存。NXDOMAIN 仅记 debug，SERVFAIL/REFUSED 记 warning。
 
@@ -162,6 +165,10 @@ match(request)
 
 因此，最后通常要放一条不带 `matcher` 的兜底路由。
 
+监听器把整体请求期限存为 `Request.deadline`（`time.monotonic()`），经 Master 传给 Worker，派生子查询沿用此期限。Master 缓存未命中的同键等待者各自受请求期限约束，共享 Worker 查询通过 `Request.shared_deadline` 跟踪仍未到期的等待者：没有可用答案时按最晚期限继续查询，已有成功或 NXDOMAIN 答案后按最早期限完成收集与后处理。等待者加入或离开时，会在 Worker 所在循环更新取消范围；首个等待者超时或取消不会使其他等待者提前失败，后到请求也不会延误已有答案向最早等待者回包。
+
+ConcurrentResolver 的收集范围为后续加工/回包预留剩余预算的 10%（至少 50ms），同时受解析器自身 `timeout` 和外层取消范围约束；加入新等待者不会延长解析器自身的时限。Router 在剩余预算内执行 after 动作及子查询，到期后返回最后一个完整响应。
+
 ## 5. 核心运行时对象
 
 ### Request
@@ -187,7 +194,7 @@ match(request)
 - `candidates`：ConcurrentResolver 收集的候选响应，按 upstream 名称索引。
 - `ip_infos`：跨候选聚合的测速信息。
 - `stop`：动作触发的路由短路标志。
-- `is_subquery`：内部查询标记；ConcurrentResolver 打在其嵌套解析器的子上下文上。
+- `is_subquery`：内部查询标记；ConcurrentResolver 的每个并发分支使用独立、带此标记的子上下文。
 - `subquery`：on_response 阶段由 Action 设置的子查询上下文；Router 在 after 动作之后以当前 resolver 执行它，并回调 on_subquery。
 - `ext`：扩展数据槽。
 
@@ -205,7 +212,11 @@ Nameserver 代表 dnspython 可调用的一台底层上游，只被 `plain` Reso
 
 curl 会话由各 CurlNameserver 独占，避免不同 DoH 上游共享并修改同一个 ECH 会话配置。`client.hosts` 会转换为 curl `RESOLVE`，仅为这些 HTTP 请求提供静态主机映射。
 
-TCP pool 使用非破坏性的 `MSG_PEEK` 健康检查，不会关闭被检查的底层 socket；查询失败的连接由连接池按异常路径回收。
+curl 的 HTTP 请求整体位于 DNS 剩余 lifetime 的取消范围内，会话名额排队也计入超时。每会话 `max_clients` 默认 256，可在 `client` 中调整；CLI 默认 INFO 日志并使用异步队列写入，详细上下文日志须启用 DEBUG/TRACE。
+
+TCP/TLS pool 使用非破坏性的 `MSG_PEEK` 健康检查；交换失败或取消时将连接标记为不健康，归还后在下次获取时关闭并重建。
+
+两种连接池均使用 `_pool_compat.CancellationSafeConnectionPool` 兼容层，保留 `generic-connection-pool 0.8.1` 的容量、空闲回收和寿命管理。建连取消会回滚全局容量与端点预留；健康检查或获取回调被取消时会归还已借出的连接；AnyIO 持续取消下仍完成锁释放和连接归还。该兼容层使用依赖内部接口，升级依赖时须运行 `tests/nameservers/test_pool_cancellation.py`。
 
 TLS 上游的握手与加密流由 `smartdns.nameservers._tls` 自行驱动：anyio 的 `TLSStream` 会把 hostname 经 IDNA 编码成 bytes 传给 `wrap_bio`，而 utls 只接受 `str`，因此不能用 `TLSStream` 直接包装。`server_name` 是 SNI 与证书验证锚点——域名地址默认取地址本身，IP 地址不发送 SNI（RFC 6066）；`verify: true` 且无法确定锚点时启动报错。`fingerprint` 接受 utls 预设名（如 `chrome:stable`）伪装 ClientHello。池内连接 `aclose` 不做 close_notify，省一次关闭往返。
 
@@ -216,6 +227,8 @@ TLS 上游的握手与加密流由 `smartdns.nameservers._tls` 自行驱动：an
 ### 7.1 AioDNSResolver
 
 `type: aiodns` 直接把 `nameservers` 中的 IP 地址交给 pycares，不经过 `nameservers` 管理器。它支持 EDNS、轮询、TCP、端口和重试次数，并把 pycares 结果转换为 dnspython Answer。
+
+原生查询使用 `AioDNSPool`：每个 Worker/解析器按需创建并复用最多 `max_queries` 个通道（默认 16），每次租用只运行一个查询。取消调用会同步取消该通道的原生查询，防止 Python Future 取消后 c-ares 继续重试；其他通道保持运行。停止解析器时关闭所有通道。[pycares 通道 API](https://pycares.readthedocs.io/latest/channel.html) 的 `cancel()` 作用于整个通道，因此此处使用独占租用。
 
 已转换的记录类型包括 A、AAAA、CAA、CNAME、HTTPS、MX、NAPTR、NS、PTR、SOA、SRV、TLSA、TXT 和 URI。pycares 会丢失 TXT 的原始 character-string 分段边界，因此长 TXT 会按每段最多 255 字节重新分段后编码。ARES_ENODATA 映射为空 NOERROR，ARES_ENOTFOUND 映射为 NXDOMAIN，其他异常映射为 SERVFAIL。
 
@@ -238,7 +251,9 @@ TLS 上游的握手与加密流由 `smartdns.nameservers._tls` 自行驱动：an
 - `wait_all: false`：首个带 Answer 的 NOERROR 结果后取消剩余任务。
 - `wait_all: true`：收齐所有候选，以便 Speedcheck 等 Action 二次选择。
 
-结果通过 AnyIO memory object stream 按完成顺序消费。`wait_all: false` 在首个带 Answer 的 NOERROR 响应后取消剩余任务；`wait_all: true` 在整体 `timeout` 内收集候选。无论哪种模式，超时前已经完成的结果都会保留；没有成功响应时优先返回 NXDOMAIN，再回退其他否定响应。嵌套 ConcurrentResolver 使用独立 Context，只把本层直接上游写入候选集。
+结果通过 AnyIO memory object stream 按完成顺序消费。`wait_all: false` 在首个带 Answer 的 NOERROR 响应完成本层动作后取消剩余任务；`wait_all: true` 在整体 `timeout` 内收集候选。无论哪种模式，超时前已经完成的结果都会保留；没有成功响应时优先返回 NXDOMAIN，再回退其他否定响应。
+
+每个分支先在独立 Context 中完成解析及本层 `on_resolver` 动作，动作也检查嵌套解析器收集的候选，同一 Response 对象只处理一次。先检查胜者，再在剩余软预算内检查其他候选；其他候选后处理到期时保留已通过检查的胜者，丢弃未完成检查的候选。父级消费完整分支结果后才合并通过检查的候选及其当前 IP 的测速信息；被外层取消或抛错的分支不发布任何数据，嵌套胜者被标记无效时整个分支丢弃。替换前的 IP 信息不会重新进入最终排序，同 IP 的未发布候选也不会覆盖已通过检查候选的测速信息。
 
 ## 8. Routing 与标签匹配
 
@@ -275,9 +290,9 @@ Action 基类有三个 hook：
 | Hook | 调用位置 | 当前内置实现 |
 |---|---|---|
 | `on_request` | Router 的 `before` | `static`、`log` |
-| `on_resolver` | ConcurrentResolver 每个直接子响应完成后 | `replace`、`speedcheck`、`filter` |
+| `on_resolver` | ConcurrentResolver 分支查询完成后，覆盖该分支嵌套候选 | `replace`、`speedcheck`、`filter` |
 | `on_response` | Router 的 `after` | `speedcheck`、`https`、`fallback` |
-| `on_subquery` | Router 的 after 动作之后、子查询完成时 | 无 |
+| `on_subquery` | Router 的 after 动作之后、子查询完成时 | `https` |
 
 Action 放在没有实现的阶段时是 no-op，不会报错。
 
@@ -303,11 +318,15 @@ Action 放在没有实现的阶段时是 no-op，不会报错。
 
 ICMP 与 TCP 测速均返回毫秒。`ping_config.privileged` 控制 icmplib 使用非特权模式还是原始 ICMP socket。任一探测成功后取消其余探测；结果缓存 1800 秒，键包含 IP、是否 ICMP、ICMP 特权模式、TCP 端口集合和超时配置。同一事件循环内的同键请求还会复用正在进行的测速任务。
 
+全进程最多同时执行 128 个实际测速任务，缓存命中和同键等待者不占名额。限流通过 Future 和跨线程事件循环通知唤醒等待者，取消会移除等待或归还已授予的名额，不再每 50ms 轮询。每个候选等待自己的 IP 测速完整结束后才发布 `context.ip_infos`；最终排序只使用已完成、未标记无效且带 Answer 的 NOERROR 候选，并校验 IP 所属候选及该候选当前地址。同 IP 的后到候选被取消时可回到已完成候选的信息，无 Geo 数据时也保留解析器归属。
+
 ### https
 
 仅处理 HTTPS RR。它按配置移除 ipv4hint/ipv6hint，并从 ALPN 中只移除 `h3`（保留其他协议，若只剩 h3 则删除整个 ALPN 参数）；之后根据域名和响应 IP 标签决定是否查询 `ech_domain` 并注入 ECH。
 
-`match_ip` 的判定依赖 hint 派生的 IP 标签。当 `match_ip` 配置了判定条件、`match_name` 命中且记录不带任何 hint（响应无 IP 标签）时，Action 改为在 on_response 阶段设置 A 记录子查询（请求 qname，当前路由 resolver 执行，不占用即得），在 on_subquery 阶段用 A 应答自带的 IP 标签完成 match_ip 判定，再统一执行清理与 ECH 注入。A 应答无 IP（否定应答）时按 include 不匹配处理——不注入 ECH，清理照常；子查询槽位被其他动作占用时退回 on_response 内联处理（空标签判定）。副作用：无 hint 域名的清理延迟到子查询阶段，其后的 after 动作在 on_response 看到未清理响应；after 链中后续动作设置 `stop` 会跳过子查询，延迟重写不执行。
+`match_ip` 的判定依赖清理前 hint 派生的 IP 标签。当 `match_ip` 配置了判定条件、`match_name` 命中且记录不带任何 hint（响应无 IP 标签）时，Action 在 on_response 阶段设置 A 记录子查询（请求 qname，当前路由 resolver 执行，槽位未被占用时设置），在 on_subquery 阶段用 A 应答自带的 IP 标签完成 match_ip 判定与 ECH 注入。A 应答无 IP（否定应答）时按 include 不匹配处理，不注入 ECH；子查询槽位被其他动作占用时退回 on_response 内联处理（空标签判定）。
+
+hint/ALPN 清理在 on_response 中同步完成，先于任何 ECH 获取或子查询等待；后续 after 动作看到的是已清理响应。ECH 获取或 A 子查询超时、失败或因 `stop` 跳过时，仍返回并缓存清理后的主应答，只有可选的 ECH 注入可能未完成。
 
 `add_ech: false` 会跳过 ECH 查询和注入，但仍允许 hint/ALPN 清理。字段名必须写 `ech_domain`；误写为 `ech` 会在严格配置校验阶段报错。HTTPS、Replace、Speedcheck 和 Fallback 都通过重建 Answer/RRset 实现 copy-on-write，不修改共享候选或缓存对象。
 
@@ -340,9 +359,11 @@ Router 在 after 动作循环结束后检查 `context.subquery`：已设置且�
 
 `AnswerCache`（`utils/cache_async.py`）是三类 Answer 缓存的统一载体：存储层为线程锁串行化的 TLRUCache（墙钟计时、按应答自身 TTL 过期），实现 MutableMapping 协议，对外提供 `read`/`write` 异步读写与 `fetch(key, fn)`（未命中执行 fn 并写入，同键并发经 `cached()` in-flight 表合并为一次执行）。
 
-Master Answer 缓存键包含 `(qname, type, class, listener, ECS)`；客户端地址不入键，因为当前上游查询不转发客户端地址。写入与读取均复制 Answer，读取副本按剩余存活时间刷新所有 section 的 TTL。dispatch 仅运行于 Master 主循环，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中仍只保存最终 `Answer`，不会保存 Task/Future。
+Master Answer 缓存键包含 `(qname, type, class, listener, ECS)`；客户端地址不入键，因为当前上游查询不转发客户端地址。持久层保存最终 Answer，回放时复制并按剩余存活时间刷新所有 section 的 TTL。dispatch 仅运行于 Master 主循环，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中不会保存 Task/Future，请求期限也不改变缓存键。
 
 ECHConfig、测速与 AnswerCache.fetch 统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task（跨循环首次填充可能各执行一次，锁内 setdefault 保证只落一份）。ECHConfig 与测速缓存为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。
+
+单个等待者取消时保留其他等待者使用的取数任务；最后一个等待者离开时取消底层任务并等待清理完成，重复取消也不会打断这段等待。已经失去全部等待者的任务即使吞掉取消并返回，也不会写入缓存。Master 的共享期限组保留到所有等待者退出，旧取数任务结束不会删除取消清理期间新调用正在使用的期限组。
 
 ## 11. 配置与启动顺序约束
 

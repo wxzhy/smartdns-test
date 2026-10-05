@@ -1,20 +1,35 @@
 """ConcurrentResolver 的完成顺序、超时和 Context 隔离回归测试。"""
 
 from ipaddress import IPv4Address
+from time import monotonic
 from typing import TYPE_CHECKING, cast
 
 import dns.message
-from anyio import sleep
+import pytest
+from anyio import Event, sleep
 from dns.name import from_text
 from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
+from smartdns.actions.filter import FilterAction
+from smartdns.actions.replace import ReplaceAction
+from smartdns.actions.speedcheck import SpeedcheckAction
+from smartdns.models.action import (
+    FilterActionConfig,
+    FilterItem,
+    PingConfig,
+    ReplaceActionConfig,
+    ReplaceActionMap,
+    SpeedcheckActionConfig,
+)
 from smartdns.models.context import Context, Request, Response
 from smartdns.models.geodata import IPInfo
 from smartdns.models.resolver import ConcurrentResolverConfig
+from smartdns.models.rule import RequestMatcher, ResponseIPMatcher
 from smartdns.resolvers.concurrent import ConcurrentResolver
+from smartdns.utils.deadline import SharedDeadline
 
 if TYPE_CHECKING:
     from dns.message import QueryMessage
@@ -72,10 +87,10 @@ class _NestedCandidateResolver(_FakeResolver):
 
 
 class _FakeManager:
-    def __init__(self, resolvers: list[_FakeResolver]) -> None:
+    def __init__(self, resolvers: list[_FakeResolver | ConcurrentResolver]) -> None:
         self._map = {resolver.name: resolver for resolver in resolvers}
 
-    def get(self, name: str) -> _FakeResolver | None:
+    def get(self, name: str) -> _FakeResolver | ConcurrentResolver | None:
         return self._map.get(name)
 
 
@@ -332,7 +347,232 @@ async def test_none_context_skips_resolver_actions() -> None:
     result = await resolver.query(context.request, context)
     assert result.upstream == "a"
     assert len(action.on_resolver_calls) == 1
-    assert action.on_resolver_calls[0][0] is context
+    branch = action.on_resolver_calls[0][0]
+    assert branch is not context
+    assert branch.request is context.request
+    assert branch.is_subquery
     sub_result = await resolver.query(_context().request, None)
     assert sub_result.upstream == "a"
     assert len(action.on_resolver_calls) == 1
+
+
+class _BranchActions:
+    def __init__(self, **actions: object) -> None:
+        self.actions = actions
+
+    def get(self, name: str) -> object | None:
+        return self.actions.get(name)
+
+
+def _speed(name: str, timeout: float) -> SpeedcheckAction:
+    return SpeedcheckAction(
+        SpeedcheckActionConfig(
+            name=name, type="speedcheck", ping_config=PingConfig(timeout=timeout)
+        )
+    )
+
+
+def _tagged(name: str, ip: str, tag: str) -> Response:
+    result = _answer_response(name, ip)
+    assert result.ip_infos is not None
+    result.ip_infos[0].resolver = name
+    result.ip_infos[0].country = {tag}
+    return result
+
+
+async def test_cancelled_nested_branch_cannot_publish_candidates(monkeypatch) -> None:
+    inner_speed, outer_speed = _speed("inner", 0.1), _speed("outer", 0.2)
+    stalled, cancelled = Event(), Event()
+
+    async def measure(ip, config):
+        if str(ip) == "192.0.2.1" and config.timeout == 0.2:
+            stalled.set()
+            try:
+                await Event().wait()
+            finally:
+                cancelled.set()
+        return 1.0 if str(ip) == "192.0.2.1" else 50.0
+
+    monkeypatch.setattr("smartdns.actions.speedcheck.speedtest", measure)
+    bad = _FakeResolver("bad", _tagged("bad", "192.0.2.1", "blocked"))
+    good = _FakeResolver("good", _tagged("good", "192.0.2.2", "allowed"), delay=0.04)
+    inner = _make(
+        ["bad"],
+        _FakeManager([bad]),
+        action_names=["speed"],
+        actions=cast("_ActionManager", _BranchActions(speed=inner_speed)),
+    )
+    inner.name = "inner"
+    outer = _make(
+        ["inner", "good"],
+        _FakeManager([inner, good]),
+        action_names=["speed"],
+        actions=cast("_ActionManager", _BranchActions(speed=outer_speed)),
+    )
+    context = _context()
+    context.response = await outer.query(context.request, context)
+    assert stalled.is_set()
+    assert cancelled.is_set()
+    assert context.candidates is not None
+    assert set(context.candidates) == {"good"}
+    assert context.ip_infos is not None
+    assert set(context.ip_infos) == {IPv4Address("192.0.2.2")}
+    await outer_speed.on_response(context)
+    assert context.response is not None
+    assert context.response.upstream == "good"
+
+
+@pytest.mark.parametrize("blocked_wins", [False, True])
+async def test_all_nested_candidates_must_pass_outer_filter(
+    blocked_wins: bool, monkeypatch
+) -> None:
+    speed = _speed("speed", 0.1)
+    filter_action = FilterAction(
+        FilterActionConfig(
+            name="filter",
+            type="filter",
+            filters=[
+                FilterItem(
+                    match_name=RequestMatcher(),
+                    match_ip=ResponseIPMatcher(ip_exclude={"blocked"}),
+                )
+            ],
+        )
+    )
+
+    async def measure(ip, config):
+        return 1.0 if str(ip) == "192.0.2.1" else 50.0
+
+    monkeypatch.setattr("smartdns.actions.speedcheck.speedtest", measure)
+    good = _FakeResolver(
+        "good",
+        _tagged("good", "192.0.2.2", "allowed"),
+        delay=0.01 if blocked_wins else 0,
+    )
+    bad = _FakeResolver(
+        "bad", _tagged("bad", "192.0.2.1", "blocked"), delay=0 if blocked_wins else 0.01
+    )
+    fallback = _FakeResolver(
+        "fallback", _tagged("fallback", "192.0.2.3", "allowed"), delay=0.03
+    )
+    inner = _make(
+        ["good", "bad"],
+        _FakeManager([good, bad]),
+        wait_all=True,
+        action_names=["speed"],
+        actions=cast("_ActionManager", _BranchActions(speed=speed)),
+    )
+    inner.name = "inner"
+    outer = _make(
+        ["inner", "fallback"],
+        _FakeManager([inner, fallback]),
+        action_names=["filter", "speed"],
+        actions=cast(
+            "_ActionManager", _BranchActions(filter=filter_action, speed=speed)
+        ),
+    )
+    context = _context()
+    context.response = await outer.query(context.request, context)
+    assert bad._response.invalid
+    assert context.candidates is not None
+    expected = "fallback" if blocked_wins else "good"
+    assert set(context.candidates) == {expected}
+    await speed.on_response(context)
+    assert context.response is not None
+    assert context.response.upstream == expected
+
+
+async def test_outer_replace_does_not_publish_original_nested_ip(monkeypatch) -> None:
+    speed = _speed("speed", 0.1)
+    replace = ReplaceAction(
+        ReplaceActionConfig(
+            name="replace",
+            type="replace",
+            match_name=RequestMatcher(),
+            replace_map=[
+                ReplaceActionMap(
+                    match_ip=ResponseIPMatcher(ip_include={"blocked"}),
+                    ipv4={IPv4Address("192.0.2.99")},
+                    ipv4_prefixlen=32,
+                )
+            ],
+        )
+    )
+
+    async def measure(ip, config):
+        return 1.0 if str(ip) == "192.0.2.1" else 50.0
+
+    monkeypatch.setattr("smartdns.actions.speedcheck.speedtest", measure)
+    leaf = _FakeResolver("leaf", _tagged("leaf", "192.0.2.1", "blocked"))
+    inner = _make(
+        ["leaf"],
+        _FakeManager([leaf]),
+        action_names=["speed"],
+        actions=cast("_ActionManager", _BranchActions(speed=speed)),
+    )
+    inner.name = "inner"
+    outer = _make(
+        ["inner"],
+        _FakeManager([inner]),
+        action_names=["replace", "speed"],
+        actions=cast("_ActionManager", _BranchActions(replace=replace, speed=speed)),
+    )
+    context = _context()
+    context.response = await outer.query(context.request, context)
+    assert context.ip_infos is not None
+    assert set(context.ip_infos) == {IPv4Address("192.0.2.99")}
+    await speed.on_response(context)
+    assert context.response is not None
+    assert context.response.ip_list == ["192.0.2.99"]
+
+
+@pytest.mark.parametrize("shared", [False, True])
+async def test_stalled_nested_alternative_keeps_validated_winner(shared: bool) -> None:
+    started, cancelled = Event(), Event()
+
+    class SlowAlternative:
+        async def on_resolver(self, context: Context, response: Response) -> None:
+            assert response.ip_infos is not None
+            info = response.ip_infos[0]
+            info.rtt = 1.0 if response.upstream == "fast" else 50.0
+            if context.ip_infos is None:
+                context.ip_infos = {}
+            context.ip_infos[info.ip] = info
+            if response.upstream == "pending":
+                started.set()
+                try:
+                    await Event().wait()
+                finally:
+                    cancelled.set()
+
+    fast = _FakeResolver("fast", _tagged("fast", "192.0.2.1", "allowed"))
+    pending = _FakeResolver(
+        "pending", _tagged("pending", "192.0.2.1", "blocked"), delay=0.01
+    )
+    inner = _make(["fast", "pending"], _FakeManager([fast, pending]), wait_all=True)
+    inner.name = "inner"
+    other = _FakeResolver("other", _tagged("other", "192.0.2.2", "allowed"), delay=0.03)
+    outer = _make(
+        ["inner", "other"],
+        _FakeManager([inner, other]),
+        wait_all=True,
+        timeout=0.2,
+        action_names=["check"],
+        actions=cast("_ActionManager", _BranchActions(check=SlowAlternative())),
+    )
+    context = _context()
+    context.request.deadline = monotonic() + 0.5
+    if shared:
+        context.request.shared_deadline = SharedDeadline()
+        context.request.shared_deadline.add(context.request.deadline)
+    context.response = await outer.query(context.request, context)
+    assert started.is_set()
+    assert cancelled.is_set()
+    assert context.candidates is not None
+    assert set(context.candidates) == {"fast", "other"}
+    assert context.ip_infos is not None
+    assert context.ip_infos[IPv4Address("192.0.2.1")].resolver == "fast"
+    speed = _speed("speed", 0.1)
+    await speed.on_response(context)
+    assert context.response is not None
+    assert context.response.upstream == "fast"

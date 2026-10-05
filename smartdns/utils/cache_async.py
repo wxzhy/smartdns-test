@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from asyncio import Task, current_task, get_running_loop, shield
+from asyncio import CancelledError, Task, current_task, get_running_loop, shield
 from collections.abc import Iterator
 from collections.abc import MutableMapping as MutableMappingABC
 from functools import update_wrapper
@@ -9,6 +9,7 @@ from threading import Lock
 from time import time
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 
+from anyio import CancelScope
 from cachetools import TLRUCache
 from cachetools.keys import hashkey
 from loguru import logger
@@ -28,6 +29,19 @@ def _consume_task_exception(task: Task[Any]) -> None:
     """取出无人等待的任务异常，避免事件循环产生未处理异常警告。"""
     if not task.cancelled():
         task.exception()
+
+
+async def _cancel_and_wait(task: Task[Any]) -> None:
+    """等待底层清理完成；重复取消等待者也不能再次打断底层任务。"""
+    task.cancel()
+    with CancelScope(shield=True):
+        while not task.done():
+            try:
+                await shield(task)
+            except CancelledError:
+                continue
+            except Exception:
+                break
 
 
 def answer_expires(key: object, value: Any, now: float) -> float:
@@ -202,7 +216,12 @@ def cached[KT, VT](
             kwargs: dict[str, Any],
         ) -> VT:
             try:
-                return store(cache_key, await fn(*args, **kwargs))
+                value = await fn(*args, **kwargs)
+                with inflight_lock:
+                    # 最后一个等待者取消后，即便底层函数吞掉取消，也不能落库。
+                    if inflight.get(inflight_key) is current_task():
+                        return store(cache_key, value)
+                return value
             finally:
                 task = current_task()
                 with inflight_lock:
@@ -249,7 +268,7 @@ def cached[KT, VT](
                 # 共享调用仍有等待者时继续运行；最后一个等待者离开后取消底层
                 # 查询，使监听器超时和服务停机能真正释放 Worker / socket 资源。
                 if continue_cleanup and not task.done():
-                    task.cancel()
+                    await _cancel_and_wait(task)
 
         return update_wrapper(wrapper, fn)
 

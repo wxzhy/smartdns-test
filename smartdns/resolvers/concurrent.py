@@ -1,11 +1,12 @@
 from typing import TYPE_CHECKING
 
-from anyio import create_memory_object_stream, create_task_group, move_on_after
+from anyio import create_memory_object_stream, create_task_group
 from dns.rcode import Rcode
 from loguru import logger
 
 from smartdns.models.context import Context, Request, Response
 from smartdns.resolvers.base import BaseResolver
+from smartdns.utils.deadline import response_scope, response_timeout
 
 if TYPE_CHECKING:
     from smartdns.actions.manager import ActionManager
@@ -46,13 +47,21 @@ class ConcurrentResolver(BaseResolver):
             if (resolver := self._manager.get(name)) is not None
         ]
 
+    async def _run_actions(self, context: Context, candidate: Response) -> None:
+        if candidate.rcode == Rcode.NOERROR and candidate.ans is not None:
+            for action in self._actions:
+                if action is not None:
+                    await action.on_resolver(context, candidate)
+                if candidate.invalid:
+                    break
+
     async def _query_upstream(
         self,
         resolver: BaseResolver,
         request: Request,
         context: Context | None,
-    ) -> Response | None:
-        """执行单个直接上游，嵌套解析器使用独立 Context 并回传中间结果。"""
+    ) -> tuple[Response | None, Context | None]:
+        """在分支内完成查询与本层检查，返回尚未发布的完整结果。"""
         child_context = (
             Context(
                 worker_id=context.worker_id,
@@ -65,23 +74,41 @@ class ConcurrentResolver(BaseResolver):
         )
         try:
             result = await resolver.query(request, child_context)
-            if context is not None and child_context is not None:
-                self._merge_child_results(context, child_context)
-            if result.rcode == Rcode.NOERROR and result.ans is not None:
-                for action in self._actions:
-                    if action is None or context is None:
-                        continue
-                    await action.on_resolver(context, result)
-                    if result.invalid:
-                        break
-            return result
+            if child_context is not None:
+                if result.invalid:
+                    return result, None
+                await self._run_actions(child_context, result)
+                if result.invalid:
+                    # 胜者被本层拒绝时，整个嵌套分支不得向父上下文发布。
+                    return result, None
+                checked = {id(result)}
+                validated: dict[str, Response] = {}
+                if child_context.candidates:
+                    ready = result.rcode == Rcode.NXDOMAIN or (
+                        result.rcode == Rcode.NOERROR and result.ans is not None
+                    )
+                    # 已通过检查的胜者不应因其他候选的后处理超时而丢失。
+                    # 本地软范围提前结束，给父级消费结果与回包留出预算。
+                    with response_scope(
+                        request, response_timeout(request), response_ready=ready
+                    ):
+                        for name, candidate in child_context.candidates.items():
+                            if candidate.invalid:
+                                continue
+                            if id(candidate) not in checked:
+                                await self._run_actions(child_context, candidate)
+                                checked.add(id(candidate))
+                            if not candidate.invalid:
+                                validated[name] = candidate
+                child_context.candidates = validated
+            return result, child_context
         except Exception:
             logger.warning(
                 "ConcurrentResolver {} 的上游 {} 查询失败",
                 self.name,
                 resolver.name,
             )
-            return None
+            return None, None
 
     @staticmethod
     def _merge_child_results(context: Context, child: Context) -> None:
@@ -97,7 +124,24 @@ class ConcurrentResolver(BaseResolver):
         if child.ip_infos:
             if context.ip_infos is None:
                 context.ip_infos = {}
-            context.ip_infos.update(child.ip_infos)
+            valid_ips = {
+                (name, info.ip)
+                for name, candidate in (child.candidates or {}).items()
+                for info in candidate.ip_infos or ()
+            }
+            context.ip_infos.update(
+                (ip, info)
+                for ip, info in child.ip_infos.items()
+                if (info.resolver, ip) in valid_ips
+            )
+            # 未发布的同 IP 候选可能覆盖聚合表；恢复已通过检查候选自己的信息。
+            for candidate in (child.candidates or {}).values():
+                for info in candidate.ip_infos or ():
+                    if (
+                        info.ip in child.ip_infos
+                        and (info.resolver, info.ip) in valid_ips
+                    ):
+                        context.ip_infos.setdefault(info.ip, info)
 
     async def query(self, request: Request, context: Context | None = None) -> Response:
         """在总超时内返回最快成功应答，并保留所有已完成候选。"""
@@ -107,30 +151,41 @@ class ConcurrentResolver(BaseResolver):
 
         candidates: dict[str, Response] = {}
         winner: Response | None = None
-        send, receive = create_memory_object_stream[Response | None](len(resolvers))
+        send, receive = create_memory_object_stream[
+            tuple[Response | None, Context | None]
+        ](len(resolvers))
 
         async def run(resolver: BaseResolver) -> None:
             result = await self._query_upstream(resolver, request, context)
             await send.send(result)
 
-        with move_on_after(self.timeout):
+        with response_scope(request, self.timeout) as scope:
             async with create_task_group() as tg:
                 for resolver in resolvers:
                     tg.start_soon(run, resolver)
                 for _ in resolvers:
-                    result = await receive.receive()
+                    result, child_context = await receive.receive()
                     if result is None or result.invalid:
                         continue
                     candidates[result.upstream] = result
+                    if context is not None and child_context is not None:
+                        # 只有本层已完整消费的分支才发布候选和测速信息。
+                        if child_context.candidates is None:
+                            child_context.candidates = {}
+                        child_context.candidates[result.upstream] = result
+                        self._merge_child_results(context, child_context)
                     if (
                         winner is None
                         and result.rcode == Rcode.NOERROR
                         and result.ans is not None
                     ):
                         winner = result
+                        scope.response_ready()
                         if not self._wait_all:
                             tg.cancel_scope.cancel()
                             break
+                    elif result.rcode == Rcode.NXDOMAIN:
+                        scope.response_ready()
 
         await send.aclose()
         await receive.aclose()

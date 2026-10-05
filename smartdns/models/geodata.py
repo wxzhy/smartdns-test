@@ -32,7 +32,7 @@ class IPInfo:
         """从IP地址创建IPInfo对象"""
         geo_manager = get_geo_manager()
         if not geo_manager:
-            return cls(ip=ip)
+            return cls(ip=ip, resolver=resolver)
         country, asn = geo_manager.lookup_ip(str(ip))
         return cls(ip=ip, country=country, asn=asn, resolver=resolver)
 

@@ -1,6 +1,6 @@
 from pathlib import Path
 from signal import SIGTERM
-from sys import platform
+from sys import platform, stderr
 from typing import Annotated
 
 import typer
@@ -53,6 +53,9 @@ def start(
     except Exception:
         logger.exception("配置文件加载失败")
         raise typer.Exit(1) from None
+    # 默认只输出 INFO 及以上，异步写入避免 stderr 阻塞 DNS 事件循环。
+    logger.remove()
+    logger.add(stderr, level=cfg.log_level, enqueue=True, diagnose=False)
     logger.info(
         "配置加载成功：{} 监听器 / {} 上游 / {} 解析器 / {} 路由",
         len(cfg.listeners),

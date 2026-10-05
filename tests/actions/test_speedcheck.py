@@ -1,21 +1,25 @@
 """SpeedcheckAction 测速并发限制与倍率排序回归测试。"""
 
+import asyncio
 from ipaddress import IPv4Address, IPv6Address
 from typing import TYPE_CHECKING, cast
 
 import dns.message
 import pytest
 from anyio import Event, create_task_group, fail_after
+from anyio.lowlevel import checkpoint
 from dns.name import from_text
+from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
-from smartdns.actions import speedcheck
+from smartdns.actions import _ping, speedcheck
 from smartdns.actions.speedcheck import SpeedcheckAction
 from smartdns.models.action import SpeedcheckActionConfig
 from smartdns.models.context import Context, Request, Response
 from smartdns.models.rule import ResponseIPMatcher
+from smartdns.utils.concurrency import GlobalCapacityLimiter
 
 if TYPE_CHECKING:
     from dns.message import QueryMessage
@@ -83,6 +87,23 @@ def _candidate_context(*responses: Response) -> Context:
     return context
 
 
+@pytest.mark.parametrize("rejected", ["invalid", "servfail"])
+async def test_ranking_excludes_rejected_candidates(rejected: str) -> None:
+    bad, good = _response(1), _response(2)
+    assert bad.ip_infos is not None
+    assert good.ip_infos is not None
+    bad.ip_infos[0].rtt, good.ip_infos[0].rtt = 1.0, 50.0
+    if rejected == "invalid":
+        bad.invalid = True
+    else:
+        bad.rcode = Rcode.SERVFAIL
+    context = _candidate_context(bad, good)
+    await _action(measure=False).on_response(context)
+    assert context.response is not None
+    assert context.response.upstream == "r2"
+    assert context.response.ip_list == ["198.51.0.2"]
+
+
 async def test_speedcheck_measure_limit_is_128(monkeypatch) -> None:
     """多个 Worker 任务共享线程信号量，活动测速数不超过 128。"""
     monkeypatch.setattr(speedcheck, "match_response", lambda matcher, response: True)
@@ -101,7 +122,7 @@ async def test_speedcheck_measure_limit_is_128(monkeypatch) -> None:
         active -= 1
         return 1.0
 
-    monkeypatch.setattr(speedcheck, "speedtest", fake_speedtest)
+    monkeypatch.setattr(_ping, "_measure", fake_speedtest)
     action = _action()
 
     async with create_task_group() as tg:
@@ -124,11 +145,112 @@ async def test_speedcheck_measure_limit_is_released_on_failure(monkeypatch) -> N
         calls += 1
         raise RuntimeError("probe failed")
 
-    monkeypatch.setattr(speedcheck, "speedtest", failing_speedtest)
+    monkeypatch.setattr(_ping, "_measure", failing_speedtest)
     action = _action()
     await action.on_resolver(_context(), _response(1))
     await action.on_resolver(_context(), _response(2))
     assert calls == 2
+
+
+async def test_cached_rtt_bypasses_saturated_measure_limit(monkeypatch) -> None:
+    limiter = GlobalCapacityLimiter(1)
+    config = _action()._speedtest
+    _ping.set_cache({_ping._speedtest_key("192.0.2.1", config): 12.0})
+    monkeypatch.setattr(_ping, "_MEASURE_LIMIT", limiter)
+    await limiter.acquire()
+    try:
+        with fail_after(0.2):
+            assert await _ping.speedtest("192.0.2.1", config) == 12.0
+    finally:
+        limiter.release()
+        _ping.set_cache(None)
+
+
+async def test_duplicate_ip_waits_for_rtt_and_keeps_surviving_candidate(
+    monkeypatch,
+) -> None:
+    _ping.set_cache(None)
+    started, release = Event(), Event()
+    calls = 0
+
+    async def measure(ip, config):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return 7.0
+
+    monkeypatch.setattr(_ping, "_measure", measure)
+    action = _action()
+    context = _context()
+    first, second = _response(1), _response(1)
+    second.upstream = "second"
+    assert second.ip_infos is not None
+    second.ip_infos[0].resolver = "second"
+    first_task = asyncio.create_task(action.on_resolver(context, first))
+    await started.wait()
+    second_task = asyncio.create_task(action.on_resolver(context, second))
+    await checkpoint()
+    await checkpoint()
+    assert not second_task.done()
+    assert not context.ip_infos
+    first_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_task
+    release.set()
+    with fail_after(1):
+        await second_task
+    assert calls == 1
+    assert context.ip_infos is not None
+    info = context.ip_infos[second.ip_infos[0].ip]
+    assert info.resolver == "second"
+    assert info.rtt == 7.0
+    context.candidates = {"second": second}
+    await action.on_response(context)
+    assert context.response is not None
+    assert context.response.upstream == "second"
+
+
+async def test_cancelled_candidate_does_not_publish_partial_measurements(
+    monkeypatch,
+) -> None:
+    _ping.set_cache(None)
+    blocked = Event()
+    first, second = _response(1), _response(2)
+    assert first.ip_infos is not None
+    assert second.ip_infos is not None
+    first.ip_infos.extend(second.ip_infos)
+    first.ip_infos[1].resolver = first.upstream
+
+    async def measure(ip, config):
+        if ip.endswith(".2"):
+            blocked.set()
+            await Event().wait()
+        return 1.0
+
+    monkeypatch.setattr(_ping, "_measure", measure)
+    context = _context()
+    task = asyncio.create_task(_action().on_resolver(context, first))
+    await blocked.wait()
+    await checkpoint()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not context.ip_infos
+
+
+async def test_sort_recovers_same_ip_from_completed_candidate() -> None:
+    complete, ghost = _response(1), _response(1)
+    ghost.upstream = "unpublished"
+    assert complete.ip_infos is not None
+    assert ghost.ip_infos is not None
+    complete.ip_infos[0].rtt = 12.0
+    ghost.ip_infos[0].resolver = ghost.upstream
+    context = _candidate_context(complete)
+    context.ip_infos = {ghost.ip_infos[0].ip: ghost.ip_infos[0]}
+    await _action().on_response(context)
+    assert context.response is not None
+    assert context.response.upstream == complete.upstream
 
 
 async def test_weighted_tcp_rtt_selects_best_without_changing_measurements(

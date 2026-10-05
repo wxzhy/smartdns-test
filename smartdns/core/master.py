@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from asyncio import wrap_future
+from asyncio import Lock, wrap_future
 from contextlib import ExitStack
+from dataclasses import replace
 from random import randint
-from time import time
+from time import monotonic, time
 from typing import TYPE_CHECKING, cast
 
 from aiofastnet import patch_loop
-from anyio import CancelScope
+from anyio import CancelScope, fail_after
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from cachetools import TLRUCache
 from cachetools import TTLCache as CachetoolsTTLCache
@@ -21,6 +22,7 @@ from smartdns.models.context import Request, Response
 from smartdns.nameservers.client import set_ech_cache
 from smartdns.routing.manager import close_geo_manager, init_geo_manager
 from smartdns.utils.cache_async import AnswerCache
+from smartdns.utils.deadline import SharedDeadline
 
 from .worker import Worker
 
@@ -77,10 +79,14 @@ class Master:
             AnswerCache(maxsize=config.cache_size) if config.cache_size > 0 else None
         )
         self.listener_manager: ListenerManager | None = None
+        self._shared_deadlines: dict[CacheKey, SharedDeadline] = {}
+        self._stop_lock = Lock()
+        self._stopping = False
 
     async def start(self) -> None:
         """启动 Master 服务"""
         patch_loop()
+        self._stopping = False
         logger.info("启动 Master 服务")
         if self.config.geodata:
             init_geo_manager(self.config.geodata)
@@ -110,7 +116,13 @@ class Master:
 
     async def stop(self) -> None:
         """停止 Master：关闭监听器并停止各 worker（释放上游/HTTP 客户端等资源）。"""
+        with CancelScope(shield=True):
+            async with self._stop_lock:
+                await self._stop()
+
+    async def _stop(self) -> None:
         logger.info("停止 Master 服务")
+        self._stopping = True
         listener_manager = self.listener_manager
         self.listener_manager = None
         if listener_manager is not None:
@@ -118,27 +130,52 @@ class Master:
                 await listener_manager.stop_all()
             except Exception:
                 logger.exception("停止监听器失败")
-        worker_portals = list(zip(self.workers, self.portals, strict=False))
+        workers = list(self.workers)
         self.workers.clear()
         self.portals.clear()
-        for worker, portal in worker_portals:
+        for worker in workers:
             try:
-                await wrap_future(portal.start_task_soon(worker.stop))
+                if worker._loop is not None:
+                    await wrap_future(worker.submit(worker.stop()))
             except Exception:
                 logger.exception("停止 Worker {} 失败", worker.worker_id)
         close_geo_manager()
 
     async def dispatch(self, request: Request) -> Message | None:
         """分发请求到 Worker 并返回响应 Message。"""
+        if self._stopping:
+            return request.make_error(Rcode.SERVFAIL)
         cache = self._cache
         if cache is None:
             return self._to_client_message(request, await self._query_worker(request))
-        try:
-            answer = await cache.fetch(
-                _cache_key(request), lambda: self._query_answer(request)
-            )
-        except _UncacheableResponseError as error:
-            return self._to_client_message(request, error.response)
+        timeout = (
+            None
+            if request.deadline is None
+            else max(0.0, request.deadline - monotonic())
+        )
+        with fail_after(timeout):
+            key = _cache_key(request)
+            answer = await cache.read(key)
+            if answer is None:
+                shared = self._shared_deadlines.get(key)
+                if shared is None:
+                    shared = self._shared_deadlines[key] = SharedDeadline()
+                token = shared.add(request.deadline)
+                shared_request = replace(request, shared_deadline=shared)
+                try:
+                    answer = await cache.fetch(
+                        key, lambda: self._query_answer(shared_request)
+                    )
+                except _UncacheableResponseError as error:
+                    return self._to_client_message(request, error.response)
+                finally:
+                    # 新调用可在旧取数任务的取消清理期间进入。按等待者生命周期
+                    # 保留期限组，避免旧任务结束时删掉新调用正在使用的期限组。
+                    if (
+                        shared.remove(token)
+                        and self._shared_deadlines.get(key) is shared
+                    ):
+                        del self._shared_deadlines[key]
         # 复制回放：命中与未命中统一按剩余生存期刷新各 section TTL，
         # 缓存内原始 Answer 不外泄给调用方。
         remaining = max(0, int(answer.expiration - time()))
@@ -164,10 +201,9 @@ class Master:
             # 索引在 try 内访问：停机竞态窗口（workers/portals 已清空）统一走
             # SERVFAIL 分支，而不是向监听器抛 IndexError。
             worker = self.workers[worker_id]
-            portal = self.portals[worker_id]
-            result: Response = await wrap_future(
-                portal.start_task_soon(worker.handle, request)
-            )
+            # BlockingPortal.start_task_soon 会同步等待目标循环确认提交，
+            # Worker 忙碌时会卡住 Master；这里只排队，不等待跨线程确认。
+            result: Response = await wrap_future(worker.submit(worker.handle(request)))
             if result.rcode in (Rcode.SERVFAIL, Rcode.REFUSED):
                 logger.warning(
                     "Worker {} 请求 {} 返回 {}", worker_id, request.qname, result.rcode

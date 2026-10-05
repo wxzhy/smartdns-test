@@ -31,7 +31,7 @@ class HTTPSAction(BaseAction):
 
     match_ip 依据 HTTPS 记录 hint 派生的 IP 标签判定；记录无 hint 且
     启用 subquery 且 match_ip 配置了条件时，on_response 设置 A 记录子查询，在
-    on_subquery 阶段用应答 IP 的标签完成判定后统一清理与注入。
+    on_response 先清理主应答，on_subquery 用应答 IP 标签完成判定与 ECH 注入。
     启用 subquery 时，HTTPS NODATA 也通过 A 查询判定，命中且取得 ECH 时合成记录。
     """
 
@@ -84,12 +84,23 @@ class HTTPSAction(BaseAction):
             context.request.qname,
             response.ans,
         )
-        if self._try_defer_ech(context, response):
+        deferred = self._try_defer_ech(context, response)
+        # 参数清理先完成；可选的 ECH 获取或 A 子查询超时也必须保留清理结果。
+        if response.ans is not None and response.ans.rrset is not None:
+            self._rebuild(context, response, response.ans.rrset, None)
+        if deferred:
             return
         if response.ans is None or response.ans.rrset is None:
             return
         ech_value = await self._resolve_ech_value(response, context)
-        self._rebuild(context, response, response.ans.rrset, ech_value)
+        cleaned = context.response
+        if (
+            ech_value is not None
+            and cleaned is not None
+            and cleaned.ans is not None
+            and cleaned.ans.rrset is not None
+        ):
+            self._rebuild(context, cleaned, cleaned.ans.rrset, ech_value)
 
     async def on_subquery(self, context: Context, response: Response) -> None:
         """A 记录子查询返回后，用其 IP 标签完成 match_ip 判定并统一重写。
@@ -107,6 +118,10 @@ class HTTPSAction(BaseAction):
             or (main.ans is not None and main.ans.rdtype != RdataType.HTTPS)
         ):
             return
+        if main.ans is not None and main.ans.rrset is not None:
+            self._rebuild(context, main, main.ans.rrset, None)
+            main = context.response
+            assert main is not None
         ech_value: str | None = None
         if (
             self._add_ech

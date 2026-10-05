@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from time import time
+from time import monotonic, time
 from typing import TYPE_CHECKING, cast
 
 from anyio import (
@@ -83,7 +83,12 @@ class TCPListener(BaseListener):
                     await sleep(_ACCEPT_ERROR_BACKOFF)
                     continue
                 try:
-                    await limiter.acquire()
+                    with fail_after(self.timeout):
+                        await limiter.acquire()
+                except TimeoutError:
+                    await aclose_forcefully(stream)
+                    logger.debug("TCP监听器 {} 连接排队超时", self.name)
+                    continue
                 except BaseException:
                     await aclose_forcefully(stream)
                     raise
@@ -124,14 +129,17 @@ class TCPListener(BaseListener):
             logger.debug("接收到来自 {} 的TCP连接", client_address)
             write_lock = Lock()
 
-            async def process(data: Message) -> None:
+            async def process(data: Message, deadline: float) -> None:
                 try:
-                    # 构造请求、处理、等待写锁与回写共享同一处理超时。
-                    with fail_after(self.timeout):
+                    if deadline <= monotonic():
+                        return
+                    # 接收帧、限流排队、处理、等待写锁与回写共享截止时刻。
+                    with fail_after(max(0.0, deadline - monotonic())):
                         request = Request.from_message(
                             msg=data,
                             listener=self.name,
                             remote_address=client_address,
+                            deadline=deadline,
                         )
                         response: Message | None = await handler(request)
                         if response is not None:
@@ -142,7 +150,8 @@ class TCPListener(BaseListener):
                                     await send_tcp(
                                         anyio_stream,
                                         wire,
-                                        expiration=time() + self.timeout,
+                                        expiration=time()
+                                        + max(0.0, deadline - monotonic()),
                                     )
                                 except BaseException:
                                     # 一次写入若只完成了部分字节，后续响应会接在
@@ -165,16 +174,25 @@ class TCPListener(BaseListener):
                 try:
                     while True:
                         # 只有此循环读取连接，确保 DNS 长度帧不会被并发读取破坏。
-                        with fail_after(self.timeout):
+                        with fail_after(self.timeout) as read_scope:
+                            anyio_stream.begin_request(read_scope, self.timeout)
                             data, _ = await receive_tcp(
                                 anyio_stream, ignore_trailing=True
                             )
                         if not data.question:
                             logger.debug("TCP监听器 {} 跳过无 question 报文", self.name)
                             continue
-                        await self._query_limiter.acquire()
+                        deadline = (
+                            anyio_stream.request_started or monotonic()
+                        ) + self.timeout
                         try:
-                            tg.start_soon(process, data)
+                            with fail_after(max(0.0, deadline - monotonic())):
+                                await self._query_limiter.acquire()
+                        except TimeoutError:
+                            logger.warning("TCP监听器 {} 请求排队超时", self.name)
+                            continue
+                        try:
+                            tg.start_soon(process, data, deadline)
                         except BaseException:
                             self._query_limiter.release()
                             raise

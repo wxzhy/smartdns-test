@@ -17,6 +17,7 @@ from pydantic.dataclasses import dataclass
 from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
 
 from smartdns.models.geodata import IPInfo, NameInfo
+from smartdns.utils.deadline import SharedDeadline
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -34,6 +35,9 @@ class Request:
     ip_info: IPInfo | None
     ecs: IPvAnyNetwork | None = None
     ecs_info: IPInfo | None = None
+    # time.monotonic() 截止时刻，可在 Master 和 Worker 的不同事件循环间传递。
+    deadline: float | None = None
+    shared_deadline: SharedDeadline | None = None
 
     def __str__(self):
         return (
@@ -58,7 +62,13 @@ class Request:
 
     @classmethod
     def from_message(
-        cls, msg: Message, listener: str, remote_address: IPvAnyAddress | None = None
+        cls,
+        msg: Message,
+        listener: str,
+        remote_address: IPvAnyAddress | None = None,
+        *,
+        deadline: float | None = None,
+        shared_deadline: SharedDeadline | None = None,
     ) -> Request:
         """从dns.message.Message对象创建Request对象"""
         if not msg.question:
@@ -85,6 +95,8 @@ class Request:
             ip_info=IPInfo.from_ip(remote_address) if remote_address else None,
             ecs=ecs,
             ecs_info=IPInfo.from_ip(ecs.network_address) if ecs is not None else None,
+            deadline=deadline,
+            shared_deadline=shared_deadline,
         )
 
 
@@ -191,7 +203,11 @@ class Context:
         return cls(
             worker_id=context.worker_id,
             request=Request.from_message(
-                message, request.listener, request.remote_address
+                message,
+                request.listener,
+                request.remote_address,
+                deadline=request.deadline,
+                shared_deadline=request.shared_deadline,
             ),
             is_subquery=True,
         )

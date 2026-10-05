@@ -7,6 +7,7 @@
 ```yaml
 worker_count: 1
 cache_size: 10000
+log_level: INFO
 geodata: {}
 client: {}
 listeners: []
@@ -20,6 +21,7 @@ routing: []
 |---|---|---|---|
 | `worker_count` | int >= 1 | CPU 数 | 独立 Worker 线程/事件循环数量 |
 | `cache_size` | int >= 0 | 10000 | Master Answer 缓存容量；0 表示关闭 |
+| `log_level` | str | INFO | TRACE/DEBUG/INFO/SUCCESS/WARNING/ERROR/CRITICAL；CLI 日志经队列异步写入，DEBUG/TRACE 可查看详细上下文 |
 | `geodata` | object | 空 | GeoIP、ASN、GeoSite 和 IPSet 文件 |
 | `client` | object | 空 | curl HTTP/DoH 客户端的公共选项 |
 | `listeners` | list | 空 | 客户端监听器 |
@@ -70,7 +72,7 @@ client:
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `max_clients` | 65536 | 每个 Worker 创建 curl session 时的最大客户端数 |
+| `max_clients` | 256 | 每个 Worker 中每个 DoH 会话的最大并发请求数；会话名额排队计入 DNS 查询时限 |
 | `hosts` | null | 转为 curl `RESOLVE` 的静态映射，按各 curl 上游 URL 的端口生效 |
 | `dns_cache_ttl` | 300 | curl DNS 缓存秒数 |
 | `shuffle` | true | 是否让 curl 打乱 DNS 地址 |
@@ -107,10 +109,12 @@ listeners:
 | `type` | 全部 | 必填 | `udp` 或 `tcp` |
 | `host` | 全部 | null | 监听地址；UDP 的 null 会转换为 `::` |
 | `port` | 全部 | 必填 | 1-65535 |
-| `timeout` | 全部 | 5 秒 | 单个请求从接收、处理到回写的整体超时 |
+| `timeout` | 全部 | 5 秒 | 单个请求的接收、限流排队、处理和回写共用的整体超时 |
 | `reuse_port` | UDP/TCP | false | Windows UDP 会忽略并告警；TCP 交给 AnyIO |
 
 UDP 回包会遵循客户端声明的 EDNS payload；没有 EDNS 时上限为 512 字节。较大响应会返回带 `TC=1` 的合法截断报文，客户端随后可通过 TCP 获取完整结果。TCP Listener 支持完整的最大 65535 字节 DNS 消息，不受 UDP payload 限制。
+
+UDP 在收到完整请求后开始计时，TCP 在收到帧首字节后开始计时，接收剩余帧和等待并发名额均消耗请求预算；排队到期后丢弃请求。TCP 空闲连接单独按 `timeout` 计时，接受连接后等待连接名额也受此时限约束。
 
 `type: http` 尚未实现，配置加载阶段会明确拒绝。
 
@@ -233,10 +237,13 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
   edns: true
   tcp: false
   tries: 3
+  max_queries: 16
   nodata_ttl: 300
 ```
 
 `nameservers` 只接受 IP 地址；误填 Nameserver 名称会在配置加载时失败。aiodns 不支持 ECS（pycares 无法注入 EDNS Client Subnet 选项），需要固定 ECS 时请使用 plain 解析器。
+
+`max_queries` 默认 16（至少 1），限制每个 Worker 中此解析器的原生并发查询和通道数。通道按需创建并复用，每次独占租用一个通道；取消时调用该通道的 `cancel()`，停止此查询的底层重试并归还名额，不取消其他通道的查询。pycares 的默认事件线程模式会为通道创建线程，增大此值会增加资源占用。
 
 `cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：缓存挂在 `resolve()` 边界，路由路径与 `client.resolver` 的 ECH 引导查询共用；条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），持久层为相同完整配置跨 Worker 共享的 `AnswerCache` 实例。同名但配置不同的解析器使用不同缓存；配置完全一致的顶层解析器和 `client.resolver` 会共享缓存。
 
@@ -278,6 +285,12 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
 - Speedcheck 需要候选完整时通常配置 `wait_all: true`。
 - `wait_all: false` 在首个带 Answer 的 NOERROR 响应后取消剩余任务。
 - `wait_all: true` 在整体 `timeout` 内收集已完成候选；超时不会丢弃已经完成的快速结果。
+
+监听器把单请求的单调时钟截止时间传入 Worker 和派生子查询。收集阶段同时考虑解析器自身 `timeout` 与外层剩余预算，为后续加工和回包预留 10%（至少 50ms）；嵌套收集也受当前任务的外层期限约束。Router 的 after 动作和子查询共用剩余预算，到期时保留最后一个完整应答并返回，监听器的整体超时继续作为硬上限。
+
+启用 Master 缓存时，同键未命中请求合并查询，但每个客户端仍有独立的超时。共享查询在未取得答案时使用仍未到期等待者的最晚期限，已有答案后使用最早期限收尾；首个客户端取消不会中断其他等待者，后到客户端也不会延长解析器自身 `timeout`。嵌套候选必须完成外层全部 `actions` 才能参与最终排序，外层丢弃嵌套胜者时整个分支丢弃。
+
+嵌套胜者通过检查后，其他候选的后处理也受软期限约束；到期只丢弃未完成检查的候选，保留已通过检查的胜者及其测速信息。
 
 ## 7. Matcher
 
@@ -394,6 +407,8 @@ match_ip:
 
 字段名是 `ech_domain`，不是 `ech`。`add_ech: false` 只执行 hint/ALPN 清理，不查询或注入 ECH。
 `enable_subquery` 默认为 `true`。设为 `false` 时不发起 A 子查询，也不为 HTTPS 空应答合成记录；已有 HTTPS 记录仍会清理 hint/h3。若 `match_ip` 有筛选条件而记录无 hint，则缺少可判定的 IP，不注入 ECH。
+
+已有 HTTPS 记录的 hint/h3 清理先于 ECH 获取和 A 子查询等待完成。ECH 或子查询到期时，主应答及其 Master 缓存条目仍保留清理结果。
 启用子查询且 HTTPS 查询返回 `NOERROR` 但无 HTTPS 记录时，Action 会以同一路由解析器查询原域名的 A 记录；A 地址命中 `match_ip` 且取得 ECHConfig 后，返回仅含 ECH 参数的 `HTTPS 1 .` 记录。合成记录的 TTL 不超过 A 应答、原空应答的剩余有效期及 300 秒；A 查询无地址、匹配失败或获取 ECH 失败时保留原空应答。此路径只使用 A 记录，不查询 AAAA。
 合成记录没有 ALPN 参数；按 [RFC 9460 的 HTTPS 映射](https://www.rfc-editor.org/rfc/rfc9460.html#section-9)，其默认 SVCB ALPN 集合为 `http/1.1`。
 

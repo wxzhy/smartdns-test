@@ -5,6 +5,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, cast
 
 import dns.message
+import pytest
 from anyio import EndOfStream, Event, create_task_group, fail_after, sleep
 from anyio.abc import SocketAttribute
 
@@ -90,6 +91,43 @@ async def test_handle_connection_times_out_slow_handler() -> None:
     assert 0.15 <= elapsed < 1.0
     assert stream.closed
     assert stream.sent == []  # 未产出应答
+
+
+@pytest.mark.parametrize("slow_frame", [False, True])
+async def test_frame_receive_and_handler_share_budget_after_first_byte(
+    slow_frame: bool,
+) -> None:
+    class DelayedStream(_FakeStream):
+        reads = 0
+
+        async def receive(self, max_bytes: int) -> bytes:
+            if self.reads == 0:
+                await sleep(0.13)
+            elif self.reads == 1:
+                await sleep(0.10 if slow_frame else 0.04)
+            self.reads += 1
+            return await super().receive(max_bytes)
+
+    stream = DelayedStream(_query_payload())
+    listener = _listener(timeout=0.18)
+    calls = 0
+
+    async def handler(request: Request):
+        nonlocal calls
+        calls += 1
+        try:
+            await sleep(0.12 if slow_frame else 0.04)
+            return dns.message.make_response(request.msg)
+        finally:
+            stream.signal_eof()
+
+    listener.handler = handler
+    with fail_after(1):
+        await listener.handle_connection(cast("SocketStream", stream))
+    assert calls == 1
+    assert len(stream.sent) == (0 if slow_frame else 1)
+    assert stream.closed
+    assert listener._query_limiter.value == 256
 
 
 async def test_handle_connection_drops_empty_question_query() -> None:
@@ -316,3 +354,57 @@ async def test_cancel_closes_connection_waiting_for_capacity(monkeypatch) -> Non
         tg.cancel_scope.cancel()
 
     assert streams[1].closed
+
+
+async def test_pipelined_queue_and_processing_share_one_deadline() -> None:
+    first = dns.message.make_query("first.example.com.", "A")
+    second = dns.message.make_query("second.example.com.", "A")
+    first.id, second.id = 1, 2
+    payload = b"".join(
+        len(wire).to_bytes(2, "big") + wire
+        for wire in (first.to_wire(), second.to_wire())
+    )
+    stream = _FakeStream(payload)
+    stream.signal_eof()
+    listener = _listener(timeout=0.18, max_connections=1)
+    remaining: list[float] = []
+
+    async def handler(request: Request):
+        if request.id == first.id:
+            await sleep(0.11)
+        else:
+            assert request.deadline is not None
+            remaining.append(request.deadline - monotonic())
+            await sleep(0.10)
+        return dns.message.make_response(request.msg)
+
+    listener.handler = handler
+    with fail_after(2):
+        await listener.handle_connection(cast("SocketStream", stream))
+    assert len(remaining) == 1
+    assert remaining[0] < 0.1
+    assert [dns.message.from_wire(frame[2:]).id for frame in stream.sent] == [first.id]
+    assert listener._query_limiter.value == 1
+
+
+async def test_expired_queued_query_is_not_dispatched() -> None:
+    stream = _FakeStream(_query_payload())
+    stream.signal_eof()
+    listener = _listener(timeout=0.1, max_connections=1)
+    await listener._query_limiter.acquire()
+    calls = 0
+
+    async def handler(request: Request):
+        nonlocal calls
+        calls += 1
+        return dns.message.make_response(request.msg)
+
+    listener.handler = handler
+    try:
+        with fail_after(2):
+            await listener.handle_connection(cast("SocketStream", stream))
+        assert calls == 0
+        assert stream.closed
+        assert listener._query_limiter.value == 0
+    finally:
+        listener._query_limiter.release()

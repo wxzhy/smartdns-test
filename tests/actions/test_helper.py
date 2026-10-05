@@ -4,7 +4,9 @@ from ipaddress import IPv4Address, IPv6Address
 from time import time
 from typing import TYPE_CHECKING, cast
 
+import dns.edns
 import dns.message
+import dns.rrset
 import pytest
 from dns.name import from_text
 from dns.rdataclass import RdataClass
@@ -14,6 +16,7 @@ from dns.resolver import Answer
 from dns.rrset import RRset
 
 from smartdns.actions._helper import (
+    clone_answer,
     replace_answer_rrset,
     replace_response_ip,
     replace_response_ipinfo,
@@ -34,6 +37,44 @@ def _response(rdtype: str, answer_text: str) -> Response:
         cast("QueryMessage", msg),
     )
     return Response.from_answer(answer, upstream="test")
+
+
+def test_clone_copies_all_mutable_sections_and_edns_options() -> None:
+    message = dns.message.make_response(dns.message.make_query("example.com.", "A"))
+    message.answer.append(
+        dns.rrset.from_text("example.com.", 300, "IN", "A", "192.0.2.1")
+    )
+    message.authority.append(
+        dns.rrset.from_text("example.com.", 300, "IN", "NS", "ns.example.com.")
+    )
+    message.additional.append(
+        dns.rrset.from_text("ns.example.com.", 300, "IN", "A", "192.0.2.2")
+    )
+    message.use_edns(
+        options=[dns.edns.GenericOption(dns.edns.OptionType(65001), b"original")]
+    )
+    answer = Answer(
+        from_text("example.com."),
+        RdataType.A,
+        RdataClass.IN,
+        cast("QueryMessage", message),
+    )
+    cloned = clone_answer(answer, remaining_ttl=10)
+    assert cloned.expiration == answer.expiration
+    assert all(
+        rr.ttl == 10 for section in cloned.response.sections[1:] for rr in section
+    )
+    assert all(rr.ttl == 300 for section in message.sections[1:] for rr in section)
+    cloned.response.question[0].name = from_text("changed.example.")
+    cloned.response.answer[0].clear()
+    cloned.response.authority.clear()
+    cloned.response.additional[0].clear()
+    cast("dns.edns.GenericOption", cloned.response.options[0]).data = b"changed"
+    assert message.question[0].name == from_text("example.com.")
+    assert message.answer[0]
+    assert message.authority
+    assert message.additional[0]
+    assert cast("dns.edns.GenericOption", message.options[0]).data == b"original"
 
 
 def _a_response() -> Response:

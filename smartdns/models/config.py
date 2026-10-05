@@ -1,6 +1,6 @@
 from os import cpu_count
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import (
@@ -34,6 +34,9 @@ class Config(BaseSettings):
     )
     worker_count: int = Field(default=cpu_count() or 1, ge=1, description="工作线程数")
     cache_size: int = Field(default=10000, ge=0, description="缓存大小")
+    log_level: Literal[
+        "TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"
+    ] = Field(default="INFO", description="日志等级；DEBUG/TRACE 可用于诊断详细上下文")
     geodata: GeoDataConfig = Field(
         default_factory=GeoDataConfig, description="Geo数据配置"
     )

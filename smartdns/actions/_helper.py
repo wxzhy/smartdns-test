@@ -1,9 +1,9 @@
 """Action 共享的 copy-on-write 应答重建工具。"""
 
-from copy import deepcopy
+from copy import copy, deepcopy
 from ipaddress import IPv4Address, IPv6Address
 from time import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from dns.rdatatype import RdataType
 from dns.rdtypes.IN.A import A
@@ -16,12 +16,36 @@ from smartdns.models.context import Response
 if TYPE_CHECKING:
     from collections.abc import Collection
 
+    from dns.message import Message
+
     from smartdns.models.geodata import IPInfo
 
 
+def _copy_message[MessageT: Message](message: MessageT) -> MessageT:
+    """复制可变 Message/RRset 容器，复用 dnspython 的不可变 Name/Rdata。"""
+    # 带签名上下文或解析错误的特殊报文继续使用完整复制。
+    if (
+        message.tsig is not None
+        or message.tsig_ctx is not None
+        or message.keyring is not None
+        or message.errors
+    ):
+        return deepcopy(message)
+    copied = copy(message)
+    copied.sections = [
+        [cast("RRset", rrset.copy()) for rrset in section]
+        for section in message.sections
+    ]
+    # EDNS Option 本身可变，仍须完整复制 OPT，不能与缓存共享。
+    copied.opt = deepcopy(message.opt)
+    copied.errors = []
+    copied.index = None  # ty: ignore[invalid-assignment]
+    return copied
+
+
 def clone_answer(answer: Answer, *, remaining_ttl: int | None = None) -> Answer:
-    """深复制 Answer 的 Message，确保调用方可以安全修改 RRset。"""
-    message = deepcopy(answer.response)
+    """复制应答的可变容器，确保修改 RRset 和 TTL 不污染缓存。"""
+    message = _copy_message(answer.response)
     if remaining_ttl is not None:
         for section in message.sections[1:]:
             for rrset in section:
@@ -45,9 +69,9 @@ def replace_answer_rrset(
     answer = response.ans
     if answer is None or answer.rrset is None:
         return response
-    message = deepcopy(answer.response)
+    message = _copy_message(answer.response)
     message.answer = [
-        deepcopy(new_rrset) if rrset == answer.rrset else rrset
+        cast("RRset", new_rrset.copy()) if rrset == answer.rrset else rrset
         for rrset in message.answer
     ]
     message.index = None  # ty: ignore[invalid-assignment]
@@ -107,8 +131,8 @@ def append_answer_rrset(
     answer = response.ans
     assert answer is not None
     assert answer.rrset is None
-    message = deepcopy(answer.response)
-    message.answer.append(deepcopy(rrset))
+    message = _copy_message(answer.response)
+    message.answer.append(cast("RRset", rrset.copy()))
     if remove_negative_soa:
         message.authority = [
             item for item in message.authority if item.rdtype != RdataType.SOA

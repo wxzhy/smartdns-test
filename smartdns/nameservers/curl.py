@@ -106,26 +106,31 @@ class CurlNameserver(BaseNameserver):
                     "Curl解析器 {} 未能获取 ECH 密钥，使用默认设置", self.name
                 )
         try:
-            if self.want_get:
-                result = await self._curl.get(
-                    self.url,
-                    params={"dns": encoded},
-                    headers={"Host": self.host, "Accept": "application/dns-message"},
-                    timeout=remaining_timeout(deadline),
-                    verify=self.verify,
-                )
-            else:
-                result = await self._curl.post(
-                    self.url,
-                    data=message,
-                    headers={
-                        "Host": self.host,
-                        "Content-Type": "application/dns-message",
-                        "Accept": "application/dns-message",
-                    },
-                    timeout=remaining_timeout(deadline),
-                    verify=self.verify,
-                )
+            # curl 的 timeout 从取到句柄后才计时，外层范围还须覆盖会话池排队。
+            with fail_after(remaining_timeout(deadline)):
+                if self.want_get:
+                    result = await self._curl.get(
+                        self.url,
+                        params={"dns": encoded},
+                        headers={
+                            "Host": self.host,
+                            "Accept": "application/dns-message",
+                        },
+                        timeout=remaining_timeout(deadline),
+                        verify=self.verify,
+                    )
+                else:
+                    result = await self._curl.post(
+                        self.url,
+                        data=message,
+                        headers={
+                            "Host": self.host,
+                            "Content-Type": "application/dns-message",
+                            "Accept": "application/dns-message",
+                        },
+                        timeout=remaining_timeout(deadline),
+                        verify=self.verify,
+                    )
         except Exception:
             logger.warning("Curl 上游 {} 请求失败", self.name)
             raise

@@ -6,9 +6,9 @@ import dns.asyncquery
 import dns.message
 import utls
 from anyio import CancelScope
-from generic_connection_pool.asyncio import ConnectionPool
 from loguru import logger
 
+from smartdns.nameservers._pool_compat import CancellationSafeConnectionPool
 from smartdns.nameservers._socket import AnyioStreamSocket
 from smartdns.nameservers._tls import (
     TLSStreamConnection,
@@ -22,6 +22,7 @@ from smartdns.nameservers.base import (
 )
 
 if TYPE_CHECKING:
+    from generic_connection_pool.asyncio import ConnectionPool
     from utls import SSLContext
 
     from smartdns.models.nameserver import TLSNameserverConfig
@@ -71,7 +72,7 @@ class TLSNameserver(BaseAddressNameserver):
         """启动 TLS 上游；pool_size>0 时创建连接池以复用加密连接。"""
         self._ssl_context = self._build_ssl_context()
         if self._pool_size:
-            self._pool = ConnectionPool(
+            self._pool = CancellationSafeConnectionPool(
                 TLSStreamConnectionManager(
                     self._ssl_context,
                     self._server_hostname,

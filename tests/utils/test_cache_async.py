@@ -4,7 +4,7 @@ from asyncio import CancelledError, create_task
 from threading import Lock
 
 import pytest
-from anyio import Event, fail_after
+from anyio import CancelScope, Event, fail_after
 from anyio.lowlevel import checkpoint
 from cachetools import TTLCache
 
@@ -138,3 +138,69 @@ async def test_failed_call_is_not_cached_and_can_be_retried() -> None:
     assert cache == {}
     assert await load("key") == 2
     assert cache == {"key": 2}
+
+
+@pytest.mark.parametrize("cancellation", ["task", "scope"])
+async def test_last_waiter_waits_for_cleanup_even_when_cancelled_again(
+    cancellation: str,
+) -> None:
+    started, cleaning, release, cleaned = (Event() for _ in range(4))
+    scope = CancelScope()
+
+    @cached({}, key=lambda: "key")
+    async def load() -> int:
+        started.set()
+        try:
+            await Event().wait()
+        finally:
+            with CancelScope(shield=True):
+                cleaning.set()
+                await release.wait()
+                cleaned.set()
+        return 1
+
+    async def wait() -> None:
+        with scope:
+            await load()
+
+    waiter = create_task(wait())
+    with fail_after(2):
+        await started.wait()
+        if cancellation == "task":
+            waiter.cancel()
+        else:
+            scope.cancel()
+        await cleaning.wait()
+        assert not waiter.done()
+        if cancellation == "task":
+            waiter.cancel()
+            await checkpoint()
+            assert not waiter.done()
+        release.set()
+        if cancellation == "task":
+            with pytest.raises(CancelledError):
+                await waiter
+        else:
+            await waiter
+        assert cleaned.is_set()
+
+
+async def test_abandoned_loader_cannot_cache_a_result_after_swallowing_cancel() -> None:
+    cache: dict[str, int] = {}
+    started = Event()
+
+    @cached(cache, key=lambda: "key")
+    async def load() -> int:
+        started.set()
+        try:
+            await Event().wait()
+        except CancelledError:
+            return 7
+        return 1
+
+    waiter = create_task(load())
+    await started.wait()
+    waiter.cancel()
+    with pytest.raises(CancelledError):
+        await waiter
+    assert cache == {}
