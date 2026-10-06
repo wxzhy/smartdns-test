@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 
 def query_deadline(timeout: float | None, default: float) -> float:
-    """建立单次上游查询的绝对截止时刻。"""
-    effective = default if timeout is None else timeout
+    """上游配置与调用方剩余预算共同限制单次查询，取两者较小值。"""
+    effective = default if timeout is None else min(timeout, default)
     if effective <= 0:
         raise Timeout(timeout=effective)
     return monotonic() + effective

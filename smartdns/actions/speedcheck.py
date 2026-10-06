@@ -10,6 +10,7 @@ from smartdns.actions._helper import replace_response_ipinfo
 from smartdns.actions._ping import speedtest
 from smartdns.actions.base import BaseAction
 from smartdns.routing.matcher import match_response
+from smartdns.utils.deadline import response_scope, response_timeout
 
 if TYPE_CHECKING:
     from smartdns.models.action import SpeedcheckActionConfig
@@ -67,10 +68,18 @@ class SpeedcheckAction(BaseAction):
                 info.rtt = float("inf")
 
         if self._measure_enabled:
-            async with create_task_group() as tg:
-                for info in response.ip_infos:
-                    tg.start_soon(measure, info)
-        # 整个候选完成测速后再发布，取消的候选不会留下半完成的 IP 信息。
+            # 测速与容量排队是可选工作：提前结束，为后续过滤和发布留出预算。
+            # 外部取消仍向上传播；仅本地测速预算耗尽时退回未测得 RTT 的候选。
+            with response_scope(
+                context.request,
+                # 探测自身也使用 timeout，留出启动/清理余量，才能正常记录全失败。
+                response_timeout(context.request, self._speedtest.timeout + 0.05),
+                response_ready=True,
+            ):
+                async with create_task_group() as tg:
+                    for info in response.ip_infos:
+                        tg.start_soon(measure, info)
+        # 任务组退出并完成取消清理后才发布，后续必需的 Action 仍会运行。
         if context.ip_infos is None:
             context.ip_infos = {}
         for info in response.ip_infos:

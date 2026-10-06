@@ -8,6 +8,8 @@ from smartdns.routing.matcher import match_request
 from smartdns.utils.deadline import response_scope
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from smartdns.actions.manager import ActionManager
     from smartdns.models.rule import Rule
     from smartdns.resolvers.base import BaseResolver
@@ -16,9 +18,14 @@ if TYPE_CHECKING:
 
 class Router:
     def __init__(
-        self, config: Rule, resolvers: ResolverManager, actions: ActionManager
+        self,
+        config: Rule,
+        resolvers: ResolverManager,
+        actions: ActionManager,
+        subquery_handler: Callable[[Context], Awaitable[None]] | None = None,
     ):
         self.config = config
+        self._subquery_handler = subquery_handler
         self._resolvers = resolvers
         self._actions = actions
         self._upstream = config.resolver
@@ -79,24 +86,38 @@ class Router:
                 await action.on_response(context)
                 if context.stop:
                     return True
-            if context.subquery is not None:
-                if self.resolver is None:
+            if context.subquery is not None and not context.is_subquery:
+                if self.resolver is None and self._subquery_handler is None:
                     logger.debug("路由 {} 无上游解析器，忽略子查询", self.config.name)
                 else:
                     await self._run_subquery(context, context.subquery, self.resolver)
         return True
 
     async def _run_subquery(
-        self, context: Context, subquery: Context, resolver: BaseResolver
+        self, context: Context, subquery: Context, resolver: BaseResolver | None
     ) -> None:
         """执行 on_response 阶段设置的子查询，并把结果交给 after 动作。
 
-        以 context=None 调用 resolver，ConcurrentResolver 会因此跳过
-        on_resolver 动作与候选收集，子查询不重复外层的加工逻辑；
-        只执行一轮，on_subquery 中再设置 context.subquery 不会再次触发。
+        Worker 提供的 handler 复用完整路由与 Master 最终缓存；独立 Router
+        则按本规则加工。子查询只执行一层，同一目标/类型避免等待自身的缓存任务。
         """
         try:
-            subquery.response = await resolver.query(subquery.request, None)
+            same_query = (
+                subquery.request.qname == context.request.qname
+                and subquery.request.rdtype == context.request.rdtype
+                and subquery.request.rdclass == context.request.rdclass
+            )
+            if self._subquery_handler is not None and not same_query:
+                await self._subquery_handler(subquery)
+            elif resolver is not None:
+                subquery.response = await resolver.query(subquery.request, subquery)
+                if subquery.response.rcode == Rcode.NOERROR:
+                    for action in self.after:
+                        await action.on_response(subquery)
+                        if subquery.stop:
+                            break
+            if subquery.response is None:
+                subquery.response = Response.from_rcode(Rcode.SERVFAIL, upstream="")
         except Exception:
             logger.warning(
                 "路由 {} 的子查询 {} 失败", self.config.name, subquery.request.qname

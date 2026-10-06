@@ -2,9 +2,12 @@ from base64 import urlsafe_b64encode
 from typing import TYPE_CHECKING
 
 import dns.asyncbackend
+import dns.flags
 import dns.message
 from anyio import fail_after
 from curl_cffi import AsyncSession, CurlOpt
+from dns.query import BadResponse
+from dns.rdatatype import RdataType
 from loguru import logger
 
 from smartdns.nameservers.base import (
@@ -138,7 +141,33 @@ class CurlNameserver(BaseNameserver):
             raise ValueError(
                 f"Curl解析器 {self.name} 返回非200状态码: {result.status_code}"
             )
-        response = dns.message.from_wire(result.content)
+        response = dns.message.from_wire(
+            result.content,
+            one_rr_per_rrset=one_rr_per_rrset,
+            ignore_trailing=ignore_trailing,
+        )
+        # DoH 通过 HTTP 关联请求，DNS ID 可不同；Question 与消息语义仍须校验。
+        if (
+            not response.flags & dns.flags.QR
+            or response.flags & dns.flags.TC
+            or response.opcode() != request.opcode()
+            or response.question != request.question
+        ):
+            raise BadResponse
+        age_text = result.headers.get("Age", "0").strip()
+        age = 0
+        if age_text.isascii() and age_text.isdigit():
+            digits = age_text.lstrip("0") or "0"
+            # 超大 Age 只需使全部 DNS TTL 归零，避免无界整数转换。
+            age = int(digits) if len(digits) <= 10 else 0xFFFFFFFF
+        if age:
+            for section in response.sections[1:]:
+                for rrset in section:
+                    ttl = rrset.ttl
+                    # 负缓存的寿命还受 SOA.minimum 限制，必须一起扣除 HTTP Age。
+                    if rrset.rdtype == RdataType.SOA:
+                        ttl = min(ttl, *(rr.minimum for rr in rrset))
+                    rrset.ttl = max(0, ttl - age)
         # 关闭 RRset 索引以释放缓存响应中多余的引用（dnspython 运行期支持 index=None，
         # 但其类型标注未含 None）。
         response.index = None  # ty: ignore[invalid-assignment]

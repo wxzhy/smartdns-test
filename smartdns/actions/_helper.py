@@ -63,7 +63,11 @@ def clone_answer(answer: Answer, *, remaining_ttl: int | None = None) -> Answer:
 
 
 def replace_answer_rrset(
-    response: Response, new_rrset: RRset, upstream: str | None = None
+    response: Response,
+    new_rrset: RRset,
+    upstream: str | None = None,
+    *,
+    reset_ttl: bool = False,
 ) -> Response:
     """复制 Message 并替换主应答 RRset，不修改原 Response。"""
     answer = response.ans
@@ -83,7 +87,7 @@ def replace_answer_rrset(
         answer.nameserver,
         answer.port,
     )
-    copied.expiration = _replacement_expiration(copied)
+    copied.expiration = _replacement_expiration(copied, answer, reset_ttl=reset_ttl)
     return Response.from_answer(copied, upstream=upstream or response.upstream)
 
 
@@ -107,6 +111,7 @@ def replace_response_ip(
     name = answer.canonical_name
     rdclass = answer.rdclass
     rdtype = answer.rdtype
+    reset_ttl = ttl is not None
     if ttl is None:
         ttl = answer.rrset.ttl if answer.rrset is not None else 0
     rrset = RRset(name, rdclass, rdtype)
@@ -121,7 +126,7 @@ def replace_response_ip(
         return response
     if answer.rrset is None:
         return append_answer_rrset(response, rrset)
-    return replace_answer_rrset(response, rrset)
+    return replace_answer_rrset(response, rrset, reset_ttl=reset_ttl)
 
 
 def append_answer_rrset(
@@ -146,21 +151,26 @@ def append_answer_rrset(
         answer.nameserver,
         answer.port,
     )
-    copied.expiration = _replacement_expiration(copied)
+    copied.expiration = _replacement_expiration(copied, answer, reset_ttl=True)
     return Response.from_answer(copied, upstream=response.upstream)
 
 
-def _replacement_expiration(copied: Answer) -> float:
-    """替换后应答的缓存过期时刻：替换产生的 rrset 以其自身 TTL 从现在起算。
-
-    原 NODATA 无 SOA 的 expiration 是 dnspython 的 MAX_TTL（约 136 年），
-    原样继承会让静态替换结果在缓存中永不过期；带 SOA 负应答的较短
-    expiration 也被替换 rrset 的 TTL 覆盖（替换后权威的是新 rrset）。
-    """
-    now = time()
+def _replacement_expiration(
+    copied: Answer, original: Answer, *, reset_ttl: bool
+) -> float:
+    """保持来源期限；显式静态 TTL 可重设地址期限，但不能延长原 CNAME 链。"""
     if copied.rrset is not None:
-        return now + copied.rrset.ttl
-    return min(copied.expiration, now + _MAX_REPLACEMENT_TTL)
+        expiration = copied.expiration
+        if not reset_ttl:
+            expiration = min(expiration, original.expiration)
+        if original.chaining_result.cnames:
+            received = original.expiration - original.chaining_result.minimum_ttl
+            cname_expiration = received + min(
+                rrset.ttl for rrset in original.chaining_result.cnames
+            )
+            expiration = min(expiration, cname_expiration)
+        return expiration
+    return min(copied.expiration, time() + _MAX_REPLACEMENT_TTL)
 
 
 # 无记录替换兜底（理论不可达）：过期时刻不应超过常规上限。

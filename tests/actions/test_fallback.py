@@ -5,13 +5,20 @@ from typing import TYPE_CHECKING, cast
 
 import dns.message
 import pytest
+from anyio import sleep
 from dns.name import from_text
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
+from smartdns.actions import _ping
 from smartdns.actions.fallback import FallbackAction
-from smartdns.models.action import FallbackActionConfig, FallbackMap
+from smartdns.actions.speedcheck import SpeedcheckAction
+from smartdns.models.action import (
+    FallbackActionConfig,
+    FallbackMap,
+    SpeedcheckActionConfig,
+)
 from smartdns.models.context import Context, Request, Response
 from smartdns.models.geodata import IPInfo
 from smartdns.models.rule import RequestMatcher
@@ -167,3 +174,37 @@ async def test_fallback_keeps_nodata_when_no_map_matches() -> None:
     await action.on_response(context)
 
     assert context.response is original
+
+
+@pytest.mark.parametrize("stats", [None, {}])
+async def test_fallback_keeps_valid_answer_without_speed_statistics(stats) -> None:
+    context = Context(
+        worker_id=0, request=_request(), response=_a_response(), ip_infos=stats
+    )
+    original = context.response
+    await FallbackAction(_config()).on_response(context)
+    assert context.response is original
+
+
+async def test_full_probe_timeout_still_triggers_fallback(monkeypatch) -> None:
+    _ping.set_cache(None)
+
+    async def measure(ip, config):
+        await sleep(config.timeout)
+        return float("inf")
+
+    monkeypatch.setattr(_ping, "_measure", measure)
+    context = _context(rtt=None)
+    assert context.response is not None
+    speed = SpeedcheckAction(
+        SpeedcheckActionConfig(
+            name="speed",
+            type="speedcheck",
+            ping_config={"ping": False, "port": [443], "timeout": 0.1},
+        )
+    )
+    await speed.on_resolver(context, context.response)
+    assert context.ip_infos is not None
+    assert all(info.rtt == float("inf") for info in context.ip_infos.values())
+    await FallbackAction(_config()).on_response(context)
+    assert context.response.ip_list == ["203.0.113.10"]

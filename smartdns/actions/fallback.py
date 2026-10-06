@@ -31,6 +31,12 @@ class FallbackAction(BaseAction):
         # NOERROR 但无 IP（NODATA 空应答）视为没有可用 IP，交由静态映射回退。
         if context.response is None:
             return
+        # 未参与测速的当前应答同样可用；不能把缺少统计误判为全部失败。
+        if any(
+            info.ip not in (context.ip_infos or {})
+            for info in context.response.ip_infos or ()
+        ):
+            return
         # 未测速的 IP 仍是可用候选，例如 speedcheck 仅按倍率排序的模式。
         if context.ip_infos and any(
             info.rtt is None or info.rtt < float("inf")

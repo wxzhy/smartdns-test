@@ -45,14 +45,8 @@ async def _cancel_and_wait(task: Task[Any]) -> None:
 
 
 def answer_expires(key: object, value: Any, now: float) -> float:
-    """Answer 值缓存的 TLRUCache ttu：条目过期时刻取 Answer 自身 expiration
-    （DNS TTL；负应答为 SOA TTL）。
-
-    TTL=0 的应答 expiration 即当前时刻，而 TLRUCache 对"插入即过期"的条目
-    走删除分支、对不存在的键抛 KeyError，会打穿 cached() 的写入路径；
-    故钳制最小 1ms 生存期，让这类条目正常落库后立即过期。
-    """
-    return max(value.expiration, now + 0.001)
+    """严格使用来源应答的 expiration；TTL=0 不进入持久缓存。"""
+    return value.expiration
 
 
 async def _fetch_through[KT, VT](key: KT, fetch: Callable[[], Awaitable[VT]]) -> VT:
@@ -80,6 +74,7 @@ class AnswerCache[KT, VT](MutableMappingABC[KT, VT]):
 
     def __init__(self, maxsize: int, ttu: TTU = answer_expires) -> None:
         self._store = TLRUCache(maxsize=maxsize, ttu=ttu, timer=time)
+        self._ttu = ttu
         self._lock = Lock()
         # key 函数忽略 fetch_fn 本身，同键并发合并到首个 fetch_fn。
         self._fetch_merged = cached(self, key=lambda cache_key, fetch: cache_key)(
@@ -93,8 +88,11 @@ class AnswerCache[KT, VT](MutableMappingABC[KT, VT]):
             return self._store[key]
 
     def __setitem__(self, key: KT, value: VT) -> None:
-        with self._lock:
-            self._store[key] = value
+        with self._lock, self._store.timer as now:
+            if self._ttu(key, value, now) <= now:
+                self._store.pop(key, None)
+            else:
+                self._store[key] = value
 
     def __delitem__(self, key: KT) -> None:
         with self._lock:
@@ -111,8 +109,14 @@ class AnswerCache[KT, VT](MutableMappingABC[KT, VT]):
 
     def setdefault(self, key: KT, default: VT) -> VT:
         # 整体在锁内完成，保证并发首写只落一份（cached() 的 store 依赖此语义）。
-        with self._lock:
-            return self._store.setdefault(key, default)
+        with self._lock, self._store.timer as now:
+            try:
+                return self._store[key]
+            except KeyError:
+                # 插入即过期时直接返回本次结果，避免 setdefault 的回读 KeyError。
+                if self._ttu(key, default, now) > now:
+                    self._store[key] = default
+                return default
 
     # -- 异步读写 API --
 

@@ -200,13 +200,14 @@ class DNSCryptNameserver(BaseNameserver):
                         )
                         if not refreshed:
                             raise
-                    return await self._exchange(
-                        request,
-                        deadline,
-                        max_size,
-                        one_rr_per_rrset,
-                        ignore_trailing,
-                    )
+                # 锁只合并证书刷新；每个请求用固定密钥快照并行执行网络重试。
+                return await self._exchange(
+                    request,
+                    deadline,
+                    max_size,
+                    one_rr_per_rrset,
+                    ignore_trailing,
+                )
 
     def _is_cert_rotation_error(self, error: Exception) -> bool:
         """解密/应答校验失败视为证书轮换症状；超时与网络错误不算。"""

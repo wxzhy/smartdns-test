@@ -38,6 +38,8 @@ class Request:
     # time.monotonic() 截止时刻，可在 Master 和 Worker 的不同事件循环间传递。
     deadline: float | None = None
     shared_deadline: SharedDeadline | None = None
+    # 完整路由子查询只执行一层，避免加工链递归等待自身的缓存取数任务。
+    is_subquery: bool = False
 
     def __str__(self):
         return (
@@ -176,7 +178,7 @@ class Context:
     stop: bool = False
     # ConcurrentResolver 打在嵌套解析器子上下文上的内部查询标记
     is_subquery: bool = False
-    # on_response 阶段由 Action 设置；Router 以当前 resolver 执行后回调 on_subquery
+    # on_response 阶段由 Action 设置；完整路由处理后回调 on_subquery
     subquery: Context | None = None
     ext: dict[str, Any] = Field(
         default_factory=dict, description="扩展字段，用于存储额外信息"
@@ -199,15 +201,22 @@ class Context:
             request.qname if qname is None else qname,
             request.rdtype if rdtype is None else rdtype,
             rdclass=request.rdclass,
+            flags=request.msg.flags,
+            use_edns=request.msg.edns,
+            ednsflags=request.msg.ednsflags,
+            payload=request.msg.payload,
+            options=list(request.msg.options),
         )
+        subrequest = Request.from_message(
+            message,
+            request.listener,
+            request.remote_address,
+            deadline=request.deadline,
+            shared_deadline=request.shared_deadline,
+        )
+        subrequest.is_subquery = True
         return cls(
             worker_id=context.worker_id,
-            request=Request.from_message(
-                message,
-                request.listener,
-                request.remote_address,
-                deadline=request.deadline,
-                shared_deadline=request.shared_deadline,
-            ),
+            request=subrequest,
             is_subquery=True,
         )

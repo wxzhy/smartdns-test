@@ -15,6 +15,7 @@ from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
+from smartdns.actions._helper import replace_response_ip
 from smartdns.core.master import Master, _cache_key
 from smartdns.models.context import Request, Response
 
@@ -90,6 +91,54 @@ async def test_second_query_hits_cache_without_worker() -> None:
     assert first is not None
     assert second is not None
     assert second.rcode() == Rcode.NOERROR
+
+
+async def test_replaced_a_cannot_outlive_cname_chain_in_master_cache() -> None:
+    message = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
+        ";QUESTION\nexample.com. IN A\n;ANSWER\n"
+        "example.com. 1 IN CNAME edge.example.com.\n"
+        "edge.example.com. 300 IN A 192.0.2.1\n"
+    )
+    answer = Answer(
+        from_text("example.com."),
+        RdataType.A,
+        RdataClass.IN,
+        cast("QueryMessage", message),
+    )
+    response = replace_response_ip(
+        Response.from_answer(answer, upstream="up"), {IPv4Address("203.0.113.1")}, 300
+    )
+    assert response.ans is not None
+    assert response.ans.rrset is not None
+    assert response.ans.rrset.ttl == 300
+    assert 0 < response.ans.expiration - time() <= 1
+    master = _FakeMaster([response])
+    await master.dispatch(_request("192.0.2.10"))
+    await sleep(1.03)
+    await master.dispatch(_request("192.0.2.11"))
+    assert master.calls == 2
+
+
+async def test_rewrite_does_not_restart_remaining_cname_ttl() -> None:
+    message = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n"
+        ";QUESTION\nexample.com. IN A\n;ANSWER\n"
+        "example.com. 1 IN CNAME edge.example.com.\n"
+        "edge.example.com. 300 IN A 192.0.2.1\n"
+    )
+    answer = Answer(
+        from_text("example.com."),
+        RdataType.A,
+        RdataClass.IN,
+        cast("QueryMessage", message),
+    )
+    response = Response.from_answer(answer, upstream="up")
+    await sleep(0.03)
+    for ttl in (None, 300):
+        changed = replace_response_ip(response, {IPv4Address("203.0.113.1")}, ttl)
+        assert changed.ans is not None
+        assert changed.ans.expiration <= answer.expiration
 
 
 async def test_cache_hit_decays_ttl_by_remaining_lifetime() -> None:

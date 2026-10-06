@@ -1,14 +1,14 @@
 """HTTP 客户端的 ECH 缓存与 curl RESOLVE 配置回归测试。"""
 
 from ipaddress import IPv4Address, IPv6Address
+from time import time
 from typing import TYPE_CHECKING, cast
 
 import dns.asyncbackend
 import dns.message
 import pytest
 from anyio import Event, create_task_group, run, sleep, to_thread
-from cachetools import TTLCache
-from curl_cffi import AsyncSession, CurlOpt
+from curl_cffi import AsyncSession, Curl, CurlOpt
 from dns.name import from_text
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
@@ -19,6 +19,7 @@ from smartdns.models.http import HTTPClientConfig
 from smartdns.models.nameserver import CurlNameserverConfig
 from smartdns.nameservers.client import HTTPClient, set_ech_cache
 from smartdns.nameservers.curl import CurlNameserver
+from smartdns.utils.cache_async import AnswerCache
 
 if TYPE_CHECKING:
     from dns.message import QueryMessage
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 @pytest.fixture(autouse=True)
 def _reset_ech_cache() -> None:
     # 全局缓存会跨测试泄漏，每个用例绑定独立缓存（同 test_ping 的做法）。
-    set_ech_cache(TTLCache(maxsize=10, ttl=300))
+    set_ech_cache(AnswerCache(maxsize=10))
 
 
 def _ech_answer() -> Answer:
@@ -124,8 +125,7 @@ def _hosts_client() -> HTTPClient:
 
 def test_resolve_entries_include_port_and_ipv6_brackets() -> None:
     assert _hosts_client().resolve_entries(8443) == [
-        "dns.example.com:8443:192.0.2.1",
-        "dns.example.com:8443:[2001:db8::1]",
+        "dns.example.com:8443:192.0.2.1,[2001:db8::1]",
     ]
 
 
@@ -150,8 +150,7 @@ async def test_curl_session_gets_resolve_for_its_own_port() -> None:
     try:
         assert nameserver._curl is not None
         assert nameserver._curl.curl_options[CurlOpt.RESOLVE] == [
-            "dns.example.com:8443:192.0.2.1",
-            "dns.example.com:8443:[2001:db8::1]",
+            "dns.example.com:8443:192.0.2.1,[2001:db8::1]",
         ]
     finally:
         await nameserver.stop()
@@ -201,3 +200,73 @@ async def test_curl_timeout_includes_ech_lookup(
         )
 
     assert not curl.called
+
+
+@pytest.mark.parametrize("verify", [True, False])
+def test_bootstrap_doh_verification_option_accepts_native_curl(verify: bool) -> None:
+    client = HTTPClient(
+        HTTPClientConfig(doh="https://dns.example.com/dns-query", doh_verify=verify)
+    )
+    option = client._base_curl_options()[CurlOpt.DOH_SSL_VERIFYPEER]
+    assert type(option) is int
+    assert option == int(verify)
+    curl = Curl()
+    try:
+        curl.setopt(CurlOpt.DOH_SSL_VERIFYPEER, option)
+    finally:
+        curl.close()
+
+
+async def test_ech_expiration_follows_source_answer(monkeypatch) -> None:
+    resolver = _Resolver()
+    client = _client(resolver)
+    answer = _ech_answer()
+    answer.expiration = time() + 0.05
+
+    async def lookup(domain, rdtype) -> Answer:
+        resolver.calls += 1
+        return answer
+
+    monkeypatch.setattr(resolver, "resolve", lookup)
+    assert await client.get_ech_key("example.com") == "AAEC"
+    assert await client.get_ech_key("example.com") == "AAEC"
+    assert resolver.calls == 1
+    await sleep(0.08)
+    assert await client.get_ech_key("example.com") == "AAEC"
+    assert resolver.calls == 2
+
+
+async def test_ech_transient_failure_does_not_suppress_retry(monkeypatch) -> None:
+    resolver = _Resolver()
+    client = _client(resolver)
+
+    async def lookup(domain, rdtype) -> Answer:
+        resolver.calls += 1
+        if resolver.calls == 1:
+            raise TimeoutError
+        return _ech_answer()
+
+    monkeypatch.setattr(resolver, "resolve", lookup)
+    assert await client.get_ech_key("example.com") is None
+    assert await client.get_ech_key("example.com") == "AAEC"
+    assert resolver.calls == 2
+
+
+async def test_real_no_ech_result_expires_with_source(monkeypatch) -> None:
+    resolver = _Resolver()
+    client = _client(resolver)
+    answer = _ech_answer()
+    answer.rrset = None
+    answer.expiration = time() + 0.05
+
+    async def lookup(domain, rdtype) -> Answer:
+        resolver.calls += 1
+        return answer
+
+    monkeypatch.setattr(resolver, "resolve", lookup)
+    assert await client.get_ech_key("example.com") is None
+    assert await client.get_ech_key("example.com") is None
+    assert resolver.calls == 1
+    await sleep(0.08)
+    assert await client.get_ech_key("example.com") is None
+    assert resolver.calls == 2

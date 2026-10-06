@@ -190,10 +190,14 @@
 | `log` | `LogAction` | before | 打印请求摘要 |
 | `replace` | `ReplaceAction` | on_resolver | 命中 IP 标签的应答按映射改写 IP，**保留主机位**：用原 IP 在 `prefixlen` 外的主机位作偏移叠加到新基址上（用于把 CDN IP 重定向到自有优选 IP 段） |
 | `speedcheck` | `SpeedcheckAction` | on_resolver + on_response | 优先选择有有效 RTT 的 IP，按 RTT × 倍率排序并在相同标签集合、加权 RTT 阈值内取前 N 个；所有候选都没有有效 RTT 时仅按倍率排序取前 N 个。倍率先查 `tag_multipliers`，再查 `asn_multipliers`，默认 1；关闭探测后仍可使用已有 RTT。应答发送时保留排序顺序 |
-| `https` | `HTTPSAction` | on_response | 处理 HTTPS(SVCB) 记录：可选移除 ipv4/ipv6 hint、把 ALPN 的 h3 改成 h2，并为命中域名+IP 标签的记录**注入 ECH 密钥**（从配置的 ECH 域名现查） |
+| `https` | `HTTPSAction` | on_response | 清理 ServiceMode 记录的 ipv4/ipv6 hint 和 ALPN 中的 h3，同步修正 mandatory/no-default-alpn 依赖；AliasMode 保留别名。为命中域名+IP 标签的记录注入 ECH 密钥 |
 | `fallback` | `FallbackAction` | on_response | 若应答无 IP 或候选 IP 测速**全部失败**，则命中映射的域名回退到静态 IP 列表；未测速的 IP 仍视为可用候选 |
 
-> ECH 查询带缓存与同键 in-flight 去重。测速结果缓存 1800 秒，并按 IP、协议方式、ICMP 特权模式、端口和超时配置区分；同一事件循环内还会合并进行中的同键测速。
+> ECH 缓存按来源 HTTPS 应答的剩余 TTL 到期（最长 300 秒），临时查询失败不缓存；注入或合成的 HTTPS 记录也受 ECH 来源期限限制。HTTPS 的 A 子查询经完整 A 路由，并复用 Master 最终应答缓存及同键在途查询，保留监听器、客户端、ECS 和请求预算；内部子查询只执行一层。此处复用的是已完成加工的 A 应答，监听器发送仍由各客户端请求独立完成。
+
+> 测速结果缓存 1800 秒，并按 IP、协议方式、ICMP 特权模式、端口和超时配置区分；同一事件循环内合并进行中的同键测速。测速和容量排队共同受测速预算限制，耗尽后保留未测得 RTT 的候选并继续过滤。外部取消不会发布未完成的候选。
+
+> 单个 Nameserver 的 `timeout` 是上限，与调用方剩余预算取较小值。DoH 校验 Question、QR、opcode 和完整性，并扣除 HTTP Age；DNS ID 通过 HTTP 请求关联，允许与请求不同。DNS 缓存保持 CNAME 链最短期限，TTL=0 不进入持久缓存；静态 NODATA 按配置 TTL 到期。
 
 ---
 

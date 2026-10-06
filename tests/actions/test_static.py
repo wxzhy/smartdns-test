@@ -1,6 +1,7 @@
 """StaticAction 静态应答测试：TTL 配置、地址分派与停止语义。"""
 
 from ipaddress import IPv4Address, IPv6Address
+from time import time
 
 import dns.message
 import dns.rcode
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 from smartdns.actions.static import StaticAction
 from smartdns.models.action import StaticActionConfig
 from smartdns.models.context import Context, Request
+from smartdns.utils.cache_async import AnswerCache
 
 
 def _context(rdtype: str) -> Context:
@@ -107,3 +109,23 @@ def test_static_config_defaults_and_validation() -> None:
 
     with pytest.raises(ValidationError):
         StaticActionConfig(name="s", type="static", ttl=-1)
+
+
+@pytest.mark.parametrize("rdtype", ["TXT", "HTTPS", "A", "AAAA"])
+@pytest.mark.parametrize("ttl", [0, 60])
+async def test_static_nodata_respects_configured_cache_lifetime(
+    rdtype: str, ttl: int
+) -> None:
+    action = StaticAction(
+        StaticActionConfig(name="s", type="static", ipv4=set(), ipv6=set(), ttl=ttl)
+    )
+    context = _context(rdtype)
+    await action.on_request(context)
+    assert context.response is not None
+    answer = context.response.ans
+    assert answer is not None
+    assert answer.rrset is None
+    assert ttl - 1 <= answer.expiration - time() <= ttl
+    cache = AnswerCache(maxsize=10)
+    await cache.write("static", answer)
+    assert (await cache.read("static") is None) == (ttl == 0)

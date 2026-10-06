@@ -13,6 +13,7 @@ from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
+from smartdns.actions import _ping
 from smartdns.actions.filter import FilterAction
 from smartdns.actions.replace import ReplaceAction
 from smartdns.actions.speedcheck import SpeedcheckAction
@@ -29,6 +30,7 @@ from smartdns.models.geodata import IPInfo
 from smartdns.models.resolver import ConcurrentResolverConfig
 from smartdns.models.rule import RequestMatcher, ResponseIPMatcher
 from smartdns.resolvers.concurrent import ConcurrentResolver
+from smartdns.utils.concurrency import GlobalCapacityLimiter
 from smartdns.utils.deadline import SharedDeadline
 
 if TYPE_CHECKING:
@@ -420,6 +422,63 @@ async def test_cancelled_nested_branch_cannot_publish_candidates(monkeypatch) ->
     await outer_speed.on_response(context)
     assert context.response is not None
     assert context.response.upstream == "good"
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+@pytest.mark.parametrize("shared", [False, True])
+async def test_saturated_measurement_keeps_answer_and_runs_later_filter(
+    blocked: bool, shared: bool, monkeypatch
+) -> None:
+    limiter = GlobalCapacityLimiter(1)
+    monkeypatch.setattr(_ping, "_MEASURE_LIMIT", limiter)
+    _ping.set_cache(None)
+    measure_calls = 0
+
+    async def measure(ip, config):
+        nonlocal measure_calls
+        measure_calls += 1
+        return 1.0
+
+    monkeypatch.setattr(_ping, "_measure", measure)
+    speed = _speed("speed", 0.3)
+    filtering = FilterAction(
+        FilterActionConfig(
+            name="filter",
+            type="filter",
+            filters=[
+                FilterItem(
+                    match_name=RequestMatcher(),
+                    match_ip=ResponseIPMatcher(ip_exclude={"blocked"}),
+                )
+            ],
+        )
+    )
+    upstream = _FakeResolver(
+        "up", _tagged("up", "192.0.2.1", "blocked" if blocked else "allowed")
+    )
+    resolver = _make(
+        ["up"],
+        _FakeManager([upstream]),
+        timeout=0.2,
+        action_names=["speed", "filter"],
+        actions=cast("_ActionManager", _BranchActions(speed=speed, filter=filtering)),
+    )
+    context = _context()
+    context.request.deadline = monotonic() + 0.3
+    if shared:
+        context.request.shared_deadline = SharedDeadline()
+        context.request.shared_deadline.add(context.request.deadline)
+    async with limiter:
+        result = await resolver.query(context.request, context)
+        assert result.rcode == (Rcode.SERVFAIL if blocked else Rcode.NOERROR)
+        assert bool(context.candidates) != blocked
+        assert upstream._response.invalid == blocked
+        assert measure_calls == 0
+    assert not limiter._waiters
+    assert limiter._available == 1
+    if not blocked:
+        assert context.ip_infos is not None
+        assert all(info.rtt is None for info in context.ip_infos.values())
 
 
 @pytest.mark.parametrize("blocked_wins", [False, True])

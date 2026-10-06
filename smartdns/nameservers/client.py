@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from ipaddress import IPv6Address
 from threading import Lock
+from time import time
 from typing import TYPE_CHECKING
 
 from curl_cffi import AsyncSession, CurlHttpVersion, CurlOpt
@@ -19,19 +21,25 @@ if TYPE_CHECKING:
     from smartdns.models.config import HTTPClientConfig
 
 
+@dataclass(frozen=True)
+class ECHResult:
+    value: str | None
+    expiration: float
+
+
 class _CacheHolder:
-    cache: MutableMapping[str, str | None] | None = None
+    cache: MutableMapping[str, ECHResult] | None = None
 
 
 _cache_lock = Lock()
 
 
-def set_ech_cache(cache: MutableMapping[str, str | None] | None) -> None:
-    """绑定 ECH 结果缓存；缓存全局共享，只保存跨线程安全的字符串结果。"""
+def set_ech_cache(cache: MutableMapping[str, ECHResult] | None) -> None:
+    """绑定 ECH 结果缓存，值与来源 TTL 均为跨线程安全的不可变数据。"""
     _CacheHolder.cache = cache
 
 
-def _get_ech_cache() -> MutableMapping[str, str | None] | None:
+def _get_ech_cache() -> MutableMapping[str, ECHResult] | None:
     return _CacheHolder.cache
 
 
@@ -72,27 +80,28 @@ class HTTPClient:
         opt: dict[CurlOpt, object] = {}
         if self.config.doh is not None:
             opt[CurlOpt.DOH_URL] = str(self.config.doh)
-            opt[CurlOpt.DOH_SSL_VERIFYPEER] = (
-                "true" if self.config.doh_verify else "false"
-            )
+            opt[CurlOpt.DOH_SSL_VERIFYPEER] = int(self.config.doh_verify)
         opt[CurlOpt.DNS_CACHE_TIMEOUT] = self.config.dns_cache_ttl
         opt[CurlOpt.DNS_SHUFFLE_ADDRESSES] = 1 if self.config.shuffle else 0
         return opt
 
     def resolve_entries(self, port: int) -> list[str]:
-        """为指定端口构建 hosts 的 curl RESOLVE 条目（host:port:ip）。"""
+        """同一 host:port 的全部地址必须位于一个 RESOLVE 条目中。"""
         if not self.config.hosts:
             return []
         entries = []
         for host in sorted(self.config.hosts):
+            addresses = []
             for ip in sorted(
                 self.config.hosts[host],
                 key=lambda address: (address.version, int(address)),
             ):
                 if isinstance(ip, IPv6Address):
-                    entries.append(f"{host}:{port}:[{ip}]")
+                    addresses.append(f"[{ip}]")
                 else:
-                    entries.append(f"{host}:{port}:{ip}")
+                    addresses.append(str(ip))
+            if addresses:
+                entries.append(f"{host}:{port}:{','.join(addresses)}")
         return entries
 
     def create_session(
@@ -118,21 +127,32 @@ class HTTPClient:
             curl_options=opt,
         )
 
-    @cached(_get_ech_cache, key=_ech_cache_key, lock=_cache_lock)
     async def get_ech_key(self, domain: str | Name) -> str | None:
-        """查询 ECHConfig；缓存和同键调用合并由 decorator 统一处理。"""
+        result = await self.get_ech_result(domain)
+        return result.value if result is not None else None
+
+    async def get_ech_result(self, domain: str | Name) -> ECHResult | None:
+        """临时失败不落库；成功与真实无 ECH 结果按来源应答 TTL 缓存。"""
         if self.resolver is None:
             raise ValueError("HTTP客户端未配置上游DNS解析器")
+        try:
+            return await self._resolve_ech(domain)
+        except Exception:
+            logger.exception("获取ECH密钥失败，域名: {}", domain)
+            return None
+
+    @cached(_get_ech_cache, key=_ech_cache_key, lock=_cache_lock)
+    async def _resolve_ech(self, domain: str | Name) -> ECHResult:
         if isinstance(domain, str):
             domain = from_text(domain)
         assert self.resolver is not None
-        try:
-            ans = await self.resolver.resolve(domain, RdataType.HTTPS)
-            if ans.rrset is not None:
-                for rr in ans.rrset:
-                    ecl = rr.params.get(ParamKey.ECH)
-                    if ecl is not None:
-                        return ecl.to_text().strip('"')
-        except Exception:
-            logger.exception("获取ECH密钥失败，域名: {}", domain)
-        return None
+        ans = await self.resolver.resolve(domain, RdataType.HTTPS)
+        expiration = min(ans.expiration, time() + 300)
+        if ans.rrset is not None:
+            for rr in ans.rrset:
+                if rr.priority == 0:
+                    continue
+                ecl = rr.params.get(ParamKey.ECH)
+                if ecl is not None:
+                    return ECHResult(ecl.to_text().strip('"'), expiration)
+        return ECHResult(None, expiration)

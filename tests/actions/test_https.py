@@ -26,6 +26,7 @@ from smartdns.core.master import Master
 from smartdns.models.action import HTTPSActionConfig
 from smartdns.models.context import Context, Request, Response
 from smartdns.models.rule import RequestMatcher, ResponseIPMatcher, Rule
+from smartdns.nameservers.client import ECHResult
 from smartdns.routing.router import Router
 
 if TYPE_CHECKING:
@@ -88,15 +89,16 @@ def _action(
 
 
 class _FakeClient:
-    """duck-typed HTTPClient：get_ech_key 返回固定的有效 ECH 值。"""
+    """duck-typed HTTPClient：返回有效 ECH 值与来源 TTL。"""
 
-    def __init__(self, ech: str | None = "YWJj") -> None:
+    def __init__(self, ech: str | None = "YWJj", ttl: float = 300) -> None:
         self._ech = ech
+        self._ttl = ttl
         self.calls = 0
 
-    async def get_ech_key(self, domain: str) -> str | None:
+    async def get_ech_result(self, domain: str) -> ECHResult:
         self.calls += 1
-        return self._ech
+        return ECHResult(self._ech, time() + self._ttl)
 
 
 def _a_response(
@@ -159,10 +161,10 @@ class _Lookup:
 @pytest.mark.parametrize("waiting", ["ech", "subquery_ech", "subquery"])
 async def test_timeout_caches_cleaned_https_answer(waiting: str) -> None:
     class SlowClient(_FakeClient):
-        async def get_ech_key(self, domain: str) -> str | None:
+        async def get_ech_result(self, domain: str) -> ECHResult:
             self.calls += 1
             await sleep(10)
-            return self._ech
+            return ECHResult(self._ech, time() + 300)
 
     class Resolver(_TypedResolver):
         async def query(
@@ -255,6 +257,74 @@ async def test_h3_only_alpn_is_removed_entirely() -> None:
     await action.on_response(context)
     rr = next(iter(_rrset(context.response)))
     assert ParamKey.ALPN not in rr.params
+
+
+@pytest.mark.parametrize(
+    ("record", "remaining_keys"),
+    [
+        ("1 . mandatory=ipv4hint ipv4hint=192.0.2.1", set()),
+        ("1 . alpn=h3 no-default-alpn", set()),
+        ("1 . mandatory=alpn alpn=h3", set()),
+        (
+            "1 . mandatory=alpn,ipv4hint alpn=h2,h3 ipv4hint=192.0.2.1",
+            {ParamKey.MANDATORY, ParamKey.ALPN},
+        ),
+        (
+            "1 . mandatory=alpn,no-default-alpn alpn=h3 no-default-alpn",
+            set(),
+        ),
+    ],
+)
+async def test_cleanup_keeps_https_parameter_dependencies_valid(
+    record: str, remaining_keys: set[ParamKey]
+) -> None:
+    original = _https_response(record)
+    original_text = next(iter(_rrset(original))).to_text()
+    context = Context(worker_id=0, request=_https_request(), response=original)
+    await _action(add_ech=False).on_response(context)
+    rr = next(iter(_rrset(context.response)))
+    assert set(rr.params) == remaining_keys
+    if ParamKey.MANDATORY in rr.params:
+        assert rr.params[ParamKey.MANDATORY].keys == (ParamKey.ALPN,)
+    assert context.response is not None
+    assert context.response.ans is not None
+    wire = context.request.make_answer(context.response.ans).to_wire()
+    assert dns.message.from_wire(wire).answer[0] == _rrset(context.response)
+    assert context.response is not original
+    assert next(iter(_rrset(original))).to_text() == original_text
+
+
+async def test_alias_mode_remains_valid_and_does_not_fetch_ech() -> None:
+    client = _FakeClient()
+    original = _https_response("0 alias.example.")
+    context = Context(worker_id=0, request=_https_request(), response=original)
+    await _action(client=cast("HTTPClient", client)).on_response(context)
+    assert context.response is original
+    assert context.subquery is None
+    assert client.calls == 0
+    assert original.ans is not None
+    wire = context.request.make_answer(original.ans).to_wire()
+    assert dns.message.from_wire(wire).answer[0][0].priority == 0
+
+
+@pytest.mark.parametrize("nodata", [False, True])
+@pytest.mark.parametrize("ttl", [0.0, 1.5])
+async def test_injected_and_synthetic_https_follow_ech_source_ttl(
+    nodata: bool, ttl: float
+) -> None:
+    client = _FakeClient(ttl=ttl)
+    action = _action(client=cast("HTTPClient", client))
+    original = _https_response() if nodata else _https_response("1 . alpn=h2")
+    context = Context(worker_id=0, request=_https_request(), response=original)
+    await action.on_response(context)
+    if nodata:
+        await action.on_subquery(context, _a_response("192.0.2.1"))
+    assert context.response is not None
+    assert context.response.ans is not None
+    rrset = _rrset(context.response)
+    assert ParamKey.ECH in rrset[0].params
+    assert 0 <= rrset.ttl <= int(ttl)
+    assert context.response.ans.expiration - time() <= ttl
 
 
 async def test_no_hint_defers_ech_to_subquery() -> None:
@@ -433,7 +503,7 @@ async def test_router_synthesizes_https_for_x_com_nodata() -> None:
     assert context.subquery is not None
     assert context.subquery.request.qname == from_text("x.com.")
     assert context.subquery.request.rdtype == RdataType.A
-    assert resolver.contexts == [context, None]
+    assert resolver.contexts == [context, context.subquery]
     rrset = _rrset(context.response)
     assert rrset.name == from_text("x.com.")
     assert 0 < rrset.ttl <= 180
@@ -697,7 +767,7 @@ async def test_match_name_gates_defer() -> None:
 
 
 async def test_router_runs_a_subquery_for_hintless_https() -> None:
-    # Router 级端到端：on_response 触发 → Router 以 context=None 执行 A 子查询
+    # Router 级端到端：on_response 触发 → Router 以独立上下文执行 A 子查询
     # → on_subquery 用应答 IP 标签完成判定并注入 ECH。
     action = _action(
         match_ip=ResponseIPMatcher(ip_include={"google"}),
@@ -718,7 +788,7 @@ async def test_router_runs_a_subquery_for_hintless_https() -> None:
     context = Context(worker_id=0, request=_https_request())
     assert await router.query(context) is True
     assert resolver.contexts[0] is context
-    assert resolver.contexts[1] is None
+    assert resolver.contexts[1] is context.subquery
     assert context.response is not None
     rr = next(iter(_rrset(context.response)))
     assert ParamKey.ECH in rr.params

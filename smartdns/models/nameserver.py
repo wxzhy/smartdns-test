@@ -15,7 +15,9 @@ class BaseNameserverConfig(StrictModel):
     """Nameserver 配置基类。"""
 
     name: str
-    timeout: float = Field(default=5.0, ge=0.1, description="请求超时时间（秒）")
+    timeout: float = Field(
+        default=5.0, ge=0.1, description="单次上游查询超时上限（秒）"
+    )
 
 
 class AddressNameserverConfig(BaseNameserverConfig):

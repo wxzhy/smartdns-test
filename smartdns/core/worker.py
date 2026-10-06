@@ -17,7 +17,7 @@ from smartdns.routing.router import Router
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop, Task
-    from collections.abc import Coroutine
+    from collections.abc import Awaitable, Callable, Coroutine
     from concurrent.futures import Future
     from typing import Any
 
@@ -31,7 +31,12 @@ def _servfail() -> Response:
 
 
 class Worker:
-    def __init__(self, worker_id: int, config: Config):
+    def __init__(
+        self,
+        worker_id: int,
+        config: Config,
+        subquery_handler: Callable[[Request], Awaitable[Response]] | None = None,
+    ):
         self.worker_id = worker_id
         self.config = config
         self._nameservers: NameserverManager | None = None
@@ -42,6 +47,7 @@ class Worker:
         self._loop: AbstractEventLoop | None = None
         self._tasks: set[Task[Any]] = set()
         self._stopping = False
+        self._subquery_handler = subquery_handler
 
     def submit[T](self, coroutine: Coroutine[Any, Any, T]) -> Future[T]:
         """从 Master 非阻塞地提交任务；Future 取消会传递给 Worker 任务。"""
@@ -77,7 +83,7 @@ class Worker:
                 nameservers=self._nameservers, actions=self._actions
             )
             self._rules = [
-                Router(rule, self._resolvers, self._actions)
+                Router(rule, self._resolvers, self._actions, self._query_subquery)
                 for rule in self.config.routing
             ]
         except BaseException:
@@ -128,7 +134,11 @@ class Worker:
         assert task is not None
         self._tasks.add(task)
         try:
-            ctx = Context(worker_id=self.worker_id, request=request)
+            ctx = Context(
+                worker_id=self.worker_id,
+                request=request,
+                is_subquery=request.is_subquery,
+            )
             await self.process(ctx)
             if ctx.response is not None:
                 return ctx.response
@@ -136,6 +146,12 @@ class Worker:
             return _servfail()
         finally:
             self._tasks.discard(task)
+
+    async def _query_subquery(self, context: Context) -> None:
+        if self._subquery_handler is not None:
+            context.response = await self._subquery_handler(context.request)
+        else:
+            await self.process(context)
 
     async def process(self, context: Context) -> None:
         """按路由表依次处理请求上下文"""

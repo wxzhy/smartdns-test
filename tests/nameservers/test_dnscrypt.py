@@ -589,9 +589,11 @@ async def test_concurrent_rotation_errors_reuse_single_refresh(
         attempts: dict[int, int] = {}
         first_attempts = 0
         both_started = asyncio.Event()
+        retry_attempts = 0
+        both_retried = asyncio.Event()
 
         async def controlled_exchange(request, *args, **kwargs):
-            nonlocal first_attempts
+            nonlocal first_attempts, retry_attempts
             key = id(request)
             attempts[key] = attempts.get(key, 0) + 1
             if attempts[key] == 1:
@@ -600,6 +602,11 @@ async def test_concurrent_rotation_errors_reuse_single_refresh(
                     both_started.set()
                 await both_started.wait()
                 raise CryptoError("旧证书交换失败")
+            retry_attempts += 1
+            if retry_attempts == 2:
+                both_retried.set()
+            # 两个重试都进入后再发包；把网络重试放在刷新锁内会卡在此处。
+            await asyncio.wait_for(both_retried.wait(), 0.5)
             return await original_exchange(request, *args, **kwargs)
 
         monkeypatch.setattr(nameserver, "_exchange", controlled_exchange)

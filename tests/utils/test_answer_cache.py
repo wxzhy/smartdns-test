@@ -32,6 +32,24 @@ async def test_entry_expires_by_answer_ttl() -> None:
     assert await cache.read("short") is None
 
 
+@pytest.mark.parametrize("ttl", [0, -1])
+async def test_expired_result_is_returned_but_never_cached(ttl: float) -> None:
+    cache: AnswerCache[str, _Item] = AnswerCache(maxsize=10)
+    calls = 0
+
+    async def fetch() -> _Item:
+        nonlocal calls
+        calls += 1
+        return _Item(ttl=ttl)
+
+    assert (await cache.fetch("key", fetch)).expiration <= time()
+    assert await cache.read("key") is None
+    assert (await cache.fetch("key", fetch)).expiration <= time()
+    assert calls == 2
+    await cache.write("key", _Item(ttl=ttl))
+    assert await cache.read("key") is None
+
+
 async def test_fetch_merges_concurrent_same_key() -> None:
     """同键并发 fetch 合并为一次执行，全部等待者拿到结果。"""
     cache: AnswerCache[str, _Item] = AnswerCache(maxsize=10)

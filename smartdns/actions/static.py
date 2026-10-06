@@ -1,3 +1,4 @@
+from time import time
 from typing import TYPE_CHECKING, cast
 
 from dns.message import QueryMessage, make_query, make_response
@@ -49,6 +50,8 @@ class StaticAction(BaseAction):
             # 否则 Answer.resolve_chaining 拿不到 answer，rrset/ip_list 为空。
             message.index = None  # ty: ignore[invalid-assignment]
         answer = Answer(name, rdtype, rdclass, cast("QueryMessage", message))
+        # 空静态应答没有 SOA，dnspython 默认使用 MAX_TTL；仍应遵守配置 TTL。
+        answer.expiration = min(answer.expiration, time() + self.ttl)
         context.response = Response.from_answer(answer, upstream=self.name)
         # 静态应答后立即停止后续处理。
         context.stop = True

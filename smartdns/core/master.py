@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from asyncio import Lock, wrap_future
+from asyncio import Lock, get_running_loop, run_coroutine_threadsafe, wrap_future
 from contextlib import ExitStack
 from dataclasses import replace
 from random import randint
@@ -11,7 +11,6 @@ from aiofastnet import patch_loop
 from anyio import CancelScope, fail_after
 from anyio.from_thread import BlockingPortal, start_blocking_portal
 from cachetools import TLRUCache
-from cachetools import TTLCache as CachetoolsTTLCache
 from dns.rcode import Rcode
 from loguru import logger
 
@@ -27,6 +26,7 @@ from smartdns.utils.deadline import SharedDeadline
 from .worker import Worker
 
 if TYPE_CHECKING:
+    from asyncio import AbstractEventLoop
     from collections.abc import MutableMapping
 
     from dns.message import Message
@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
     from smartdns.actions._ping import SpeedtestKey
     from smartdns.models.config import Config
+    from smartdns.nameservers.client import ECHResult
 
 type CacheKey = tuple[Name, RdataType, RdataClass, str, str | None]
 
@@ -82,10 +83,12 @@ class Master:
         self._shared_deadlines: dict[CacheKey, SharedDeadline] = {}
         self._stop_lock = Lock()
         self._stopping = False
+        self._loop: AbstractEventLoop | None = None
 
     async def start(self) -> None:
         """启动 Master 服务"""
         patch_loop()
+        self._loop = get_running_loop()
         self._stopping = False
         logger.info("启动 Master 服务")
         if self.config.geodata:
@@ -94,12 +97,16 @@ class Master:
             maxsize=10000, ttu=lambda key, value, now: now + 1800
         )
         set_cache(cast("MutableMapping[SpeedtestKey, float]", speedtest_cache))
-        ech_cache: CachetoolsTTLCache = CachetoolsTTLCache(maxsize=100, ttl=300)
-        set_ech_cache(cast("MutableMapping[str, str | None]", ech_cache))
+        ech_cache: AnswerCache[str, ECHResult] = AnswerCache(maxsize=100)
+        set_ech_cache(ech_cache)
         with ExitStack() as stack:
             try:
                 for i in range(self.worker_count):
-                    worker = Worker(worker_id=i, config=self.config)
+                    worker = Worker(
+                        worker_id=i,
+                        config=self.config,
+                        subquery_handler=self.query_subquery,
+                    )
                     portal = stack.enter_context(
                         start_blocking_portal(backend_options={"use_uvloop": True})
                     )
@@ -143,11 +150,34 @@ class Master:
 
     async def dispatch(self, request: Request) -> Message | None:
         """分发请求到 Worker 并返回响应 Message。"""
+        return self._to_client_message(request, await self.resolve(request))
+
+    async def query_subquery(self, request: Request) -> Response:
+        """从 Worker 非阻塞回到 Master 循环，复用最终应答缓存及同键在途查询。"""
+        if request.shared_deadline is not None:
+            # 原始等待者可能已经离开；在提交时采用仍存活的最早等待者预算。
+            request = replace(
+                request,
+                deadline=request.shared_deadline.deadline(response_ready=True),
+            )
+        loop = self._loop
+        if loop is None or loop is get_running_loop():
+            return await self.resolve(request)
+        coroutine = self.resolve(request)
+        try:
+            future = run_coroutine_threadsafe(coroutine, loop)
+        except BaseException:
+            coroutine.close()
+            raise
+        return await wrap_future(future)
+
+    async def resolve(self, request: Request) -> Response:
+        """取得完整路由加工后的独立 Response，供监听器与内部子查询共用。"""
         if self._stopping:
-            return request.make_error(Rcode.SERVFAIL)
+            return Response.from_rcode(Rcode.SERVFAIL, upstream="")
         cache = self._cache
         if cache is None:
-            return self._to_client_message(request, await self._query_worker(request))
+            return await self._query_worker(request)
         timeout = (
             None
             if request.deadline is None
@@ -167,7 +197,7 @@ class Master:
                         key, lambda: self._query_answer(shared_request)
                     )
                 except _UncacheableResponseError as error:
-                    return self._to_client_message(request, error.response)
+                    return error.response
                 finally:
                     # 新调用可在旧取数任务的取消清理期间进入。按等待者生命周期
                     # 保留期限组，避免旧任务结束时删掉新调用正在使用的期限组。
@@ -179,7 +209,9 @@ class Master:
         # 复制回放：命中与未命中统一按剩余生存期刷新各 section TTL，
         # 缓存内原始 Answer 不外泄给调用方。
         remaining = max(0, int(answer.expiration - time()))
-        return request.make_answer(clone_answer(answer, remaining_ttl=remaining))
+        return Response.from_answer(
+            clone_answer(answer, remaining_ttl=remaining), upstream="cache"
+        )
 
     @staticmethod
     def _to_client_message(request: Request, response: Response) -> Message | None:

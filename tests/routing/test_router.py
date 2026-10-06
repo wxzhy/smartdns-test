@@ -5,9 +5,8 @@
 修复后：无应答时返回 False，交后续路由处理。
 另：domain_include 已配但无 geo 数据（country=None）时应 fail-closed 不匹配。
 
-子查询：on_response 阶段动作设置 context.subquery 后，Router 以当前
-resolver 重查（context=None，跳过 resolver 内部动作），完成后回调
-after 动作的 on_subquery。
+子查询：独立上下文运行 resolver 动作和应答加工；生产 Worker 通过 Master
+复用完整路由与最终缓存，完成后回调主查询 after 动作的 on_subquery。
 """
 
 from typing import TYPE_CHECKING, cast
@@ -178,17 +177,18 @@ def _subquery_router(
     return Router(rule, cast("ResolverManager", lookup), cast("ActionManager", lookup))
 
 
-async def test_subquery_queries_resolver_without_context() -> None:
+async def test_subquery_queries_resolver_with_isolated_context() -> None:
     resolver = _RecordingResolver("up")
     setter = _RecordingAction("setter", set_subquery=True)
     other = _RecordingAction("other")
     router = _subquery_router(resolver, [setter, other])
     context = _context()
     assert await router.query(context) is True
-    # 主查询 + 子查询各一次；子查询以 context=None 调用，查询原请求目标。
+    # 主查询 + 子查询各一次；子查询有独立上下文，执行 resolver Actions。
     assert len(resolver.calls) == 2
     sub_request, sub_context = resolver.calls[1]
-    assert sub_context is None
+    assert sub_context is context.subquery
+    assert sub_context is not context
     assert sub_request.qname == context.request.qname
     assert sub_request.rdtype == context.request.rdtype
     # 全部 after 动作收到 (原上下文, 子查询响应)。
@@ -243,9 +243,9 @@ async def test_subquery_error_yields_servfail_to_on_subquery() -> None:
     router = _subquery_router(resolver, [first, second])
     context = _context()
     assert await router.query(context) is True
-    # 失败的子查询调用同样被记录（append 在抛错之前），context 为 None。
+    # 失败的子查询调用同样被记录（append 在抛错之前），保留独立上下文。
     assert len(resolver.calls) == 2
-    assert resolver.calls[1][1] is None
+    assert resolver.calls[1][1] is context.subquery
     assert first.on_subquery_calls[0][1].rcode == Rcode.SERVFAIL
     assert second.on_subquery_calls[0][1].rcode == Rcode.SERVFAIL
 
