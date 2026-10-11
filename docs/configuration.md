@@ -83,7 +83,7 @@ client:
 | `doh_verify` | true | 上述 DoH URL 的证书验证 |
 | `resolver` | null | 获取 ECHConfig 时使用的内嵌 AioDNSResolver |
 
-只有使用字符串形式的 `nameservers[].ech` 或 HTTPS Action 注入 ECH 时，才需要 `client.resolver`。
+只有使用字符串形式的 `nameservers[].ech` 或 HTTPS Action 注入 ECH（`add_ech: true`，默认）时，才需要 `client.resolver`；此时缺少该配置会在加载时报错。
 
 ## 4. Listener
 
@@ -321,6 +321,15 @@ match_ip:
 `ip_include`/`ip_exclude` 是标签，ASN 字段是整数。include 维度之间采用 OR，任一 exclude 命中会否决整个响应。
 
 ## 8. Action
+
+每个 Action 只在实现了对应 hook 的阶段生效，放错位置会在配置加载时报错：
+
+| 类型 | 路由 `before` | 路由 `after` | ConcurrentResolver `actions` |
+|---|---|---|---|
+| log / static | ✓ | | |
+| https / fallback | | ✓ | |
+| speedcheck | | ✓ | ✓ |
+| replace / filter | | | ✓ |
 
 ### log
 

@@ -205,6 +205,7 @@ resolvers:
       - nextdns
     wait_all: true
     actions:
+      - filter
       - replace
       - speedcheck
     timeout: 5
@@ -395,7 +396,6 @@ routing:
         - google
         - gfw
     after:
-      - filter
       - speedcheck
       - fallback
       - https
@@ -407,7 +407,6 @@ routing:
     resolver: opennic
   - name: default
     after:
-      - filter
       - speedcheck
       - fallback
       - https

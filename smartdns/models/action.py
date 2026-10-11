@@ -1,13 +1,20 @@
 from ipaddress import IPv4Address, IPv6Address
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import Field
 
 from smartdns.models.rule import RequestMatcher, ResponseIPMatcher, StrictModel
 
+# Action 可挂载的阶段：路由 before（on_request）、路由 after（on_response /
+# on_subquery）、ConcurrentResolver actions（on_resolver）。
+type ActionPhase = Literal["before", "after", "resolver"]
+
 
 class BaseActionConfig(StrictModel):
     """Action 配置基类。"""
+
+    # 实现了对应 hook 的阶段；放到其他阶段时 hook 为空操作，配置加载即报错。
+    phases: ClassVar[frozenset[ActionPhase]] = frozenset()
 
     name: str
 
@@ -16,6 +23,7 @@ class LogActionConfig(BaseActionConfig):
     """log Action 配置。"""
 
     type: Literal["log"]
+    phases: ClassVar[frozenset[ActionPhase]] = frozenset({"before"})
     text: str = Field(description="日志文本")
 
 
@@ -23,6 +31,7 @@ class StaticActionConfig(BaseActionConfig):
     """静态返回 Action 配置。"""
 
     type: Literal["static"]
+    phases: ClassVar[frozenset[ActionPhase]] = frozenset({"before"})
     ipv4: set[IPv4Address] = Field(
         default_factory=lambda: {IPv4Address("127.0.0.1")},
         description="静态返回的 IPv4 地址",
@@ -58,6 +67,7 @@ class ReplaceActionConfig(BaseActionConfig):
     """替换IP Action 配置。"""
 
     type: Literal["replace"]
+    phases: ClassVar[frozenset[ActionPhase]] = frozenset({"resolver"})
     match_name: RequestMatcher = Field(description="替换IP操作的请求匹配器")
     replace_map: list[ReplaceActionMap] = Field(
         default_factory=list, description="替换映射列表"
@@ -68,6 +78,7 @@ class HTTPSActionConfig(BaseActionConfig):
     """HTTPS Action 配置。"""
 
     type: Literal["https"]
+    phases: ClassVar[frozenset[ActionPhase]] = frozenset({"after"})
     remove_hint: bool = Field(
         default=True, description="是否移除 HTTPS 中的 ipv4/ipv6 hint 参数"
     )
@@ -119,6 +130,7 @@ class SpeedcheckActionConfig(BaseActionConfig):
     """Speedcheck 配置。"""
 
     type: Literal["speedcheck"]
+    phases: ClassVar[frozenset[ActionPhase]] = frozenset({"resolver", "after"})
     ping_config: PingConfig = Field(default_factory=PingConfig, description="测速配置")
     match_ip: ResponseIPMatcher = Field(
         default_factory=ResponseIPMatcher, description="测速匹配器"
@@ -147,6 +159,7 @@ class FallbackActionConfig(BaseActionConfig):
     """Fallback Action 配置。"""
 
     type: Literal["fallback"]
+    phases: ClassVar[frozenset[ActionPhase]] = frozenset({"after"})
     map: list[FallbackMap] = Field(
         default_factory=list, description="Fallback 映射列表"
     )
@@ -163,6 +176,7 @@ class FilterActionConfig(BaseActionConfig):
     """Filter Action 配置。"""
 
     type: Literal["filter"]
+    phases: ClassVar[frozenset[ActionPhase]] = frozenset({"resolver"})
     filters: list[FilterItem] = Field(
         default_factory=list, description="Filter 映射列表"
     )

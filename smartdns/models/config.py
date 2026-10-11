@@ -10,11 +10,11 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from smartdns.models.action import ActionConfig
+from smartdns.models.action import ActionConfig, ActionPhase, HTTPSActionConfig
 from smartdns.models.geodata import GeoDataConfig
 from smartdns.models.http import HTTPClientConfig
 from smartdns.models.listener import HTTPListenerConfig, ListenerConfig
-from smartdns.models.nameserver import NameserverConfig
+from smartdns.models.nameserver import CurlNameserverConfig, NameserverConfig
 from smartdns.models.resolver import (
     ConcurrentResolverConfig,
     PlainResolverConfig,
@@ -76,6 +76,7 @@ class Config(BaseSettings):
 
         nameservers = {item.name for item in self.nameservers}
         actions = {item.name for item in self.actions}
+        phases = {item.name: item.phases for item in self.actions}
         resolved: set[str] = set()
         for resolver in self.resolvers:
             if isinstance(resolver, PlainResolverConfig):
@@ -89,6 +90,12 @@ class Config(BaseSettings):
                 self._raise_missing(
                     f"concurrent resolver {resolver.name} actions",
                     set(resolver.actions) - actions,
+                )
+                self._ensure_phase(
+                    f"concurrent resolver {resolver.name} actions",
+                    resolver.actions,
+                    "resolver",
+                    phases,
                 )
             resolved.add(resolver.name)
 
@@ -105,6 +112,34 @@ class Config(BaseSettings):
                 f"routing rule {rule.name} after actions",
                 set(rule.after or []) - actions,
             )
+            self._ensure_phase(
+                f"routing rule {rule.name} before actions",
+                rule.before or [],
+                "before",
+                phases,
+            )
+            self._ensure_phase(
+                f"routing rule {rule.name} after actions",
+                rule.after or [],
+                "after",
+                phases,
+            )
+
+        client_resolver = self.client.resolver is not None
+        ech_users = [
+            item.name
+            for item in self.nameservers
+            if isinstance(item, CurlNameserverConfig) and isinstance(item.ech, str)
+        ] + [
+            item.name
+            for item in self.actions
+            if isinstance(item, HTTPSActionConfig) and item.add_ech
+        ]
+        if ech_users and not client_resolver:
+            raise ValueError(
+                "获取 ECH 配置需要 client.resolver，以下组件依赖它: "
+                + ", ".join(ech_users)
+            )
         return self
 
     @staticmethod
@@ -112,6 +147,22 @@ class Config(BaseSettings):
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ValueError(f"{kind} 名称重复: {', '.join(duplicates)}")
+
+    @staticmethod
+    def _ensure_phase(
+        kind: str,
+        names: list[str],
+        phase: ActionPhase,
+        phases: dict[str, frozenset[ActionPhase]],
+    ) -> None:
+        """Action 放在未实现对应 hook 的阶段时会静默失效，加载时拒绝。"""
+        invalid = [
+            f"{name}（支持: {', '.join(sorted(phases[name])) or '无'}）"
+            for name in names
+            if name in phases and phase not in phases[name]
+        ]
+        if invalid:
+            raise ValueError(f"{kind} 放在 {phase} 阶段不会生效: {', '.join(invalid)}")
 
     @staticmethod
     def _raise_missing(kind: str, names: set[str]) -> None:
