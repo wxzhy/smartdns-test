@@ -39,19 +39,15 @@ if TYPE_CHECKING:
     from smartdns.models.config import Config
     from smartdns.nameservers.client import ECHResult
 
-type CacheKey = tuple[Name, RdataType, RdataClass, str, str | None]
+type CacheKey = tuple[Name, RdataType, RdataClass]
 
 
 def _cache_key(request: Request) -> CacheKey:
-    # 客户端地址不入键：上游不转发客户端 ECS（plain 用固定配置 ECS，aiodns
-    # 忽略），同一查询对任意客户端结果一致，按客户端分键只会摊薄命中率。
-    return (
-        request.qname,
-        request.rdtype,
-        request.rdclass,
-        request.listener,
-        str(request.ecs) if request.ecs is not None else None,
-    )
+    # 只按查询三元组分键：路由不区分监听器，上游也不转发客户端地址或入站 ECS
+    # （plain 用固定配置 ECS，aiodns 忽略），同一查询对任意客户端结果一致。
+    # 把监听器或 ECS 放进键只会摊薄命中率，还让客户端能靠变换 ECS 绕过缓存、
+    # 驱动上游查询。将来若转发客户端 ECS，须把它重新纳入键。
+    return (request.qname, request.rdtype, request.rdclass)
 
 
 class _UncacheableResponseError(Exception):
@@ -150,7 +146,10 @@ class Master:
 
     async def dispatch(self, request: Request) -> Message | None:
         """分发请求到 Worker 并返回响应 Message。"""
-        return self._to_client_message(request, await self.resolve(request))
+        # 回包只需要 rcode 与 Answer，不必为每个 IP/CNAME 查询地理标签。
+        return self._to_client_message(
+            request, await self.resolve(request, with_tags=False)
+        )
 
     async def query_subquery(self, request: Request) -> Response:
         """从 Worker 非阻塞回到 Master 循环，复用最终应答缓存及同键在途查询。"""
@@ -171,8 +170,11 @@ class Master:
             raise
         return await wrap_future(future)
 
-    async def resolve(self, request: Request) -> Response:
-        """取得完整路由加工后的独立 Response，供监听器与内部子查询共用。"""
+    async def resolve(self, request: Request, *, with_tags: bool = True) -> Response:
+        """取得完整路由加工后的独立 Response，供监听器与内部子查询共用。
+
+        with_tags=False 时缓存回放不展开 ip_infos/name_infos（监听器回包路径）。
+        """
         if self._stopping:
             return Response.from_rcode(Rcode.SERVFAIL, upstream="")
         cache = self._cache
@@ -209,9 +211,10 @@ class Master:
         # 复制回放：命中与未命中统一按剩余生存期刷新各 section TTL，
         # 缓存内原始 Answer 不外泄给调用方。
         remaining = max(0, int(answer.expiration - time()))
-        return Response.from_answer(
-            clone_answer(answer, remaining_ttl=remaining), upstream="cache"
-        )
+        replay = clone_answer(answer, remaining_ttl=remaining)
+        if not with_tags:
+            return Response(replay.response.rcode(), replay, upstream="cache")
+        return Response.from_answer(replay, upstream="cache")
 
     @staticmethod
     def _to_client_message(request: Request, response: Response) -> Message | None:

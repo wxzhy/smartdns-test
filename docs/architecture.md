@@ -135,10 +135,10 @@ Master.dispatch()
 Master 的应答缓存经 `cached()` 装饰 `_query_answer()` 实现：持久层是 `cachetools.TLRUCache`（ttu 取 `Answer.expiration`，即应答自身 TTL），读取、写入与同键 in-flight 合并由装饰器统一处理。缓存键是：
 
 ```text
-(qname, rdtype, rdclass, listener, ecs)
+(qname, rdtype, rdclass)
 ```
 
-命中时会按剩余有效期刷新 answer、authority 和 additional 中 RRset 的 TTL，然后基于原始请求构造响应。复制回放只重建可变的 Message、section 列表和 RRset 容器，复用 dnspython 的不可变 Name/Rdata；EDNS Option 仍完整复制，带签名或解析错误的特殊报文继续使用完整复制。未命中时使用随机策略选择一个 Worker；dispatch 仅运行于 Master 主循环，同缓存键并发请求会合并为一次 Worker 查询，等待者再用各自的 DNS 请求 ID 构造响应。
+监听器与入站 ECS 不入键：路由不区分监听器，上游也不转发客户端 ECS；若将来转发，须把 ECS 纳入键。命中时会按剩余有效期刷新 answer、authority 和 additional 中 RRset 的 TTL，然后基于原始请求构造响应；监听器回包路径不展开 IP/CNAME 地理标签，只有内部子查询拿到带标签的完整 Response。复制回放只重建可变的 Message、section 列表和 RRset 容器，复用 dnspython 的不可变 Name/Rdata；EDNS Option 仍完整复制，带签名或解析错误的特殊报文继续使用完整复制。未命中时使用随机策略选择一个 Worker；dispatch 仅运行于 Master 主循环，同缓存键并发请求会合并为一次 Worker 查询，等待者再用各自的 DNS 请求 ID 构造响应。
 
 Worker 返回带 `Answer` 的 NOERROR 或 NXDOMAIN 时，Master 会原样透传并写缓存；NXDOMAIN 的 authority 区 SOA 与负缓存 TTL 因而得以保留。没有 `Answer` 的错误响应（含 SERVFAIL/REFUSED 等瞬态失败）经异常通道回传、只按 RCODE 构造，不进缓存。NXDOMAIN 仅记 debug，SERVFAIL/REFUSED 记 warning。
 
@@ -359,7 +359,7 @@ Router 在 after 动作循环结束后检查 `context.subquery`：已设置且�
 
 `AnswerCache`（`utils/cache_async.py`）是三类 Answer 缓存的统一载体：存储层为线程锁串行化的 TLRUCache（墙钟计时、按应答自身 TTL 过期），实现 MutableMapping 协议，对外提供 `read`/`write` 异步读写与 `fetch(key, fn)`（未命中执行 fn 并写入，同键并发经 `cached()` in-flight 表合并为一次执行）。
 
-Master Answer 缓存键包含 `(qname, type, class, listener, ECS)`；客户端地址不入键，因为当前上游查询不转发客户端地址。持久层保存最终 Answer，回放时复制并按剩余存活时间刷新所有 section 的 TTL。dispatch 仅运行于 Master 主循环，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中不会保存 Task/Future，请求期限也不改变缓存键。
+Master Answer 缓存键为 `(qname, type, class)`；监听器、客户端地址与入站 ECS 都不入键，因为路由不区分监听器、上游查询也不转发客户端地址或 ECS。持久层保存最终 Answer，回放时复制并按剩余存活时间刷新所有 section 的 TTL。dispatch 仅运行于 Master 主循环，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中不会保存 Task/Future，请求期限也不改变缓存键。
 
 ECHConfig、测速与 AnswerCache.fetch 统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task（跨循环首次填充可能各执行一次，锁内 setdefault 保证只落一份）。ECHConfig 与测速缓存为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。
 

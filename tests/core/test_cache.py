@@ -218,18 +218,38 @@ async def test_servfail_not_cached() -> None:
     assert second.rcode() == Rcode.SERVFAIL
 
 
-async def test_cache_isolates_listeners_and_ecs() -> None:
-    responses = [Response.from_answer(_answer(), upstream="upstream") for _ in range(3)]
-    master = _FakeMaster(responses)
+async def test_cache_is_shared_across_listeners_ecs_and_clients() -> None:
+    """上游结果与监听器、客户端地址、入站 ECS 无关，三者都不入键。
+
+    把 ECS 放进键会让客户端靠变换 ECS 绕过缓存、驱动上游查询。
+    """
+    master = _FakeMaster([Response.from_answer(_answer(), upstream="upstream")])
     await master.dispatch(_request("192.0.2.1", listener="udp"))
-    assert master.calls == 1
     await master.dispatch(_request("192.0.2.1", listener="tcp"))
-    assert master.calls == 2
     await master.dispatch(_request("192.0.2.1", ecs="198.51.100.0"))
-    assert master.calls == 3
-    # 客户端地址不入键：同键查询共享条目。
-    await master.dispatch(_request("192.0.2.99", listener="udp"))
-    assert master.calls == 3
+    await master.dispatch(_request("192.0.2.99", ecs="203.0.113.0"))
+    assert master.calls == 1
+
+
+async def test_dispatch_cache_hit_skips_geo_tagging(monkeypatch) -> None:
+    master = _FakeMaster([Response.from_answer(_answer(), upstream="upstream")])
+    await master.dispatch(_request("192.0.2.1"))
+    lookups: list[object] = []
+
+    def count(*args: object, **kwargs: object) -> None:
+        lookups.append(args)
+        raise AssertionError("回包路径不应查询地理标签")
+
+    monkeypatch.setattr("smartdns.models.context.IPInfo.from_ip", count)
+    monkeypatch.setattr("smartdns.models.context.NameInfo.from_name", count)
+    hit = await master.dispatch(_request("192.0.2.2"))
+    assert hit is not None
+    assert hit.answer
+    assert lookups == []
+    # 内部子查询仍需要带标签的完整 Response。
+    monkeypatch.undo()
+    full = await master.resolve(_request("192.0.2.3"))
+    assert full.ip_infos
 
 
 def test_cache_key_annotation_is_reflectable_at_runtime() -> None:

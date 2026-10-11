@@ -79,13 +79,13 @@
 - `Master` 启动 `worker_count` 个 `Worker`，每个 Worker 跑在**独立的 `BlockingPortal`（独立事件循环 + uvloop）**里。
 - `Master` 自己的事件循环只负责**监听器收包**和**随机分发**到 Worker；真正解析在 Worker 循环里完成。
 - 跨循环调用通过 `asyncio.wrap_future(portal.start_task_soon(...))` 桥接。
-- Worker 各自持有上游连接/会话；跨线程读取进程级 GeoManager。Master Answer 缓存按查询三元组、监听器和 ECS 隔离（不包含客户端地址），缓存读写及 Action 改写均采用 copy-on-write。
+- Worker 各自持有上游连接/会话；跨线程读取进程级 GeoManager。Master Answer 缓存只按查询三元组分键（不含监听器、客户端地址和入站 ECS），缓存读写及 Action 改写均采用 copy-on-write。
 
 ---
 
 ## 请求处理流程
 
-1. **监听器** 收到一个 DNS 报文 → `Request.from_message()`，顺带查好请求方的 `IPInfo`（国家/ASN）和被查域名的 `NameInfo`（GeoSite 标签）。
+1. **监听器** 收到一个 DNS 报文 → `Request.from_message()`（被查域名的 `NameInfo` 在路由匹配时才查询，缓存命中的请求不做地理查找）。
 2. **Master.dispatch()**：先查全局应答缓存（`cached()` + TLRUCache，按应答 TTL 过期并合并同键并发），命中直接回；否则随机选一个 Worker，把 `Request` 投递过去。
 3. **Worker.handle()**：构造贯穿全流程的 `Context`，进入 `process()`。
 4. **路由表顺序匹配**：`Worker._rules` 按 `config.yaml` 中 `routing` 的顺序逐条尝试 `Router.query()`。
@@ -97,7 +97,7 @@
    - **短路**：一旦某条路由产出最终应答（含 NXDOMAIN 等权威否定应答），后续路由不再执行。
 5. **回写**：`Master` 把最终 `Message` 回给监听器，监听器发回客户端。
 
-> Master 缓存键包含查询三元组、监听器和入站 ECS；客户端地址不入键，因为当前上游查询不转发客户端地址，避免按客户端拆键造成命中率损失。
+> Master 缓存键只包含查询三元组：路由不区分监听器，上游查询也不转发客户端地址或入站 ECS，拆键只会降低命中率，还会让客户端靠变换 ECS 绕过缓存。监听器回包路径的缓存回放不展开 IP/CNAME 地理标签；请求的域名标签在路由匹配时才查询。
 
 ---
 
@@ -105,7 +105,7 @@
 
 ### `Request` / `Response` / `Context`（`models/context.py`）
 
-- **`Request`**：进来时即附带的轻量对象，含原始 `dns.message`、查询名/类型/类、来源地址、以及预查的 `name_info` / `ip_info`。提供 `make_answer()` / `make_error()` 生成回包。
+- **`Request`**：进来时即附带的轻量对象，含原始 `dns.message`、查询名/类型/类、来源地址；`name_info`（GeoSite 标签）在路由匹配首次访问时才查询，`ip_info` / `ecs_info` 仅供诊断输出、按需计算。提供 `make_answer()` / `make_error()` 生成回包。
 - **`Response`**：上游返回结果的归一化封装。`Response.from_answer()` 会把 CNAME 链、A/AAAA 列表、HTTPS 记录里的 ipv4hint/ipv6hint 全部展平成 `ip_list` / `ip_infos` / `name_list` / `name_infos`，方便后续按标签匹配。
 - **`Context`**：一次请求在 Worker 内贯穿所有 hook 的可变状态。关键字段：
   - `response`：当前最终应答

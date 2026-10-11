@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import field
 from ipaddress import ip_network
 from typing import Any
 
@@ -31,15 +32,38 @@ class Request:
     qname: Name
     rdtype: RdataType
     rdclass: RdataClass
-    name_info: NameInfo
-    ip_info: IPInfo | None
     ecs: IPvAnyNetwork | None = None
-    ecs_info: IPInfo | None = None
     # time.monotonic() 截止时刻，可在 Master 和 Worker 的不同事件循环间传递。
     deadline: float | None = None
     shared_deadline: SharedDeadline | None = None
     # 完整路由子查询只执行一层，避免加工链递归等待自身的缓存取数任务。
     is_subquery: bool = False
+    # 域名标签只在路由匹配时才需要；缓存命中的请求不应为此查询 GeoSite。
+    _name_info: NameInfo | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    @property
+    def name_info(self) -> NameInfo:
+        """查询域名的 GeoSite 标签，首次访问时查找。"""
+        info = self._name_info
+        if info is None:
+            info = self._name_info = NameInfo.from_name(self.qname)
+        return info
+
+    @property
+    def ip_info(self) -> IPInfo | None:
+        """客户端地址的地理标签（仅供诊断输出，不参与路由）。"""
+        if self.remote_address is None:
+            return None
+        return IPInfo.from_ip(self.remote_address)
+
+    @property
+    def ecs_info(self) -> IPInfo | None:
+        """入站 ECS 网段的地理标签（仅供诊断输出，不参与路由）。"""
+        if self.ecs is None:
+            return None
+        return IPInfo.from_ip(self.ecs.network_address)
 
     def __str__(self):
         return (
@@ -93,10 +117,7 @@ class Request:
             qname=qname,
             rdtype=rdtype,
             rdclass=rdclass,
-            name_info=NameInfo.from_name(qname),
-            ip_info=IPInfo.from_ip(remote_address) if remote_address else None,
             ecs=ecs,
-            ecs_info=IPInfo.from_ip(ecs.network_address) if ecs is not None else None,
             deadline=deadline,
             shared_deadline=shared_deadline,
         )
