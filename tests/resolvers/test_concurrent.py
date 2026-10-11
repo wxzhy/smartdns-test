@@ -635,3 +635,76 @@ async def test_stalled_nested_alternative_keeps_validated_winner(shared: bool) -
     await speed.on_response(context)
     assert context.response is not None
     assert context.response.upstream == "fast"
+
+
+def _nodata_response(upstream: str) -> Response:
+    message = dns.message.from_text(
+        "id 1\nopcode QUERY\nrcode NOERROR\nflags QR RA\n;QUESTION\nexample.com. IN A\n"
+    )
+    answer = Answer(
+        from_text("example.com."),
+        RdataType.A,
+        RdataClass.IN,
+        cast("QueryMessage", message),
+    )
+    return Response.from_answer(answer, upstream=upstream)
+
+
+def _make_with_grace(
+    manager: _FakeManager, *, grace: float, wait_all: bool = False
+) -> ConcurrentResolver:
+    config = ConcurrentResolverConfig(
+        name="c",
+        type="concurrent",
+        resolvers=["empty", "full"],
+        wait_all=wait_all,
+        nodata_grace=grace,
+    )
+    return ConcurrentResolver(
+        config,
+        cast("ResolverManager", manager),
+        cast("ActionManager", _FakeActions()),
+    )
+
+
+@pytest.mark.parametrize("wait_all", [False, True])
+async def test_records_beat_earlier_nodata(wait_all: bool) -> None:
+    manager = _FakeManager(
+        [
+            _FakeResolver("empty", _nodata_response("empty")),
+            _FakeResolver("full", _answer_response("full"), delay=0.03),
+        ]
+    )
+    result = await _make_with_grace(manager, grace=0.5, wait_all=wait_all).query(
+        _context().request
+    )
+    assert result.upstream == "full"
+
+
+async def test_nodata_waits_at_most_the_grace_period() -> None:
+    slow = _FakeResolver("full", _answer_response("full"), delay=5)
+    manager = _FakeManager([_FakeResolver("empty", _nodata_response("empty")), slow])
+    started = monotonic()
+    result = await _make_with_grace(manager, grace=0.05).query(_context().request)
+    assert result.upstream == "empty"
+    assert monotonic() - started < 1
+    assert slow.cancelled
+
+
+async def test_zero_grace_lets_nodata_win_immediately() -> None:
+    slow = _FakeResolver("full", _answer_response("full"), delay=0.05)
+    manager = _FakeManager([_FakeResolver("empty", _nodata_response("empty")), slow])
+    result = await _make_with_grace(manager, grace=0).query(_context().request)
+    assert result.upstream == "empty"
+    assert slow.cancelled
+
+
+async def test_nodata_still_preferred_over_nxdomain() -> None:
+    manager = _FakeManager(
+        [
+            _FakeResolver("empty", _nodata_response("empty"), delay=0.01),
+            _FakeResolver("full", _nxdomain_response("full")),
+        ]
+    )
+    result = await _make_with_grace(manager, grace=0.5).query(_context().request)
+    assert result.upstream == "empty"

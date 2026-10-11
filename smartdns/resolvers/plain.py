@@ -53,6 +53,18 @@ class PlainResolver(BaseResolver, Resolver):
             else:
                 logger.warning("Nameserver {} 不存在", name)
         self.nameservers = upstreams
+        # dnspython 用 timeout 作为单次尝试上限：等于 lifetime 时首个上游黑洞
+        # 就会耗尽全部时限，开启 rotate 后一个上游故障即令约一半查询失败。
+        if config.timeout is None:
+            self.timeout = self.lifetime / max(1, len(upstreams))
+        elif config.timeout >= self.lifetime and len(upstreams) > 1:
+            logger.warning(
+                "PlainResolver {} 的 timeout({}) 不小于 lifetime({})，"
+                "首个上游无应答时无法切换到其他上游",
+                self.name,
+                config.timeout,
+                self.lifetime,
+            )
         # 应答缓存（AnswerCache）：相同完整配置跨 Worker 线程共享；同名但配置
         # 不同的解析器彼此隔离。cache_size=0 关闭；fetch 的同键 in-flight
         # 合并按事件循环隔离。

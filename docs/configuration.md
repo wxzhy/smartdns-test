@@ -248,9 +248,9 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
 
 `max_queries` 默认 16（至少 1），限制每个 Worker 中此解析器的原生并发查询和通道数。通道按需创建并复用，每次独占租用一个通道；取消时调用该通道的 `cancel()`，停止此查询的底层重试并归还名额，不取消其他通道的查询。pycares 的默认事件线程模式会为通道创建线程，增大此值会增加资源占用。
 
-`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：缓存挂在 `resolve()` 边界，路由路径与 `client.resolver` 的 ECH 引导查询共用；条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），持久层为相同完整配置跨 Worker 共享的 `AnswerCache` 实例。同名但配置不同的解析器使用不同缓存；配置完全一致的顶层解析器和 `client.resolver` 会共享缓存。
+`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：缓存挂在 `resolve()` 边界，路由路径与 `client.resolver` 的 ECH 引导查询共用；条目按应答自身 TTL 过期（NODATA/NXDOMAIN 为 `nodata_ttl`），持久层为相同完整配置跨 Worker 共享的 `AnswerCache` 实例。同名但配置不同的解析器使用不同缓存；配置完全一致的顶层解析器和 `client.resolver` 会共享缓存。
 
-`nodata_ttl` 是空应答（NODATA，如 IPv4-only 域名查 AAAA）写入缓存的秒数：pycares 的 ENODATA 不携带 SOA，无记录可压 TTL，需显式指定负缓存时长，0 表示不缓存。
+`nodata_ttl` 是否定应答（NODATA，如 IPv4-only 域名查 AAAA；以及 NXDOMAIN）写入缓存的秒数：pycares 的 ENODATA/ENOTFOUND 不携带 SOA，无记录可压 TTL，需显式指定负缓存时长，0 表示不缓存。
 
 ### plain
 
@@ -265,7 +265,7 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
   lifetime: 5
 ```
 
-`nameservers` 填前面 `nameservers[].name`。`lifetime` 是实际查询总时限。`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：条目按应答自身 TTL 过期（负应答取 authority 区 SOA），持久层由相同完整配置的解析器跨 Worker 共享，同名但配置不同的解析器使用不同实例；同一事件循环内的同键并发查询经 `cached()` 合并为一次上游查询。
+`nameservers` 填前面 `nameservers[].name`。`lifetime` 是实际查询总时限。`timeout` 是 dnspython 单次尝试时限，省略时为 `lifetime / 上游数`，使首个上游无应答时仍有时间切换到下一个；显式设为不小于 `lifetime` 的值会在启动时告警（多上游时无法切换）。`cache_size` 控制应答缓存容量（默认 10000，`0` 关闭）：条目按应答自身 TTL 过期（负应答取 authority 区 SOA），持久层由相同完整配置的解析器跨 Worker 共享，同名但配置不同的解析器使用不同实例；同一事件循环内的同键并发查询经 `cached()` 合并为一次上游查询。
 
 所有 PlainResolver 引用都会在配置加载时校验，不存在的名称不会延迟到运行期跳过。
 
@@ -286,7 +286,8 @@ Nameserver 会在 Resolver 启动前全部注册，因此 plain Resolver 可引�
 - `resolvers` 只能引用列表中位于它之前的 Resolver。
 - `actions` 只在直接子 Resolver 返回带 Answer 的 NOERROR 响应后调用 `on_resolver`。
 - Speedcheck 需要候选完整时通常配置 `wait_all: true`。
-- `wait_all: false` 在首个带 Answer 的 NOERROR 响应后取消剩余任务。
+- `wait_all: false` 在首个带记录的 NOERROR 响应后取消剩余任务。NODATA（NOERROR 但无记录）不会立即胜出：最多再等 `nodata_grace` 秒（默认 0.1，`0` 表示立即胜出），期间到达的带记录应答优先。
+- 最终结果优先级：带记录的 NOERROR > NODATA > NXDOMAIN > 其他否定响应；`wait_all: true` 同样按此挑选。
 - `wait_all: true` 在整体 `timeout` 内收集已完成候选；超时不会丢弃已经完成的快速结果。
 
 监听器把单请求的单调时钟截止时间传入 Worker 和派生子查询。收集阶段同时考虑解析器自身 `timeout` 与外层剩余预算，为后续加工和回包预留 10%（至少 50ms）；嵌套收集也受当前任务的外层期限约束。Router 的 after 动作和子查询共用剩余预算，到期时保留最后一个完整应答并返回，监听器的整体超时继续作为硬上限。

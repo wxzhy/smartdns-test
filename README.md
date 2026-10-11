@@ -168,7 +168,7 @@
 
 | `type` | 类 | 说明 |
 |---|---|---|
-| `aiodns` | `AioDNSResolver` | 基于 `aiodns`/pycares 的异步解析，内置完整记录类型转换（A/AAAA/MX/TXT/CAA/CNAME/HTTPS/NAPTR/NS/PTR/SOA/SRV/TLSA/URI）；长 TXT 按 255 字节上限重新分段。把 pycares 的 `DNSResult` 重新组装成 `dns.resolver.Answer`。支持 EDNS、TCP 模式、tries、轮询；NODATA 空应答按 `nodata_ttl` 写入负缓存；`resolve()` 边界带 `AnswerCache` 应答缓存（`cache_size`，0 关闭） |
+| `aiodns` | `AioDNSResolver` | 基于 `aiodns`/pycares 的异步解析，内置完整记录类型转换（A/AAAA/MX/TXT/CAA/CNAME/HTTPS/NAPTR/NS/PTR/SOA/SRV/TLSA/URI）；长 TXT 按 255 字节上限重新分段。把 pycares 的 `DNSResult` 重新组装成 `dns.resolver.Answer`。支持 EDNS、TCP 模式、tries、轮询；NODATA/NXDOMAIN 否定应答按 `nodata_ttl` 写入负缓存；`resolve()` 边界带 `AnswerCache` 应答缓存（`cache_size`，0 关闭） |
 | `plain` | `PlainResolver` | 继承 `dnspython.Resolver`，把配置里的上游**名字**解析成 `Nameserver` 实例挂在 `resolver.nameservers` 上，由 dnspython 自行调度。支持固定 ECS（EDNS Client Subnet）和 `lifetime`；应答缓存为 `AnswerCache`（`cache_size` 容量，按应答自身 TTL 过期，相同完整配置跨 Worker 共享），不用 dnspython 的 Resolver.cache |
 | `concurrent` | `ConcurrentResolver` | 按完成顺序消费结果；`wait_all=false` 在首个带 Answer 的 NOERROR 后取消其余查询，`wait_all=true` 在整体超时内收集候选供 after 动作挑选 |
 

@@ -3,9 +3,10 @@
 from time import time
 from typing import TYPE_CHECKING, cast
 
+import dns.exception
 import dns.message
 import pytest
-from anyio import Event, create_task_group
+from anyio import Event, create_task_group, sleep
 from dns.name import from_text
 from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
@@ -13,7 +14,9 @@ from dns.rdatatype import RdataType
 from dns.resolver import NXDOMAIN, Answer
 
 from smartdns.models.context import Request, Response
+from smartdns.models.nameserver import UDPNameserverConfig
 from smartdns.models.resolver import PlainResolverConfig
+from smartdns.nameservers.base import BaseAddressNameserver
 from smartdns.nameservers.manager import NameserverManager
 from smartdns.resolvers.plain import PlainResolver
 from smartdns.utils.cache_async import AnswerCache
@@ -326,3 +329,76 @@ async def test_answered_query_keeps_rrset_expiration(
 
     assert response.ans is not None
     assert response.ans.expiration - time() == pytest.approx(60, abs=5)
+
+
+class _FakeNameserver(BaseAddressNameserver):
+    """按 dnspython 传入的单次尝试 timeout 运行；blackhole 时永不应答。"""
+
+    def __init__(self, name: str, *, blackhole: bool) -> None:
+        super().__init__(
+            UDPNameserverConfig(
+                name=name, type="udp", address="192.0.2.53", port=53, timeout=30
+            )
+        )
+        self._blackhole = blackhole
+        self.attempt_timeouts: list[float] = []
+
+    def kind(self) -> str:
+        return "fake"
+
+    async def async_query(self, request, timeout, *args, **kwargs):
+        self.attempt_timeouts.append(timeout)
+        if self._blackhole:
+            await sleep(timeout)
+            raise dns.exception.Timeout(timeout=timeout)
+        response = dns.message.make_response(request)
+        response.answer = _noerror_answer(str(request.question[0].name)).answer
+        return response
+
+
+def _failover_resolver(
+    *, timeout: float | None, blackhole_first: bool = True
+) -> tuple[PlainResolver, _FakeNameserver, _FakeNameserver]:
+    first = _FakeNameserver("dead", blackhole=blackhole_first)
+    second = _FakeNameserver("alive", blackhole=False)
+    manager = NameserverManager(config=[], client=cast("HTTPClient", None))
+    manager.nameservers = {"dead": first, "alive": second}
+    config = PlainResolverConfig(
+        name="p",
+        type="plain",
+        nameservers=["dead", "alive"],
+        rotate=False,
+        lifetime=0.4,
+        timeout=timeout,
+        cache_size=0,
+    )
+    return PlainResolver(config=config, nameservers=manager), first, second
+
+
+async def test_default_attempt_timeout_leaves_time_to_fail_over() -> None:
+    resolver, dead, alive = _failover_resolver(timeout=None)
+    response = await resolver.query(_request("www.example.com."))
+    assert response.rcode == Rcode.NOERROR
+    assert response.ans is not None
+    assert dead.attempt_timeouts == [pytest.approx(0.2, abs=0.01)]
+    assert len(alive.attempt_timeouts) == 1
+
+
+async def test_single_nameserver_keeps_full_lifetime_per_attempt() -> None:
+    alive = _FakeNameserver("alive", blackhole=False)
+    manager = NameserverManager(config=[], client=cast("HTTPClient", None))
+    manager.nameservers = {"alive": alive}
+    config = PlainResolverConfig(
+        name="p", type="plain", nameservers=["alive"], lifetime=0.4, cache_size=0
+    )
+    resolver = PlainResolver(config=config, nameservers=manager)
+    await resolver.query(_request("www.example.com."))
+    assert alive.attempt_timeouts == [pytest.approx(0.4, abs=0.01)]
+
+
+async def test_explicit_attempt_timeout_is_respected() -> None:
+    resolver, dead, _alive = _failover_resolver(timeout=0.4)
+    response = await resolver.query(_request("www.example.com."))
+    # 显式 timeout = lifetime：首个上游耗尽时限，无法切换（保留用户选择）。
+    assert response.rcode == Rcode.SERVFAIL
+    assert dead.attempt_timeouts == [pytest.approx(0.4, abs=0.01)]

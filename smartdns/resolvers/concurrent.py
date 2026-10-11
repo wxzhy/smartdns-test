@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING
 
-from anyio import create_memory_object_stream, create_task_group
+from anyio import create_memory_object_stream, create_task_group, current_time
 from dns.rcode import Rcode
 from loguru import logger
 
@@ -27,6 +27,7 @@ class ConcurrentResolver(BaseResolver):
         self._upstream_names = config.resolvers
         self._manager = resolvers
         self._wait_all = config.wait_all
+        self._nodata_grace = config.nodata_grace
         self._actions = [actions.get(name) for name in config.actions]
 
     async def start(self) -> None:
@@ -144,13 +145,19 @@ class ConcurrentResolver(BaseResolver):
                         context.ip_infos.setdefault(info.ip, info)
 
     async def query(self, request: Request, context: Context | None = None) -> Response:
-        """在总超时内返回最快成功应答，并保留所有已完成候选。"""
+        """在总超时内返回最快成功应答，并保留所有已完成候选。
+
+        带记录的 NOERROR 优先；NODATA 次之（wait_all=false 时只再等待
+        nodata_grace），然后是 NXDOMAIN，最后回退其他否定响应。
+        """
         resolvers = self._resolve_upstreams()
         if not resolvers:
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
         candidates: dict[str, Response] = {}
         winner: Response | None = None
+        # NOERROR 但无记录（NODATA）：可作为结果返回，但不抢先于带记录的应答。
+        nodata: Response | None = None
         send, receive = create_memory_object_stream[
             tuple[Response | None, Context | None]
         ](len(resolvers))
@@ -174,16 +181,24 @@ class ConcurrentResolver(BaseResolver):
                             child_context.candidates = {}
                         child_context.candidates[result.upstream] = result
                         self._merge_child_results(context, child_context)
-                    if (
-                        winner is None
-                        and result.rcode == Rcode.NOERROR
-                        and result.ans is not None
-                    ):
-                        winner = result
-                        scope.response_ready()
-                        if not self._wait_all:
-                            tg.cancel_scope.cancel()
-                            break
+                    if result.rcode == Rcode.NOERROR and result.ans is not None:
+                        if result.ans.rrset is None:
+                            if nodata is None:
+                                nodata = result
+                                scope.response_ready()
+                                if not self._wait_all:
+                                    # 有界宽限：一致的上游通常相差不多，黑洞上游
+                                    # 也只让 NODATA 多等 nodata_grace。
+                                    tg.cancel_scope.deadline = min(
+                                        tg.cancel_scope.deadline,
+                                        current_time() + self._nodata_grace,
+                                    )
+                        elif winner is None:
+                            winner = result
+                            scope.response_ready()
+                            if not self._wait_all:
+                                tg.cancel_scope.cancel()
+                                break
                     elif result.rcode == Rcode.NXDOMAIN:
                         scope.response_ready()
 
@@ -195,6 +210,8 @@ class ConcurrentResolver(BaseResolver):
             context.candidates.update(candidates)
         if winner is not None:
             return winner
+        if nodata is not None:
+            return nodata
         for candidate in candidates.values():
             if candidate.rcode == Rcode.NXDOMAIN:
                 return candidate

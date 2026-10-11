@@ -18,6 +18,14 @@ class PlainResolverConfig(BaseResolverConfig):
 
     type: Literal["plain"]
     nameservers: list[str] = Field(description="上游 nameserver 名称列表")
+    timeout: float | None = Field(
+        default=None,
+        ge=0.1,
+        description=(
+            "单次尝试超时（秒）；省略时为 lifetime / 上游数，"
+            "保证首个上游无应答时仍有时间切换到其他上游"
+        ),
+    )
     cache_size: int = Field(
         default=10000,
         ge=0,
@@ -59,7 +67,7 @@ class AioDNSResolverConfig(BaseResolverConfig):
     nodata_ttl: int = Field(
         default=300,
         ge=0,
-        description="空应答（NODATA）的缓存 TTL，单位秒，0 表示不缓存",
+        description="否定应答（NODATA/NXDOMAIN）的缓存 TTL，单位秒，0 表示不缓存",
     )
 
 
@@ -72,6 +80,14 @@ class ConcurrentResolverConfig(BaseResolverConfig):
         default_factory=list, description="请求完成后执行的动作列表"
     )
     wait_all: bool = Field(default=False, description="是否等待所有请求完成")
+    nodata_grace: float = Field(
+        default=0.1,
+        ge=0.0,
+        description=(
+            "首个 NODATA（NOERROR 无记录）到达后，继续等待其他上游给出带记录"
+            "应答的最长时间（秒）；0 表示 NODATA 立即胜出，仅 wait_all=false 时生效"
+        ),
+    )
 
 
 ResolverConfig = Annotated[

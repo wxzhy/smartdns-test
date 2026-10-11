@@ -230,13 +230,13 @@ TLS 上游的握手与加密流由 `smartdns.nameservers._tls` 自行驱动：an
 
 原生查询使用 `AioDNSPool`：每个 Worker/解析器按需创建并复用最多 `max_queries` 个通道（默认 16），每次租用只运行一个查询。取消调用会同步取消该通道的原生查询，防止 Python Future 取消后 c-ares 继续重试；其他通道保持运行。停止解析器时关闭所有通道。[pycares 通道 API](https://pycares.readthedocs.io/latest/channel.html) 的 `cancel()` 作用于整个通道，因此此处使用独占租用。
 
-已转换的记录类型包括 A、AAAA、CAA、CNAME、HTTPS、MX、NAPTR、NS、PTR、SOA、SRV、TLSA、TXT 和 URI。pycares 会丢失 TXT 的原始 character-string 分段边界，因此长 TXT 会按每段最多 255 字节重新分段后编码。ARES_ENODATA 映射为空 NOERROR，ARES_ENOTFOUND 映射为 NXDOMAIN，其他异常映射为 SERVFAIL。
+已转换的记录类型包括 A、AAAA、CAA、CNAME、HTTPS、MX、NAPTR、NS、PTR、SOA、SRV、TLSA、TXT 和 URI。pycares 会丢失 TXT 的原始 character-string 分段边界，因此长 TXT 会按每段最多 255 字节重新分段后编码。ARES_ENODATA 映射为空 NOERROR，ARES_ENOTFOUND 映射为 NXDOMAIN（两者都以 `nodata_ttl` 为过期时间返回可缓存的 Answer，pycares 不提供上游 SOA），其他异常映射为 SERVFAIL。
 
-应答缓存经 `AnswerCache` 挂在 `resolve()` 边界（`cache_size` 默认 10000，`0` 关闭）：`query()` 路径与 HTTPClient 的 ECH 引导查询共用同一份按完整解析器配置共享的缓存，条目按应答自身 TTL 过期（NODATA 为 `nodata_ttl`），同事件循环内同键并发合并为一次 pycares 查询。同名但配置不同的解析器使用不同缓存。
+应答缓存经 `AnswerCache` 挂在 `resolve()` 边界（`cache_size` 默认 10000，`0` 关闭）：`query()` 路径与 HTTPClient 的 ECH 引导查询共用同一份按完整解析器配置共享的缓存，条目按应答自身 TTL 过期（NODATA/NXDOMAIN 为 `nodata_ttl`），同事件循环内同键并发合并为一次 pycares 查询。同名但配置不同的解析器使用不同缓存。
 
 ### 7.2 PlainResolver
 
-`type: plain` 继承 dnspython 异步 Resolver，并把配置里的 Nameserver 名称解析成自定义 UDP/TCP/curl 对象。它支持轮询、EDNS、固定 ECS、单次尝试 `timeout` 和查询总时限 `lifetime`。
+`type: plain` 继承 dnspython 异步 Resolver，并把配置里的 Nameserver 名称解析成自定义 UDP/TCP/curl 对象。它支持轮询、EDNS、固定 ECS、单次尝试 `timeout`（省略时为 `lifetime / 上游数`）和查询总时限 `lifetime`。
 
 `BaseResolver` 写入的 `timeout` 会覆盖 dnspython Resolver 的同名属性，作为单次上游尝试时限；`query()` 还显式传入 `lifetime` 作为整个解析过程的总时限。
 
@@ -251,7 +251,7 @@ TLS 上游的握手与加密流由 `smartdns.nameservers._tls` 自行驱动：an
 - `wait_all: false`：首个带 Answer 的 NOERROR 结果后取消剩余任务。
 - `wait_all: true`：收齐所有候选，以便 Speedcheck 等 Action 二次选择。
 
-结果通过 AnyIO memory object stream 按完成顺序消费。`wait_all: false` 在首个带 Answer 的 NOERROR 响应完成本层动作后取消剩余任务；`wait_all: true` 在整体 `timeout` 内收集候选。无论哪种模式，超时前已经完成的结果都会保留；没有成功响应时优先返回 NXDOMAIN，再回退其他否定响应。
+结果通过 AnyIO memory object stream 按完成顺序消费。`wait_all: false` 在首个带记录的 NOERROR 响应完成本层动作后取消剩余任务，NODATA 只在 `nodata_grace` 宽限内无带记录应答时才作为结果；`wait_all: true` 在整体 `timeout` 内收集候选。无论哪种模式，超时前已经完成的结果都会保留；没有带记录的应答时依次返回 NODATA、NXDOMAIN，再回退其他否定响应。
 
 每个分支先在独立 Context 中完成解析及本层 `on_resolver` 动作，动作也检查嵌套解析器收集的候选，同一 Response 对象只处理一次。先检查胜者，再在剩余软预算内检查其他候选；其他候选后处理到期时保留已通过检查的胜者，丢弃未完成检查的候选。父级消费完整分支结果后才合并通过检查的候选及其当前 IP 的测速信息；被外层取消或抛错的分支不发布任何数据，嵌套胜者被标记无效时整个分支丢弃。替换前的 IP 信息不会重新进入最终排序，同 IP 的未发布候选也不会覆盖已通过检查候选的测速信息。
 

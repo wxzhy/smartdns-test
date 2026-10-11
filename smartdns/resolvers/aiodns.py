@@ -26,7 +26,7 @@ from dns.rdtypes.IN.HTTPS import HTTPS
 from dns.rdtypes.IN.NAPTR import NAPTR
 from dns.rdtypes.IN.SRV import SRV
 from dns.rdtypes.svcbbase import GenericParam, ParamKey
-from dns.resolver import NXDOMAIN, Answer, CacheKey
+from dns.resolver import Answer, CacheKey
 from dns.rrset import RRset
 from loguru import logger
 from pycares import (
@@ -130,8 +130,6 @@ class AioDNSResolver(BaseResolver):
             return Response.from_answer(
                 clone_answer(answer, remaining_ttl=remaining), upstream=self.name
             )
-        except NXDOMAIN:
-            return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
         except Exception:
             logger.exception("AioDNSResolver {} 解析请求失败", self.name)
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
@@ -173,19 +171,18 @@ class AioDNSResolver(BaseResolver):
             return self.make_answer(key, message)
         except DNSError as e:
             code = e.args[0] if e.args else None
-            if code == ARES_ENODATA:
-                # 空数据（NODATA）：返回空的 NOERROR 应答。
-                message = self.make_response(message)
-                answer = self.make_answer(key, message)
-                # pycares 的 ENODATA 不携带 SOA，空报文无记录可压 TTL，
-                # Answer.expiration 会取 dnspython 的 MAX_TTL（约 136 年），
-                # 导致 Master 缓存中的 NODATA 永不过期；显式设置负缓存 TTL。
-                answer.expiration = time() + self.nodata_ttl
-                return answer
+            if code not in (ARES_ENODATA, ARES_ENOTFOUND):
+                raise
+            # 否定应答：ENODATA 为空的 NOERROR（NODATA），ENOTFOUND 为 NXDOMAIN。
+            # pycares 不携带上游 SOA，空报文无记录可压 TTL，Answer.expiration
+            # 会取 dnspython 的 MAX_TTL（约 136 年）；显式设置负缓存 TTL，
+            # 使两级缓存都能按 nodata_ttl 缓存否定结果。
+            message = self.make_response(message)
             if code == ARES_ENOTFOUND:
-                # 域名不存在：抛 NXDOMAIN，交由 query() 转为 NXDOMAIN 响应。
-                raise NXDOMAIN(qnames=[qname]) from e
-            raise
+                message.set_rcode(Rcode.NXDOMAIN)
+            answer = self.make_answer(key, message)
+            answer.expiration = time() + self.nodata_ttl
+            return answer
 
     def make_query(self, key: CacheKey) -> Message:
         """构造 DNS 查询消息。"""

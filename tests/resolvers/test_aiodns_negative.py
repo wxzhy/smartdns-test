@@ -1,9 +1,8 @@
 """Phase 5：AioDNSResolver 的 c-ares 错误码到 DNS 响应的映射回归测试。
 
-修复前：只有 ARES_ENODATA 被特殊处理；ARES_ENOTFOUND（域名不存在）落入通用
-error + raise，被 query() 吞成 SERVFAIL，客户端拿不到正确的 NXDOMAIN。
-修复后：ENOTFOUND → 抛 NXDOMAIN（由 query() 转 NXDOMAIN 响应）；
-ENODATA → 空的 NOERROR 应答（NODATA）。
+ENOTFOUND → NXDOMAIN 应答；ENODATA → 空的 NOERROR 应答（NODATA）。两者都以
+nodata_ttl 作为 expiration 返回 Answer：否定结果须能进入解析器与 Master 两级
+缓存（此前 NXDOMAIN 经异常通道返回，两级缓存都不保存，每次都打上游）。
 
 另覆盖否定应答的缓存 TTL：ENODATA 显式取 nodata_ttl（pycares 丢弃上游
 SOA，空报文无记录可压 TTL）；CNAME 末端 NODATA 走成功路径，expiration
@@ -12,15 +11,15 @@ SOA，空报文无记录可压 TTL）；CNAME 末端 NODATA 走成功路径，ex
 
 from time import time
 
+import dns.message
 import pycares
-import pytest
 from aiodns.error import ARES_ENODATA, ARES_ENOTFOUND, DNSError
 from dns.name import from_text
 from dns.rcode import Rcode
 from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
-from dns.resolver import NXDOMAIN
 
+from smartdns.models.context import Request
 from smartdns.models.resolver import AioDNSResolverConfig
 from smartdns.resolvers.aiodns import AioDNSResolver
 
@@ -33,6 +32,16 @@ class _FakeCares:
 
     async def query_dns(self, *args: object) -> object:
         raise DNSError(self._error_code, "fake")
+
+
+class _CountingCares(_FakeCares):
+    def __init__(self, error_code: int) -> None:
+        super().__init__(error_code)
+        self.calls = 0
+
+    async def query_dns(self, *args: object) -> object:
+        self.calls += 1
+        return await super().query_dns(*args)
 
 
 class _FakeResultCares:
@@ -52,10 +61,33 @@ def _make(error_code: int) -> AioDNSResolver:
     return resolver
 
 
-async def test_enotfound_raises_nxdomain() -> None:
+async def test_enotfound_returns_cacheable_nxdomain() -> None:
+    before = time()
     resolver = _make(ARES_ENOTFOUND)
-    with pytest.raises(NXDOMAIN):
-        await resolver.resolve(from_text("nope.example."), RdataType.A, RdataClass.IN)
+    answer = await resolver.resolve(
+        from_text("nope.example."), RdataType.A, RdataClass.IN
+    )
+    assert answer.response.rcode() == Rcode.NXDOMAIN
+    assert answer.rrset is None
+    assert before + 299 <= answer.expiration <= time() + 300
+
+    response = await resolver.query(
+        Request.from_message(dns.message.make_query("nope.example.", "A"), "t")
+    )
+    assert response.rcode == Rcode.NXDOMAIN
+    assert response.ans is not None
+
+
+async def test_nxdomain_is_served_from_resolver_cache() -> None:
+    upstream = _CountingCares(ARES_ENOTFOUND)
+    resolver = _make(ARES_ENOTFOUND)
+    resolver._resolver = upstream  # ty: ignore[invalid-assignment]
+    for _ in range(2):
+        answer = await resolver.resolve(
+            from_text("nope.example."), RdataType.A, RdataClass.IN
+        )
+        assert answer.response.rcode() == Rcode.NXDOMAIN
+    assert upstream.calls == 1
 
 
 async def test_enodata_returns_empty_noerror() -> None:
