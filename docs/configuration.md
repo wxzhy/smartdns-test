@@ -45,6 +45,9 @@ geodata:
 所有字段均可省略，但一旦配置就必须指向已存在的文件。
 
 - `geosite` 产生域名标签，供 `domain_include`/`domain_exclude` 使用。
+  - 规则语义与 v2ray 一致：`domain:`（默认）匹配域名本身及子域名，`full:` 只匹配域名本身，`keyword:` 对域名做子串匹配；`regexp:` 规则在转换时跳过（会打印条数）。`tags/geosite/*.txt` 自定义文件也接受这些前缀。
+  - geosite.dat 中的属性以 `列表@属性`（如 `google@cn`）和 `@属性`（如 `@cn`、`@ads`，汇总所有列表）两种标签提供；属性不再直接写成同名标签，因此 `@cn` 不会与名为 `cn` 的列表混淆。旧配置依赖属性的地方需改写为 `"@cn"`/`"@ads"`（YAML 中须加引号）。
+  - 升级后需重新运行 `utils.convert` 生成 `geosite.trie`；旧文件仍可加载，但其中 full/keyword 规则仍按旧的后缀方式匹配。
 - `geoip` 和 `ipset` 产生 IP 标签，供 `ip_include`/`ip_exclude` 使用。
 - `asn` 产生整数 ASN，配置使用 `asn_include: [64500]` / `asn_exclude: [64501]`。
 

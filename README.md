@@ -255,7 +255,7 @@ match()? → before actions → resolver.query() → after actions → 返回是
 |---|---|---|---|
 | GeoIP | `geoip.metadb` | MaxMind mmdb（自定义形状：record 直接是标签 str/list） | `routing/geoip.py` |
 | ASN | `asn.mmdb` | MaxMind ASN 库 | 同上 |
-| GeoSite | `geosite.trie` | MARISA-Trie（逆序点分标签建键） | `routing/geosite.py` |
+| GeoSite | `geosite.trie` | MARISA-Trie（逆序点分标签建键；支持 domain/full/keyword，属性标签为 `列表@属性` 与 `@属性`） | `routing/geosite.py` |
 | IPSet | 可选 `.radix`（pickle） | py-radix | `routing/ipset.py` |
 
 标签查询会把一个 IP/域名映射到**一组**标签（如 `1.1.1.1` → `{cloudflare, us}`），匹配即集合相交判断。

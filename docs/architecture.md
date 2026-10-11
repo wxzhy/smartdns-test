@@ -276,7 +276,7 @@ IP 标签与 ASN include 维度之间采用 OR；任一 exclude 命中都会否�
 
 | 配置字段 | 运行时类 | 说明 |
 |---|---|---|
-| `geodata.geosite` | `GeoSite` | mmap 加载 MARISA BytesTrie；把域名规范化为小写、标签逆序后做前缀查询 |
+| `geodata.geosite` | `GeoSite` | mmap 加载 MARISA BytesTrie；把域名规范化为小写、标签逆序（非安全字节转义为 `\DDD`）后做前缀查询，`$` 后缀键用于 full 精确匹配，`!` 前缀键在加载时取出做 keyword 子串匹配 |
 | `geodata.geoip` | `GeoIP` | 读取自定义标签字符串/列表或标准 MaxMind country 结构 |
 | `geodata.asn` | `GeoIP` | 读取 `autonomous_system_number` |
 | `geodata.ipset` | `IPSet` | 读取本地可信 pickle/radix 文件，把覆盖网段的 data key 合并为标签 |
@@ -393,6 +393,8 @@ uv run python -m utils.convert --geodata-path tags/geosite.dat --tag-path tags -
 ```
 
 输出目录不存在时会自动创建，并在首次运行写出全部三个产物。
+
+转换遵循 v2ray 规则类型：Domain 后缀匹配、Full 精确匹配、Plain（keyword）子串匹配，Regex 跳过；属性生成 `列表@属性` 与 `@属性` 标签。
 
 ### `utils.fetch_ip`
 

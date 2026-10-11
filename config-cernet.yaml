@@ -249,6 +249,7 @@ actions:
       domain_exclude:
         - mozilla
         - cn
+        - "@cn"
         - cloudflare-cn
         - google-cn
         - category-ntp
@@ -311,6 +312,7 @@ actions:
     match_name:
       domain_exclude:
         - cn
+        - "@cn"
     match_ip:
       ip_include:
         - cloudflare
@@ -356,6 +358,7 @@ routing:
         - category-ads-all
         - category-ads
         - ads
+        - "@ads"
   - name: proxy
     before:
       - proxy
@@ -379,6 +382,7 @@ routing:
     matcher:
       domain_include:
         - cn
+        - "@cn"
         - google-cn
         - apple-cn
     after:

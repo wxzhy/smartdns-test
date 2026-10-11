@@ -6,20 +6,52 @@ from pathlib import Path
 from typing import Annotated
 
 import ujson
-from dns.name import from_text
+from loguru import logger
 from marisa_trie import BytesTrie  # ty: ignore[unresolved-import]
 from radix import Radix
 from typer import Option, Typer
 
+from smartdns.routing.geosite import domain_key, full_key, keyword_key
 from utils.mihomo.component.geodata.router import DomainType, GeoSiteList
 
 app = Typer()
 
+# 自定义标签文件支持与 v2fly domain-list-community 相同的前缀；无前缀为后缀匹配。
+_TEXT_RULE_TYPES = {
+    "domain": DomainType.Domain,
+    "full": DomainType.Full,
+    "keyword": DomainType.Plain,
+    "regexp": DomainType.Regex,
+}
 
-def normalize(domain: str) -> str:
-    """将域名规范化为 GeoSite Trie 使用的逆序标签形式。"""
-    name = from_text(domain).canonicalize()
-    return "".join(f"{label.decode('ascii')}." for label in reversed(name.labels))
+
+def rule_key(domain_type: DomainType, value: str) -> str | None:
+    """按 v2ray 语义生成 trie 键；Regex 不支持（逐条匹配代价过高），返回 None。"""
+    match domain_type:
+        case DomainType.Domain:
+            return domain_key(value)
+        case DomainType.Full:
+            return full_key(value)
+        case DomainType.Plain:
+            return keyword_key(value)
+        case _:
+            return None
+
+
+def _parse_text_rule(line: str) -> tuple[DomainType, str]:
+    prefix, sep, value = line.partition(":")
+    domain_type = _TEXT_RULE_TYPES.get(prefix.strip().lower()) if sep else None
+    if domain_type is None:
+        return DomainType.Domain, line
+    return domain_type, value.strip()
+
+
+def _display(domain_type: DomainType, value: str) -> str:
+    """geosite.json 中保留规则类型，后缀匹配沿用裸域名。"""
+    if domain_type == DomainType.Domain:
+        return value
+    prefix = {DomainType.Full: "full", DomainType.Plain: "keyword"}[domain_type]
+    return f"{prefix}:{value}"
 
 
 def convert(geodata_path: Path, tag_path: Path, output_path: Path) -> None:
@@ -27,19 +59,31 @@ def convert(geodata_path: Path, tag_path: Path, output_path: Path) -> None:
     sites: defaultdict[str, set[str]] = defaultdict(set)
     normalized_sites: defaultdict[str, set[str]] = defaultdict(set)
     radix = Radix()
+    skipped_regex = 0
+
+    def add_rule(labels: set[str], domain_type: DomainType, value: str) -> None:
+        nonlocal skipped_regex
+        key = rule_key(domain_type, value)
+        if key is None:
+            skipped_regex += 1
+            return
+        for label in labels:
+            sites[label].add(_display(domain_type, value))
+            normalized_sites[label].add(key)
+
     if geodata_path.is_file():
         with geodata_path.open("rb") as source:
             geosite = GeoSiteList().load(source)
         for entry in geosite.entry:
+            name = entry.country_code.lower()
             for domain in entry.domain:
-                if domain.type == DomainType.Regex:
-                    continue
-                labels = {entry.country_code.lower()}
-                labels.update(attribute.key.lower() for attribute in domain.attribute)
-                normalized = normalize(domain.value)
-                for label in labels:
-                    sites[label].add(domain.value)
-                    normalized_sites[label].add(normalized)
+                # 属性以 "列表@属性"（同 geosite:google@cn）和 "@属性" 两种标签
+                # 提供；不能直接用属性名，否则 @cn 会与名为 cn 的列表混为一谈。
+                labels = {name}
+                for attribute in domain.attribute:
+                    key = attribute.key.lower()
+                    labels.update((f"{name}@{key}", f"@{key}"))
+                add_rule(labels, domain.type, domain.value)
 
     geosite_path = tag_path / "geosite"
     if geosite_path.is_dir():
@@ -47,8 +91,12 @@ def convert(geodata_path: Path, tag_path: Path, output_path: Path) -> None:
             for raw_line in tag_file.read_text(encoding="ascii").splitlines():
                 line = raw_line.strip()
                 if line and not line.startswith("#"):
-                    sites[tag_file.stem.lower()].add(line)
-                    normalized_sites[tag_file.stem.lower()].add(normalize(line))
+                    add_rule({tag_file.stem.lower()}, *_parse_text_rule(line))
+
+    if skipped_regex:
+        logger.warning(
+            "跳过 {} 条 regexp 规则（GeoSite 不支持正则匹配）", skipped_regex
+        )
 
     geoip_path = tag_path / "geoip"
     if geoip_path.is_dir():
