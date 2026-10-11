@@ -71,8 +71,11 @@ class UDPNameserver(BaseAddressNameserver):
             with fail_after(remaining_timeout(deadline)):
                 raw_sock = await create_connected_udp_socket(self.host, self.port)
             async with raw_sock:
+                # 过滤依据是应答中的 OPT；未启用 EDNS 的查询，真实应答也没有它。
                 sock = AnyioDatagramSocket(
-                    raw_sock, repeat=self._repeat, use_tricks=self._use_tricks
+                    raw_sock,
+                    repeat=self._repeat,
+                    use_tricks=self._use_tricks and request.edns >= 0,
                 )
                 return await dns.asyncquery.udp(
                     request,

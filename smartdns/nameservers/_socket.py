@@ -40,15 +40,12 @@ class AnyioDatagramSocket(DatagramSocket):
     async def recvfrom(self, size, timeout):
         try:
             with fail_after(timeout):
-                if self._use_tricks:
-                    # UDP socket 已连接，receive 即可；多次接收跳过明显伪造的包。
-                    for _ in range(5):
-                        data = await self._sock.receive()
-                        if len(data) > 32 and data[10:12] == b"\x00\x01":
-                            return data[:size], self._addr
-                    # 多次接收后仍无有效数据包，按超时处理。
-                    raise TimeoutError("未收到有效数据包")
                 data = await self._sock.receive()
+                if self._use_tricks:
+                    # 对 EDNS 查询的真实应答必带 OPT（ARCOUNT ≥ 1），抢答注入的伪造
+                    # 包通常没有；跳过这类包直到超时（UDP socket 已连接，只收上游）。
+                    while len(data) <= 32 or data[10:12] == b"\x00\x00":
+                        data = await self._sock.receive()
                 return data[:size], self._addr
         except TimeoutError as err:
             raise Timeout(timeout=timeout) from err

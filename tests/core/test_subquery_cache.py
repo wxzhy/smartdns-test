@@ -44,7 +44,7 @@ from smartdns.routing.router import Router
 from smartdns.utils.deadline import SharedDeadline
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from dns.message import QueryMessage
 
@@ -263,6 +263,14 @@ async def test_https_uses_final_a_route_and_shared_cache(
         assert not master._shared_deadlines
 
 
+async def _eventually(predicate: Callable[[], bool], timeout: float = 1.0) -> bool:
+    for _ in range(int(timeout / 0.01)):
+        if predicate():
+            return True
+        await asyncio.sleep(0.01)
+    return predicate()
+
+
 @pytest.mark.parametrize("cache_size", [0, 10])
 async def test_subquery_timeout_preserves_main_answer_and_cancels_worker(
     cache_size: int, monkeypatch
@@ -278,8 +286,14 @@ async def test_subquery_timeout_preserves_main_answer_and_cancels_worker(
         assert response.answer[0][0].params[ParamKey.ALPN].ids == (b"h2",)
         assert ParamKey.ECH not in response.answer[0][0].params
         assert await asyncio.to_thread(upstream.a_cancelled.wait, 1)
-        assert all(not worker._tasks for worker in master.workers)
-        assert not master._shared_deadlines
+        # 子查询的取消清理跨线程在 Master/Worker 循环上异步收尾，主应答返回
+        # 时可能尚未结束；等待其完成而不是在取消信号后立即断言。
+        assert await _eventually(
+            lambda: (
+                all(not worker._tasks for worker in master.workers)
+                and not master._shared_deadlines
+            )
+        )
 
 
 async def test_subquery_timeout_keeps_other_a_waiter_alive(monkeypatch) -> None:

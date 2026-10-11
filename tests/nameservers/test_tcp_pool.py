@@ -6,18 +6,22 @@
 
 import asyncio
 import struct
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import dns.asyncbackend
 import dns.exception
 import dns.message
 import dns.rcode
 import pytest
+from anyio.abc import SocketAttribute
 from generic_connection_pool.asyncio import ConnectionPool
 
 from smartdns.models.nameserver import TCPNameserverConfig
-from smartdns.nameservers._pool import TCPStreamConnectionManager
+from smartdns.nameservers._pool import TCPStreamConnectionManager, idle_socket_alive
 from smartdns.nameservers.tcp import TCPNameserver
+
+if TYPE_CHECKING:
+    from anyio.abc import SocketStream
 
 
 def _dns_query():
@@ -358,3 +362,26 @@ async def test_interrupted_exchange_rebuilds_connection() -> None:
         assert state["exchanges"] == 1
     finally:
         server.close()
+
+
+async def test_unprobeable_socket_is_rebuilt_instead_of_raising() -> None:
+    """uvloop 未打补丁时 raw socket 是不支持 recv 的 PseudoSocket。
+
+    修复前 TypeError 从 check_aliveness 抛给获取连接的查询，池化连接从第二次
+    查询起全部失败；现在判死重建。
+    """
+
+    class _PseudoSocket:
+        def recv(self, *args: object) -> bytes:
+            raise TypeError("transport sockets do not support recv() method")
+
+    class _Stream:
+        def extra(self, attribute: object, default: object = None) -> object:
+            if attribute is SocketAttribute.raw_socket:
+                return _PseudoSocket()
+            return default
+
+    stream = cast("SocketStream", _Stream())
+    assert idle_socket_alive(stream) is False
+    manager = TCPStreamConnectionManager()
+    assert await manager.check_aliveness(("192.0.2.1", 53), stream) is False

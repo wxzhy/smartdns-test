@@ -150,7 +150,7 @@
 
 | `type` | 类 | 说明 |
 |---|---|---|
-| `udp` | `UDPNameserver` | UDP 直连。`repeat` 重复发包提高成功率；`use_tricks` 启用"多收几跳跳过伪造包"的接收技巧；截断响应自动对同一上游改用 TCP 重试 |
+| `udp` | `UDPNameserver` | UDP 直连。`repeat` 重复发包提高成功率；`use_tricks` 对 EDNS 查询丢弃不带 OPT 的伪造应答、继续接收直到超时；截断响应自动对同一上游改用 TCP 重试 |
 | `tcp` | `TCPNameserver` | TCP 直连。`pool_size>0` 时用 `generic_connection_pool` 复用连接；`use_tricks` 尝试非阻塞 OOB 前缀发送，不支持或失败时回退完整报文的普通异步发送 |
 | `curl` | `CurlNameserver` | 用 `curl-cffi`（chrome 指纹）发 DoH。支持自定义 `Host`、GET/POST、证书校验开关、**ECH**（从指定域名现查 HTTPS 记录取 ECH 密钥） |
 

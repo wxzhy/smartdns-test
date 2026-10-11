@@ -8,20 +8,19 @@ TLSStream 会把 hostname 经 IDNA 编码成 bytes 传入 wrap_bio，因此这�
 TCP 相同，报文收发由 dnspython 负责。
 """
 
-import socket
 import ssl
 from typing import TYPE_CHECKING, Any
 
 import utls
 from anyio import EndOfStream, aclose_forcefully, connect_tcp, fail_after
-from anyio.abc import SocketAttribute, SocketStream
 from generic_connection_pool.asyncio import BaseConnectionManager
 
-from smartdns.nameservers._pool import TcpEndpoint
+from smartdns.nameservers._pool import TcpEndpoint, idle_socket_alive
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from anyio.abc import SocketStream
     from utls import MemoryBIO, SSLContext, SSLObject
 
 
@@ -172,18 +171,6 @@ class TLSStreamConnectionManager(
         # 交换方标记的脏连接（半条 TLS 记录已读入用户态缓冲）优先判死。
         if not conn.healthy:
             return False
-        raw = conn.extra(SocketAttribute.raw_socket, None)
-        if raw is None:
-            return False
-        # asyncio 后端返回 TransportSocket，其他后端可能直接返回标准 socket。
-        # peek 的是 TLS 密文：对端关闭返回 b""，无数据抛 BlockingIOError（存活）；
-        # 有待读密文说明对端已在空闲连接上主动发送（close_notify 或错位残留），
-        # 复用会在下次交换读到 EOF/记录错位，与 TCP 池一致判死重建。
-        probe = getattr(raw, "_sock", raw)
-        try:
-            probe.recv(1, socket.MSG_PEEK)
-        except BlockingIOError:
-            return True  # 内核缓冲无待读密文：连接存活
-        except OSError:
-            return False  # 对端关闭或 socket 异常：重建
-        return False  # 内核缓冲有残留密文：重建
+        # peek 的是 TLS 密文：有待读密文说明对端已在空闲连接上主动发送
+        # （close_notify 或错位残留），复用会读到 EOF/记录错位，同样判死重建。
+        return idle_socket_alive(conn)

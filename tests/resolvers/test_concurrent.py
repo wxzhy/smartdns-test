@@ -511,8 +511,10 @@ async def test_all_nested_candidates_must_pass_outer_filter(
     bad = _FakeResolver(
         "bad", _tagged("bad", "192.0.2.1", "blocked"), delay=0 if blocked_wins else 0.01
     )
+    # fallback 必须明显慢于内层分支的完整处理：机器繁忙时 30ms 不足以让内层
+    # 先完成，外层（wait_all=false）会先拿到 fallback 而误判。
     fallback = _FakeResolver(
-        "fallback", _tagged("fallback", "192.0.2.3", "allowed"), delay=0.03
+        "fallback", _tagged("fallback", "192.0.2.3", "allowed"), delay=0.5
     )
     inner = _make(
         ["good", "bad"],

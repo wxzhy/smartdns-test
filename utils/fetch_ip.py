@@ -43,13 +43,15 @@ def _scan_networks(ipset: netaddr.IPSet, ipv4_prefix: int = 24) -> set[str]:
 
 
 def _fastly_addresses(ipset: netaddr.IPSet) -> set[str]:
+    """每个 /22（IPv6 /48）块取固定偏移处的地址；更小的网段在自身范围内取模。
+
+    不能取超网：超网中的偏移地址可能落在原网段之外（甚至已被扣除的 cn 段）。
+    """
     result: set[str] = set()
     for cidr in ipset.iter_cidrs():
         prefix, offset = (22, 485) if cidr.version == 4 else (48, 0x485)
-        networks = (
-            cidr.supernet(prefix) if cidr.prefixlen > prefix else cidr.subnet(prefix)
-        )
-        result.update(str(network[offset]) for network in networks)
+        blocks = [cidr] if cidr.prefixlen > prefix else cidr.subnet(prefix)
+        result.update(str(block[offset % block.size]) for block in blocks)
     return result
 
 

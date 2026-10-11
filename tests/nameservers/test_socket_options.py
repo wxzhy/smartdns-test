@@ -2,11 +2,13 @@
 
 from socket import AF_INET, MSG_OOB
 
+import dns.message
 import pytest
 from anyio.abc import SocketAttribute
 
 from smartdns.models.nameserver import TCPNameserverConfig, UDPNameserverConfig
 from smartdns.nameservers._socket import AnyioDatagramSocket, AnyioStreamSocket
+from smartdns.nameservers.udp import UDPNameserver
 
 
 class _FakeDatagramSocket:
@@ -111,6 +113,70 @@ async def test_udp_use_tricks_skips_invalid_packet() -> None:
 
     assert data == bytes(valid)
     assert address == ("1.1.1.1", 53)
+
+
+def _packet(arcount: int) -> bytes:
+    data = bytearray(40)
+    data[10:12] = arcount.to_bytes(2, "big")
+    return bytes(data)
+
+
+async def test_udp_use_tricks_accepts_additional_records_beyond_opt() -> None:
+    raw_socket = _FakeDatagramSocket([_packet(0), _packet(3)])
+    socket = AnyioDatagramSocket(raw_socket, use_tricks=True)
+
+    data, _ = await socket.recvfrom(512, 1)
+
+    assert data == _packet(3)
+
+
+async def test_udp_use_tricks_keeps_skipping_until_timeout() -> None:
+    # 修复前收满 5 个无效包即报超时，即使时限还有剩余。
+    raw_socket = _FakeDatagramSocket([_packet(0)] * 8 + [_packet(1)])
+    socket = AnyioDatagramSocket(raw_socket, use_tricks=True)
+
+    data, _ = await socket.recvfrom(512, 1)
+
+    assert data == _packet(1)
+
+
+@pytest.mark.parametrize(("use_edns", "expected"), [(0, True), (-1, False)])
+async def test_udp_nameserver_only_filters_edns_queries(
+    monkeypatch, use_edns: int, expected: bool
+) -> None:
+    seen: list[bool] = []
+
+    class _Socket:
+        def __init__(self, raw, repeat: int = 0, use_tricks: bool = False) -> None:
+            seen.append(use_tricks)
+
+    class _Raw:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info) -> None:
+            return None
+
+    async def connected(*args: object) -> _Raw:
+        return _Raw()
+
+    async def fake_udp(request, **kwargs):
+        return dns.message.make_response(request)
+
+    monkeypatch.setattr("smartdns.nameservers.udp.AnyioDatagramSocket", _Socket)
+    monkeypatch.setattr(
+        "smartdns.nameservers.udp.create_connected_udp_socket", connected
+    )
+    monkeypatch.setattr("smartdns.nameservers.udp.dns.asyncquery.udp", fake_udp)
+    nameserver = UDPNameserver(
+        UDPNameserverConfig(
+            name="udp", type="udp", address="192.0.2.53", port=53, use_tricks=True
+        )
+    )
+    query = dns.message.make_query("example.com.", "A", use_edns=use_edns)
+    await nameserver.async_query(query, 1, None, 0, False, None)  # ty: ignore[invalid-argument-type]
+
+    assert seen == [expected]
 
 
 async def test_tcp_use_tricks_sends_oob_prefix_then_remainder() -> None:

@@ -195,9 +195,18 @@ class DNSCryptNameserver(BaseNameserver):
                 async with self._refresh_lock:
                     # 等锁期间其他请求可能已经安装了新证书；此时直接用新版本重试。
                     if self._cert_generation == generation:
-                        refreshed = await self._refresh_cert(
-                            remaining_timeout(deadline)
-                        )
+                        # 与临期刷新共用退避：坏包或故障上游不能让每个查询都
+                        # 触发一次证书拉取。
+                        if monotonic() < self._next_refresh_attempt:
+                            raise
+                        try:
+                            refreshed = await self._refresh_cert(
+                                remaining_timeout(deadline)
+                            )
+                        finally:
+                            self._next_refresh_attempt = (
+                                monotonic() + CERT_REFRESH_RETRY_INTERVAL
+                            )
                         if not refreshed:
                             raise
                 # 锁只合并证书刷新；每个请求用固定密钥快照并行执行网络重试。

@@ -1,9 +1,11 @@
 import importlib
 from typing import TYPE_CHECKING
 
+import netaddr
 from typer.testing import CliRunner
 
 from utils.convert import app, convert
+from utils.fetch_ip import _fastly_addresses
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -44,3 +46,15 @@ def test_convert_cli_preserves_named_options(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert (output / "geosite.json").is_file()
+
+
+def test_fastly_addresses_stay_inside_each_cidr() -> None:
+    ranges = ["103.244.50.0/24", "103.245.224.0/25", "151.101.0.0/21"]
+    addresses = _fastly_addresses(netaddr.IPSet(ranges))
+    assert addresses == {
+        "103.244.50.229",
+        "103.245.224.101",
+        "151.101.1.229",
+        "151.101.5.229",
+    }
+    assert all(netaddr.IPAddress(a) in netaddr.IPSet(ranges) for a in addresses)

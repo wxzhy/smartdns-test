@@ -1,6 +1,7 @@
 """真实连接池在获取、检查和归还时取消后，容量与连接所有权须恢复。"""
 
 import asyncio
+from importlib.metadata import version
 from typing import TYPE_CHECKING, cast
 
 import anyio.lowlevel
@@ -10,7 +11,10 @@ from anyio import CancelScope, Event, create_task_group, fail_after, sleep
 from generic_connection_pool.asyncio import BaseConnectionManager
 
 from smartdns.models.nameserver import TCPNameserverConfig, TLSNameserverConfig
-from smartdns.nameservers._pool_compat import CancellationSafeConnectionPool
+from smartdns.nameservers._pool_compat import (
+    SUPPORTED_POOL_VERSION,
+    CancellationSafeConnectionPool,
+)
 from smartdns.nameservers.tcp import TCPNameserver
 from smartdns.nameservers.tls import TLSNameserver
 
@@ -289,3 +293,8 @@ async def test_nameserver_recovers_after_cancelled_creation(
         assert query.is_response(result)
         await ns.stop()
     assert manager.disposed == manager.created
+
+
+def test_installed_pool_matches_compat_layer_version() -> None:
+    """兼容层依赖私有实现；升级依赖时须先重新核对再更新此版本号。"""
+    assert version("generic-connection-pool") == SUPPORTED_POOL_VERSION

@@ -8,17 +8,30 @@ from __future__ import annotations
 
 from asyncio import wait_for
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 from typing import TYPE_CHECKING
 
 from anyio import CancelScope
 from generic_connection_pool import exceptions
 from generic_connection_pool.asyncio import ConnectionPool
 from generic_connection_pool.common import ConnectionInfo, EventType, Timer
+from loguru import logger
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Hashable
 
     from generic_connection_pool.asyncio.pool import EndpointPool
+
+# 本模块覆写了依赖的私有方法（_pools、try_acquire_or_reserve、
+# attach_and_unreserve、_event_queue 等），只针对此版本核对过。
+SUPPORTED_POOL_VERSION = "0.8.1"
+_installed_pool_version = version("generic-connection-pool")
+if _installed_pool_version != SUPPORTED_POOL_VERSION:
+    logger.warning(
+        "generic-connection-pool {} 未经兼容层验证（仅支持 {}），连接池可能失效",
+        _installed_pool_version,
+        SUPPORTED_POOL_VERSION,
+    )
 
 
 class CancellationSafeConnectionPool[EndpointT: Hashable, ConnectionT: Hashable](

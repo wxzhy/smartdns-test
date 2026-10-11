@@ -649,6 +649,36 @@ async def test_unchanged_expiring_cert_refresh_is_backed_off(
         transport.close()
 
 
+async def test_repeated_decrypt_failures_share_refresh_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """解密持续失败（坏包或上游故障）时，退避期内只尝试一次证书刷新。"""
+    server = _FakeDnsCryptServer()
+    transport, port = await _start_udp(server)
+    try:
+        nameserver = await _make_nameserver(server, port)
+        refreshes = 0
+
+        async def failing_exchange(*args, **kwargs):
+            raise CryptoError("持续解密失败")
+
+        async def unchanged_refresh(timeout=None) -> bool:
+            nonlocal refreshes
+            refreshes += 1
+            return False
+
+        monkeypatch.setattr(nameserver, "_exchange", failing_exchange)
+        monkeypatch.setattr(nameserver, "_refresh_cert", unchanged_refresh)
+        for _ in range(3):
+            with pytest.raises(CryptoError):
+                await _query(nameserver)
+
+        assert refreshes == 1
+        await nameserver.stop()
+    finally:
+        transport.close()
+
+
 async def test_expiring_cert_refreshes_before_query() -> None:
     """证书剩余寿命低于阈值时，查询前主动刷新获取新证书。"""
     server = _FakeDnsCryptServer()

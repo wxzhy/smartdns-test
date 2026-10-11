@@ -7,6 +7,26 @@ from generic_connection_pool.asyncio import BaseConnectionManager
 TcpEndpoint = tuple[str, int]
 
 
+def idle_socket_alive(stream: object) -> bool:
+    """MSG_PEEK 探测池内空闲连接：内核缓冲为空且未关闭才算存活。
+
+    asyncio 后端返回 TransportSocket（真实 socket 位于 _sock），其他后端可能
+    直接返回标准 socket；uvloop 未打补丁时是不支持 recv 的 PseudoSocket。
+    无法探测时一律判死重建，不能把异常抛给获取连接的查询。
+    """
+    raw = stream.extra(SocketAttribute.raw_socket, None)  # ty: ignore[unresolved-attribute]
+    if raw is None:
+        return False
+    probe = getattr(raw, "_sock", raw)
+    try:
+        probe.recv(1, socket.MSG_PEEK)
+    except BlockingIOError:
+        return True  # 内核缓冲无待读数据：连接存活
+    except Exception:
+        return False  # 对端关闭、socket 异常或无法探测：重建
+    return False  # 内核缓冲有残留数据或对端已关闭：重建
+
+
 class TCPStreamConnectionManager(BaseConnectionManager[TcpEndpoint, SocketStream]):
     """基于 anyio SocketStream 的 TCP 连接管理器，供 generic_connection_pool 复用连接。
 
@@ -26,18 +46,7 @@ class TCPStreamConnectionManager(BaseConnectionManager[TcpEndpoint, SocketStream
         await conn.aclose()
 
     async def check_aliveness(self, endpoint: TcpEndpoint, conn: SocketStream) -> bool:
-        raw = conn.extra(SocketAttribute.raw_socket, None)
-        if raw is None:
-            return False
-        # asyncio 后端返回 TransportSocket，其他后端可能直接返回标准 socket。
-        probe = getattr(raw, "_sock", raw)
-        try:
-            probe.recv(1, socket.MSG_PEEK)
-        except BlockingIOError:
-            return True  # 内核缓冲无待读数据：连接存活
-        except OSError:
-            return False  # 对端关闭或 socket 异常：重建
-        return False  # 内核缓冲有残留数据：重建
+        return idle_socket_alive(conn)
 
 
 class TrackedStream:
