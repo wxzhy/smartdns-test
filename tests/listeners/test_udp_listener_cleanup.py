@@ -4,6 +4,7 @@ from socket import AF_INET
 
 import dns.exception
 import dns.message
+import dns.tsigkeyring
 import pytest
 from anyio import ClosedResourceError, Semaphore, sleep
 from anyio.abc import SocketAttribute
@@ -50,25 +51,47 @@ async def test_from_socket_failure_closes_raw_socket(monkeypatch) -> None:
     assert listener._listener is None
 
 
+def _tsig_signed_query() -> bytes:
+    query = dns.message.make_query("example.com.", "A")
+    query.use_tsig(
+        dns.tsigkeyring.from_text({"key.": "c2VjcmV0c2VjcmV0c2VjcmV0"}),
+        keyname="key.",
+    )
+    return query.to_wire()
+
+
 @pytest.mark.parametrize(
-    ("receive_error", "expected_sleeps"),
+    ("receive_result", "expected_sleeps"),
     [
-        (dns.exception.FormError("bad packet"), []),
+        (b"\x00\x01", []),
+        # UnknownTSIGKey 不是 FormError 子类，同样只能丢弃单个报文。
+        (_tsig_signed_query(), []),
         (OSError("socket failed"), [0.1]),
     ],
+    ids=["malformed", "tsig", "socket-error"],
 )
 async def test_receive_error_backoff_policy(
-    monkeypatch, receive_error: Exception, expected_sleeps: list[float]
+    monkeypatch, receive_result: bytes | Exception, expected_sleeps: list[float]
 ) -> None:
     raw_socket = _RawSocket()
     listener = _listener()
     monkeypatch.setattr(listener, "_create_socket", lambda: raw_socket)
+    calls = 0
 
     class _FakeUDPSocket:
         def extra(self, attribute: object, default: object = None) -> object:
             if attribute is SocketAttribute.family:
                 return AF_INET
             return default
+
+        async def receive(self) -> tuple[bytes, tuple[str, int]]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                if isinstance(receive_result, Exception):
+                    raise receive_result
+                return receive_result, ("127.0.0.1", 12345)
+            raise ClosedResourceError
 
         async def aclose(self) -> None:
             return None
@@ -87,26 +110,16 @@ async def test_receive_error_backoff_policy(
             assert sock is raw_socket
             return udp_socket
 
-    calls = 0
-
-    async def fake_receive_udp(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise receive_error
-        raise ClosedResourceError
-
     sleeps: list[float] = []
 
     async def fake_sleep(delay: float) -> None:
         sleeps.append(delay)
 
     monkeypatch.setattr("smartdns.listeners.udp.UDPSocket", _UDPSocketFactory)
-    monkeypatch.setattr("smartdns.listeners.udp.receive_udp", fake_receive_udp)
     monkeypatch.setattr("smartdns.listeners.udp.sleep", fake_sleep)
 
     async def handler(request):
-        return None
+        raise AssertionError("无法解析的报文不应进入处理器")
 
     await listener.start(handler)
 
@@ -136,6 +149,12 @@ async def test_udp_queue_and_processing_share_one_deadline(monkeypatch) -> None:
         async def aclose(self):
             return None
 
+        async def receive(self):
+            message = next(queries, None)
+            if message is None:
+                raise ClosedResourceError
+            return message.to_wire(), ("127.0.0.1", 12345)
+
     datagram = Datagram()
 
     class Factory:
@@ -151,12 +170,6 @@ async def test_udp_queue_and_processing_share_one_deadline(monkeypatch) -> None:
     queries = iter([first, second])
     sent: list[int] = []
 
-    async def receive(*args, **kwargs):
-        message = next(queries, None)
-        if message is None:
-            raise ClosedResourceError
-        return message, 0, ("127.0.0.1", 12345)
-
     async def send(sock, wire, client, **kwargs):
         sent.append(dns.message.from_wire(wire).id)
 
@@ -165,7 +178,6 @@ async def test_udp_queue_and_processing_share_one_deadline(monkeypatch) -> None:
         return dns.message.make_response(request.msg)
 
     monkeypatch.setattr("smartdns.listeners.udp.UDPSocket", Factory)
-    monkeypatch.setattr("smartdns.listeners.udp.receive_udp", receive)
     monkeypatch.setattr("smartdns.listeners.udp.send_udp", send)
     try:
         await listener.start(handler)

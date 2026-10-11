@@ -17,7 +17,11 @@ from dns.asyncquery import receive_tcp, send_tcp
 from loguru import logger
 
 from smartdns.listeners._socket import AnyioStreamSocket
-from smartdns.listeners.base import BaseListener
+from smartdns.listeners.base import (
+    BaseListener,
+    should_drop,
+    unsupported_opcode_response,
+)
 from smartdns.models.context import Request
 
 if TYPE_CHECKING:
@@ -135,13 +139,15 @@ class TCPListener(BaseListener):
                         return
                     # 接收帧、限流排队、处理、等待写锁与回写共享截止时刻。
                     with fail_after(max(0.0, deadline - monotonic())):
-                        request = Request.from_message(
-                            msg=data,
-                            listener=self.name,
-                            remote_address=client_address,
-                            deadline=deadline,
-                        )
-                        response: Message | None = await handler(request)
+                        response: Message | None = unsupported_opcode_response(data)
+                        if response is None:
+                            request = Request.from_message(
+                                msg=data,
+                                listener=self.name,
+                                remote_address=client_address,
+                                deadline=deadline,
+                            )
+                            response = await handler(request)
                         if response is not None:
                             wire = self._serialize_response(response)
                             # 多个查询可并发处理，但 TCP 帧必须完整、串行写入。
@@ -179,8 +185,10 @@ class TCPListener(BaseListener):
                             data, _ = await receive_tcp(
                                 anyio_stream, ignore_trailing=True
                             )
-                        if not data.question:
-                            logger.debug("TCP监听器 {} 跳过无 question 报文", self.name)
+                        if should_drop(data):
+                            logger.debug(
+                                "TCP监听器 {} 跳过应答报文或无 question 报文", self.name
+                            )
                             continue
                         deadline = (
                             anyio_stream.request_started or monotonic()

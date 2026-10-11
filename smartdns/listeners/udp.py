@@ -13,13 +13,17 @@ from typing import TYPE_CHECKING
 
 from anyio import ClosedResourceError, Semaphore, create_task_group, fail_after, sleep
 from anyio.abc import UDPSocket
-from dns.asyncquery import receive_udp, send_udp
-from dns.exception import FormError
+from dns.asyncquery import send_udp
 from dns.inet import af_for_address
+from dns.message import from_wire
 from loguru import logger
 
 from smartdns.listeners._socket import AnyioDatagramSocket
-from smartdns.listeners.base import BaseListener
+from smartdns.listeners.base import (
+    BaseListener,
+    should_drop,
+    unsupported_opcode_response,
+)
 from smartdns.models.context import Request
 
 if TYPE_CHECKING:
@@ -34,6 +38,9 @@ else:
     from socket import SO_REUSEPORT
 
 _RECEIVE_ERROR_BACKOFF = 0.1
+# 与 make_response 宣告的 our_payload 一致：客户端声明更大的 payload 也不超过
+# 此值，避免 UDP 放大与 IP 分片（DNS Flag Day 2020 建议值）。
+_MAX_UDP_PAYLOAD = 1232
 
 
 class UDPListener(BaseListener):
@@ -69,8 +76,15 @@ class UDPListener(BaseListener):
 
     @staticmethod
     def _serialize_response(request: Message, response: Message) -> bytes:
-        """按客户端声明的 UDP 容量序列化，超限时返回带 TC 的合法响应。"""
-        max_size = request.payload if request.edns >= 0 else 512
+        """按客户端声明的 UDP 容量序列化，超限时返回带 TC 的合法响应。
+
+        RFC 6891：小于 512 的声明按 512 处理；上限取本端宣告的 payload。
+        """
+        max_size = (
+            min(max(request.payload, 512), _MAX_UDP_PAYLOAD)
+            if request.edns >= 0
+            else 512
+        )
         # 保留 speedcheck 等动作排定的记录顺序。
         return response.to_wire(
             max_size=max_size,
@@ -100,21 +114,20 @@ class UDPListener(BaseListener):
 
             async def process(msg, client, deadline: float) -> None:
                 try:
-                    if not msg.question:
-                        logger.debug("UDP监听器 {} 丢弃无 question 报文", self.name)
-                        return
                     if deadline <= monotonic():
                         return
                     with fail_after(max(0.0, deadline - monotonic())):
-                        request = Request.from_message(
-                            msg=msg,
-                            listener=self.name,
-                            remote_address=client[0],
-                            deadline=deadline,
-                        )
-                        response = await handler(request)
+                        response = unsupported_opcode_response(msg)
+                        if response is None:
+                            request = Request.from_message(
+                                msg=msg,
+                                listener=self.name,
+                                remote_address=client[0],
+                                deadline=deadline,
+                            )
+                            response = await handler(request)
                         if response is not None:
-                            wire = self._serialize_response(request.msg, response)
+                            wire = self._serialize_response(msg, response)
                             await send_udp(
                                 anyio_socket,
                                 wire,
@@ -138,18 +151,9 @@ class UDPListener(BaseListener):
             async with create_task_group() as tg:
                 while True:
                     try:
-                        msg, _, client = await receive_udp(
-                            anyio_socket, ignore_trailing=True
-                        )
+                        wire, client = await anyio_socket.recvfrom(65535, None)
                     except ClosedResourceError:
                         break
-                    except FormError as error:
-                        # 单个畸形报文不代表套接字故障，直接丢弃并继续接收，避免
-                        # 任意客户端通过坏包触发整个监听器的全局退避。
-                        logger.debug(
-                            "UDP监听器 {} 丢弃格式错误请求: {}", self.name, error
-                        )
-                        continue
                     except Exception as error:
                         # 套接字及其他持续性接收故障采用短退避，避免错误热循环。
                         logger.warning(
@@ -159,6 +163,23 @@ class UDPListener(BaseListener):
                             error,
                         )
                         await sleep(_RECEIVE_ERROR_BACKOFF)
+                        continue
+                    try:
+                        msg = from_wire(wire, ignore_trailing=True)
+                    except Exception as error:
+                        # 解析失败只说明单个报文有问题（畸形、TSIG 签名等），丢弃后
+                        # 立即继续接收；退避会让任意客户端用坏包拖停整个监听器。
+                        logger.debug(
+                            "UDP监听器 {} 丢弃无法解析的请求: {}: {}",
+                            self.name,
+                            type(error).__name__,
+                            error,
+                        )
+                        continue
+                    if should_drop(msg):
+                        logger.debug(
+                            "UDP监听器 {} 丢弃应答报文或无 question 报文", self.name
+                        )
                         continue
                     deadline = monotonic() + self.timeout
                     try:
