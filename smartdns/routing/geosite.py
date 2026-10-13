@@ -1,3 +1,5 @@
+"""GeoSite 域名标签查询：后缀、完整与关键字三类规则共存于一棵 MARISA trie。"""
+
 from typing import TYPE_CHECKING
 
 from dns.name import Name, from_text

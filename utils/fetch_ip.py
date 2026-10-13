@@ -1,3 +1,5 @@
+"""离线工具：抓取 CDN 与 Google 的地址段，生成测速/替换用的 IP 列表。"""
+
 from pathlib import Path
 from typing import Any
 

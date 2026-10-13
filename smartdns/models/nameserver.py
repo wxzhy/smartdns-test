@@ -1,3 +1,5 @@
+"""上游 Nameserver 配置模型（UDP/TCP/TLS/DNSCrypt/DoH）。"""
+
 from typing import Annotated, Literal
 
 from curl_cffi.requests.impersonate import (

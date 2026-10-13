@@ -1,3 +1,5 @@
+"""路由规则执行器：匹配请求后依次运行 before 动作、解析器、after 动作与子查询。"""
+
 from typing import TYPE_CHECKING
 
 from dns.rcode import Rcode
@@ -68,6 +70,9 @@ class Router:
         if not self.match(context):
             return False
         request = context.request
+        logger.debug(
+            "路由 {} 命中 {} {}", self.config.name, request.qname, request.rdtype.name
+        )
         for action in self.before:
             await action.on_request(context)
             if context.stop:

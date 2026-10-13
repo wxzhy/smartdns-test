@@ -1,3 +1,5 @@
+"""Action 配置模型；phases 声明各类型可挂载的阶段。"""
+
 from ipaddress import IPv4Address, IPv6Address
 from typing import Annotated, ClassVar, Literal
 

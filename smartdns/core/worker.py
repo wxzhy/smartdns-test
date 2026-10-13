@@ -1,3 +1,5 @@
+"""Worker：在独立事件循环中持有上游、解析器与 Action，按路由表处理请求。"""
+
 from __future__ import annotations
 
 from asyncio import current_task, gather, get_running_loop, run_coroutine_threadsafe

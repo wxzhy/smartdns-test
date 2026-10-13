@@ -1,3 +1,6 @@
+"""顶层配置模型：从 YAML 加载并在启动前校验组件引用与 Action 阶段。"""
+
+from collections import Counter
 from os import cpu_count
 from pathlib import Path
 from typing import ClassVar, Literal
@@ -144,7 +147,7 @@ class Config(BaseSettings):
 
     @staticmethod
     def _ensure_unique(kind: str, names: list[str]) -> None:
-        duplicates = sorted({name for name in names if names.count(name) > 1})
+        duplicates = sorted(name for name, count in Counter(names).items() if count > 1)
         if duplicates:
             raise ValueError(f"{kind} 名称重复: {', '.join(duplicates)}")
 

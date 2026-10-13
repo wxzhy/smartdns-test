@@ -1,3 +1,5 @@
+"""进程级 GeoManager：汇总 GeoIP、GeoSite 与 IPSet 查询。"""
+
 from typing import TYPE_CHECKING
 
 from smartdns.routing.geoip import GeoIP

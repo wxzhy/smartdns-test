@@ -27,11 +27,16 @@ smartdns/
 │   └── worker.py           单请求路由处理链与组件生命周期
 ├── listeners/              面向客户端的 UDP/TCP DNS 监听
 ├── nameservers/            单个底层上游：UDP、TCP、TLS、DNSCrypt、curl DoH
+│                           （TCP/TLS 共用 _stream.py 的连接池与交换逻辑）
 ├── resolvers/              解析策略：aiodns、plain、concurrent
 ├── routing/                路由、匹配与 Geo 数据查询
 ├── actions/                请求前及响应后的加工动作
 ├── models/                 Pydantic 配置模型和运行时上下文
-└── utils/cache_async.py    异步结果缓存与同键请求合并
+└── utils/
+    ├── cache_async.py      异步结果缓存与同键请求合并
+    ├── components.py       Nameserver/Resolver/Action 管理器共用的启动回滚与停止
+    ├── concurrency.py      跨 Worker 事件循环的全局容量限制
+    └── deadline.py         跨线程共享查询期限与取消范围
 
 utils/
 ├── convert.py              GeoSite/IPSet 离线转换

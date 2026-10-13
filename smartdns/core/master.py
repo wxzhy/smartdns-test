@@ -1,3 +1,5 @@
+"""Master：管理 Worker 线程与监听器，维护全局应答缓存并分发请求。"""
+
 from __future__ import annotations
 
 from asyncio import Lock, get_running_loop, run_coroutine_threadsafe, wrap_future
@@ -188,7 +190,10 @@ class Master:
         with fail_after(timeout):
             key = _cache_key(request)
             answer = await cache.read(key)
-            if answer is None:
+            if answer is not None:
+                logger.trace("缓存命中 {} {}", request.qname, request.rdtype.name)
+            else:
+                logger.debug("缓存未命中 {} {}", request.qname, request.rdtype.name)
                 shared = self._shared_deadlines.get(key)
                 if shared is None:
                     shared = self._shared_deadlines[key] = SharedDeadline()

@@ -1,3 +1,5 @@
+"""SmartDNS 命令行入口：加载配置、初始化日志并运行 Master。"""
+
 from pathlib import Path
 from signal import SIGTERM
 from sys import platform, stderr

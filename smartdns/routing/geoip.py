@@ -1,3 +1,6 @@
+"""MaxMind GeoIP/ASN 查询：把 IP 映射为国家/自定义标签与 ASN。"""
+
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -17,11 +20,24 @@ class GeoIP:
         self._asn: Reader | None = None
 
     def load(self, geoip_path: Path | None, asn_path: Path | None):
-        """加载GeoIP数据库"""
+        """加载 GeoIP（国家/标签）与 ASN 两个 MaxMind 数据库，均可缺省。"""
         if geoip_path is not None and geoip_path.exists():
-            self._geoip = open_database(database=geoip_path, mode=MODE_MMAP_EXT)
+            self._geoip = self._open(geoip_path)
         if asn_path is not None and asn_path.exists():
-            self._asn = open_database(database=asn_path, mode=MODE_MMAP_EXT)
+            self._asn = self._open(asn_path)
+
+    @staticmethod
+    def _open(path: Path) -> Reader:
+        reader = open_database(database=path, mode=MODE_MMAP_EXT)
+        metadata = reader.metadata()
+        logger.info(
+            "从{}加载 MaxMind 数据库成功：类型 {}，记录节点 {}，构建于 {}",
+            path,
+            metadata.database_type,
+            metadata.node_count,
+            datetime.fromtimestamp(metadata.build_epoch, UTC).date(),
+        )
+        return reader
 
     @staticmethod
     def _extract_country(record: object) -> set[str]:

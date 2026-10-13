@@ -1,3 +1,5 @@
+"""请求处理期间的运行时数据：Request、Response 与贯穿路由链的 Context。"""
+
 from __future__ import annotations
 
 from dataclasses import field

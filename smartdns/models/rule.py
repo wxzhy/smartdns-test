@@ -1,3 +1,5 @@
+"""路由规则与请求/响应匹配器配置模型。"""
+
 from dns.rdatatype import from_text, to_text
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 

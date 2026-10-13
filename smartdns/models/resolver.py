@@ -1,3 +1,5 @@
+"""解析器配置模型（plain/aiodns/concurrent）。"""
+
 from typing import Annotated, Literal
 
 from pydantic import Field

@@ -1,9 +1,12 @@
+"""基于 dnspython 异步 Resolver 的解析器，调度配置中的自定义 Nameserver。"""
+
 from time import time
 from typing import TYPE_CHECKING, cast
 
 import dns.rdatatype
 from dns.asyncresolver import Resolver
 from dns.edns import ECSOption
+from dns.exception import DNSException
 from dns.rcode import Rcode
 from dns.resolver import NXDOMAIN, Answer
 from loguru import logger
@@ -114,8 +117,18 @@ class PlainResolver(BaseResolver, Resolver):
             )
         except NXDOMAIN:
             return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
+        except DNSException as error:
+            # 超时、上游全部失败等属常规故障，记一行警告即可，不打印堆栈。
+            logger.warning(
+                "PlainResolver {} 解析 {} 失败: {}: {}",
+                self.name,
+                request.qname,
+                type(error).__name__,
+                error,
+            )
+            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
         except Exception:
-            logger.exception("PlainResolver {} 解析请求失败", self.name)
+            logger.exception("PlainResolver {} 解析 {} 出错", self.name, request.qname)
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
     async def _resolve_answer(

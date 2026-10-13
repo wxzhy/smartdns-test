@@ -1,3 +1,5 @@
+"""监听器配置模型。"""
+
 from typing import Annotated, Literal
 
 from pydantic import Field

@@ -1,3 +1,5 @@
+"""Geo 数据文件配置，以及运行时的 IP/域名标签载体。"""
+
 from __future__ import annotations
 
 from dns.name import Name

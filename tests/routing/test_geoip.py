@@ -5,6 +5,7 @@
 修复后：显式兼容 str/list/dict 形状，未识别形状告警。
 """
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 
 from smartdns.routing.geoip import GeoIP
@@ -53,3 +54,32 @@ def test_close_releases_both_readers_and_is_idempotent() -> None:
     assert asn.closes == 1
     assert geoip._geoip is None
     assert geoip._asn is None
+
+
+def test_load_opens_both_databases_and_reads_metadata(tmp_path, monkeypatch) -> None:
+    opened: list[str] = []
+
+    class _Reader:
+        def __init__(self, path) -> None:
+            self.path = path
+
+        def metadata(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                database_type="GeoLite2-Country", node_count=10, build_epoch=0
+            )
+
+        def close(self) -> None:
+            opened.remove(self.path.name)
+
+    def fake_open(database, mode) -> _Reader:
+        opened.append(database.name)
+        return _Reader(database)
+
+    for name in ("geoip.mmdb", "asn.mmdb"):
+        (tmp_path / name).write_bytes(b"")
+    monkeypatch.setattr("smartdns.routing.geoip.open_database", fake_open)
+    geoip = GeoIP()
+    geoip.load(tmp_path / "geoip.mmdb", tmp_path / "asn.mmdb")
+    assert opened == ["geoip.mmdb", "asn.mmdb"]
+    geoip.close()
+    assert opened == []

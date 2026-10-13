@@ -1,3 +1,5 @@
+"""离线工具：经反向解析 1e100.net 主机名推算 Google 前端（GWS）各数据中心的基准地址。"""
+
 import re
 from collections import defaultdict
 from ipaddress import IPv4Address, IPv6Address, ip_address
@@ -23,6 +25,7 @@ app = Typer()
 
 
 def _parse_name(name: str) -> tuple[str, int] | None:
+    """从 ``<dc>-in-f<n>.1e100.net`` 形式的 PTR 名称解析数据中心名与地址偏移。"""
     if match := IPV4_PATTERN.match(name):
         datacenter, offset = match.groups()
         return datacenter, int(offset)

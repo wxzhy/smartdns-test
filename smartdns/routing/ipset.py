@@ -1,3 +1,5 @@
+"""本地 IP 段标签查询（py-radix，最长前缀覆盖）。"""
+
 from pickle import load
 from typing import TYPE_CHECKING
 

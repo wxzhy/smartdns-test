@@ -1,3 +1,5 @@
+"""HTTP 客户端配置（DoH 会话与 ECH 引导解析器）。"""
+
 from pydantic import Field
 from pydantic.networks import HttpUrl, IPvAnyAddress
 

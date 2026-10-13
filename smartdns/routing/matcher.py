@@ -1,3 +1,5 @@
+"""按域名/IP 标签与 ASN 判断请求、候选应答是否命中匹配器。"""
+
 from typing import TYPE_CHECKING
 
 from dns.rdatatype import to_text

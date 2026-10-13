@@ -1,3 +1,5 @@
+"""并发解析器：同时查询多个子解析器，按完成顺序择优并收集候选。"""
+
 from typing import TYPE_CHECKING
 
 from anyio import create_memory_object_stream, create_task_group, current_time
@@ -208,6 +210,24 @@ class ConcurrentResolver(BaseResolver):
             if context.candidates is None:
                 context.candidates = {}
             context.candidates.update(candidates)
+        result = self._pick(winner, nodata, candidates)
+        logger.debug(
+            "ConcurrentResolver {}：{} 选用 {}（rcode={}，候选: {}）",
+            self.name,
+            request.qname,
+            result.upstream,
+            result.rcode.name,
+            list(candidates),
+        )
+        return result
+
+    def _pick(
+        self,
+        winner: Response | None,
+        nodata: Response | None,
+        candidates: dict[str, Response],
+    ) -> Response:
+        """优先级：带记录的 NOERROR > NODATA > NXDOMAIN > 其他否定响应。"""
         if winner is not None:
             return winner
         if nodata is not None:

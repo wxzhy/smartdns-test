@@ -1,3 +1,5 @@
+"""基于 aiodns（c-ares）的解析器：把 pycares 结果重新组装为 dnspython Answer。"""
+
 from time import time
 from typing import TYPE_CHECKING, cast
 
@@ -130,8 +132,17 @@ class AioDNSResolver(BaseResolver):
             return Response.from_answer(
                 clone_answer(answer, remaining_ttl=remaining), upstream=self.name
             )
+        except DNSError as error:
+            # c-ares 的超时、SERVFAIL、REFUSED 等属常规故障，不打印堆栈。
+            logger.warning(
+                "AioDNSResolver {} 解析 {} 失败: {}",
+                self.name,
+                request.qname,
+                error,
+            )
+            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
         except Exception:
-            logger.exception("AioDNSResolver {} 解析请求失败", self.name)
+            logger.exception("AioDNSResolver {} 解析 {} 出错", self.name, request.qname)
             return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
 
     async def resolve(

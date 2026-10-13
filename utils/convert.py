@@ -1,3 +1,5 @@
+"""离线工具：把 geosite.dat 与自定义标签文件转换为运行时的 trie/radix 数据。"""
+
 import pickle
 from collections import defaultdict
 from ipaddress import ip_network

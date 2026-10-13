@@ -1,3 +1,5 @@
+"""跨线程共享的异步应答缓存与同键并发合并装饰器。"""
+
 from __future__ import annotations
 
 from asyncio import CancelledError, Task, current_task, get_running_loop, shield
