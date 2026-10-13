@@ -1,3 +1,5 @@
+"""HTTPS 记录加工 Action：清理 hint/h3 参数，按需注入或合成 ECH。"""
+
 from time import time
 from typing import TYPE_CHECKING, cast
 
@@ -8,7 +10,7 @@ from dns.rdatatype import RdataType
 from dns.rdtypes.IN.HTTPS import HTTPS
 from dns.rdtypes.svcbbase import ALPNParam, ECHParam, MandatoryParam, ParamKey
 from dns.resolver import Answer
-from dns.rrset import RRset
+from dns.rrset import RRset, from_rdata_list
 from loguru import logger
 
 from smartdns.actions._helper import append_answer_rrset, replace_answer_rrset
@@ -218,29 +220,30 @@ class HTTPSAction(BaseAction):
         ech_expiration: float | None = None,
     ) -> None:
         """copy-on-write 重建主应答 RRset；有变化才替换 context.response。"""
-        new_rrset = RRset(old_rrset.name, old_rrset.rdclass, old_rrset.rdtype)
-        new_rrset.update_ttl(old_rrset.ttl)
-        changed = False
-        injected = False
-        for rr in old_rrset:
-            injected = injected or (
-                ech_value is not None
-                and rr.priority > 0
-                and ParamKey.ECH not in rr.params
-            )
-            rewritten, item_changed = self._rewrite_https(rr, ech_value)
-            new_rrset.add(rewritten)
-            changed = changed or item_changed
-        if changed:
-            if injected and ech_expiration is not None:
-                new_rrset.update_ttl(max(0, int(ech_expiration - time())))
-            context.response = replace_answer_rrset(response, new_rrset)
-            assert context.response.ans is not None
-            assert response.ans is not None
-            # 参数清理不会赋予来源 DNS 记录新的生存期。
-            context.response.ans.expiration = min(
-                context.response.ans.expiration, response.ans.expiration
-            )
+        rewritten = [self._rewrite_https(rr, ech_value) for rr in old_rrset]
+        if not any(changed for _, changed in rewritten):
+            return
+        injected = ech_value is not None and any(
+            rr.priority > 0 and ParamKey.ECH not in rr.params for rr in old_rrset
+        )
+        ttl = old_rrset.ttl
+        if injected and ech_expiration is not None:
+            # 注入的 ECH 不能比其来源 HTTPS 记录活得更久。
+            ttl = min(ttl, max(0, int(ech_expiration - time())))
+        new_rrset = from_rdata_list(old_rrset.name, ttl, [rr for rr, _ in rewritten])
+        logger.debug(
+            "HTTPS Action {}：重写 {} 的 HTTPS 记录（注入 ECH: {}）",
+            self.name,
+            context.request.qname,
+            injected,
+        )
+        context.response = replace_answer_rrset(response, new_rrset)
+        assert context.response.ans is not None
+        assert response.ans is not None
+        # 参数清理不会赋予来源 DNS 记录新的生存期。
+        context.response.ans.expiration = min(
+            context.response.ans.expiration, response.ans.expiration
+        )
 
     def _synthesize_https(
         self,
@@ -272,16 +275,19 @@ class HTTPSAction(BaseAction):
             max(0, int(answer.expiration - now)),
             max(0, int(ech_result.expiration - now)),
         )
-        rrset = RRset(answer.canonical_name, answer.rdclass, RdataType.HTTPS)
-        rrset.update_ttl(ttl)
-        rrset.add(
-            HTTPS(
-                answer.rdclass,
-                RdataType.HTTPS,
-                1,
-                root,
-                {ParamKey.ECH: ECHParam.from_value(ech_result.value)},
-            )
+        record = HTTPS(
+            answer.rdclass,
+            RdataType.HTTPS,
+            1,
+            root,
+            {ParamKey.ECH: ECHParam.from_value(ech_result.value)},
+        )
+        rrset = from_rdata_list(answer.canonical_name, ttl, [record])
+        logger.debug(
+            "HTTPS Action {}：为 {} 的 HTTPS 空应答合成 ECH 记录，TTL={}",
+            self.name,
+            context.request.qname,
+            ttl,
         )
         context.response = append_answer_rrset(main, rrset, remove_negative_soa=True)
 

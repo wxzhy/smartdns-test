@@ -1,17 +1,20 @@
+"""IP 替换 Action：把命中标签的候选应答改写到配置的地址段，并保留主机位。"""
+
 from ipaddress import AddressValueError
 from typing import TYPE_CHECKING
 
 from dns.rdatatype import RdataType
-from dns.rdtypes.IN.A import A
-from dns.rdtypes.IN.AAAA import AAAA
-from dns.rrset import RRset
 from loguru import logger
 
-from smartdns.actions._helper import replace_answer_rrset
+from smartdns.actions._helper import address_rrset, replace_answer_rrset
 from smartdns.actions.base import BaseAction
 from smartdns.routing.matcher import match_context, match_ip
 
 if TYPE_CHECKING:
+    from ipaddress import IPv4Address, IPv6Address
+
+    from dns.rrset import RRset
+
     from smartdns.models.action import ReplaceActionConfig, ReplaceActionMap
     from smartdns.models.context import Context, Response
     from smartdns.models.geodata import IPInfo
@@ -58,6 +61,14 @@ class ReplaceAction(BaseAction):
         )
         if rrset is None:
             return
+        logger.debug(
+            "Replace Action {}：{} 来自 {} 的 {} 改写为 {}",
+            self.name,
+            context.request.qname,
+            response.upstream,
+            info.ip,
+            [rr.to_text() for rr in rrset],
+        )
         rewritten = replace_answer_rrset(response, rrset)
         response.rcode = rewritten.rcode
         response.ans = rewritten.ans
@@ -83,24 +94,23 @@ class ReplaceAction(BaseAction):
         info: IPInfo,
         mapping: ReplaceActionMap,
     ) -> RRset | None:
-        """安全构造替换 RRset；空集合、地址族不符或越界时保留原应答。"""
-        new_rrset = RRset(old_rrset.name, old_rrset.rdclass, old_rrset.rdtype)
-        new_rrset.update_ttl(old_rrset.ttl)
+        """安全构造替换 RRset；空集合、地址族不符或越界时返回 None 保留原应答。"""
         if rdtype == RdataType.A:
-            bases = mapping.ipv4 or set()
-            offset = int(info.ip) & ((1 << (32 - mapping.ipv4_prefixlen)) - 1)
-            record_type = A
+            bases: set[IPv4Address] | set[IPv6Address] = mapping.ipv4 or set()
+            host_bits = 32 - mapping.ipv4_prefixlen
         elif rdtype == RdataType.AAAA:
             bases = mapping.ipv6 or set()
-            offset = int(info.ip) & ((1 << (128 - mapping.ipv6_prefixlen)) - 1)
-            record_type = AAAA
+            host_bits = 128 - mapping.ipv6_prefixlen
         else:
             return None
+        # 保留原 IP 的主机位，叠加到每个替换网段基址上。
+        offset = int(info.ip) & ((1 << host_bits) - 1)
+        addresses: list[IPv4Address | IPv6Address] = []
         for base in bases:
             try:
-                address = str(base + offset)
+                addresses.append(base + offset)
             except AddressValueError:
                 logger.warning("替换 IP 越界，已跳过: {}+{}", base, offset)
-                continue
-            new_rrset.add(record_type(old_rrset.rdclass, old_rrset.rdtype, address))
-        return new_rrset or None
+        return address_rrset(
+            old_rrset.name, old_rrset.rdclass, rdtype, old_rrset.ttl, addresses
+        )

@@ -1,24 +1,63 @@
 """Action 共享的 copy-on-write 应答重建工具。"""
 
 from copy import copy, deepcopy
-from ipaddress import IPv4Address, IPv6Address
 from time import time
 from typing import TYPE_CHECKING, cast
 
 from dns.rdatatype import RdataType
-from dns.rdtypes.IN.A import A
-from dns.rdtypes.IN.AAAA import AAAA
 from dns.resolver import Answer
-from dns.rrset import RRset
+from dns.rrset import RRset, from_text_list
 
 from smartdns.models.context import Response
 
 if TYPE_CHECKING:
-    from collections.abc import Collection
+    from collections.abc import Collection, Iterable
+    from ipaddress import IPv4Address, IPv6Address
 
-    from dns.message import Message
+    from dns.message import Message, QueryMessage
+    from dns.name import Name
+    from dns.rdataclass import RdataClass
 
     from smartdns.models.geodata import IPInfo
+
+# 地址记录类型与其 IP 版本的对应关系。
+_ADDRESS_VERSIONS = {RdataType.A: 4, RdataType.AAAA: 6}
+
+
+def detach_index(message: Message) -> None:
+    """丢弃 Message 的 RRset 索引，find_rrset 随之退化为线性查找。
+
+    直接改写 section 列表后旧索引会指向失效的 RRset；dnspython 运行期支持
+    index=None（类型标注未含 None）。
+    """
+    message.index = None  # ty: ignore[invalid-assignment]
+
+
+def address_rrset(
+    name: Name,
+    rdclass: RdataClass,
+    rdtype: RdataType,
+    ttl: int,
+    ips: Iterable[IPv4Address | IPv6Address],
+) -> RRset | None:
+    """按迭代顺序构造 A/AAAA RRset，只收与 rdtype 同族的地址；为空时返回 None。"""
+    version = _ADDRESS_VERSIONS.get(rdtype)
+    texts = [str(ip) for ip in ips if ip.version == version]
+    if not texts:
+        return None
+    return from_text_list(name, ttl, rdclass, rdtype, texts)
+
+
+def _rewrap(answer: Answer, message: QueryMessage) -> Answer:
+    """以新的 Message 重建 Answer；expiration 由调用方按来源期限重设。"""
+    return Answer(
+        answer.qname,
+        answer.rdtype,
+        answer.rdclass,
+        message,
+        answer.nameserver,
+        answer.port,
+    )
 
 
 def _copy_message[MessageT: Message](message: MessageT) -> MessageT:
@@ -39,7 +78,7 @@ def _copy_message[MessageT: Message](message: MessageT) -> MessageT:
     # EDNS Option 本身可变，仍须完整复制 OPT，不能与缓存共享。
     copied.opt = deepcopy(message.opt)
     copied.errors = []
-    copied.index = None  # ty: ignore[invalid-assignment]
+    detach_index(copied)
     return copied
 
 
@@ -50,14 +89,7 @@ def clone_answer(answer: Answer, *, remaining_ttl: int | None = None) -> Answer:
         for section in message.sections[1:]:
             for rrset in section:
                 rrset.update_ttl(remaining_ttl)
-    copied = Answer(
-        answer.qname,
-        answer.rdtype,
-        answer.rdclass,
-        message,
-        answer.nameserver,
-        answer.port,
-    )
+    copied = _rewrap(answer, message)
     copied.expiration = answer.expiration
     return copied
 
@@ -78,15 +110,8 @@ def replace_answer_rrset(
         cast("RRset", new_rrset.copy()) if rrset == answer.rrset else rrset
         for rrset in message.answer
     ]
-    message.index = None  # ty: ignore[invalid-assignment]
-    copied = Answer(
-        answer.qname,
-        answer.rdtype,
-        answer.rdclass,
-        message,
-        answer.nameserver,
-        answer.port,
-    )
+    detach_index(message)
+    copied = _rewrap(answer, message)
     copied.expiration = _replacement_expiration(copied, answer, reset_ttl=reset_ttl)
     return Response.from_answer(copied, upstream=upstream or response.upstream)
 
@@ -108,20 +133,13 @@ def replace_response_ip(
     # A/AAAA 的 owner 应是 CNAME 链的最终规范名称；无 CNAME 时它等于 qname。
     # 这里也要覆盖 CNAME 后 NODATA 的情况，此时 answer.rrset 为 None，不能
     # 从旧 RRset 取 owner。
-    name = answer.canonical_name
-    rdclass = answer.rdclass
-    rdtype = answer.rdtype
     reset_ttl = ttl is not None
     if ttl is None:
         ttl = answer.rrset.ttl if answer.rrset is not None else 0
-    rrset = RRset(name, rdclass, rdtype)
-    rrset.update_ttl(ttl)
-    for ip in ips:
-        if answer.rdtype == RdataType.A and isinstance(ip, IPv4Address):
-            rrset.add(A(rrset.rdclass, rrset.rdtype, str(ip)))
-        elif answer.rdtype == RdataType.AAAA and isinstance(ip, IPv6Address):
-            rrset.add(AAAA(rrset.rdclass, rrset.rdtype, str(ip)))
-    if not rrset:
+    rrset = address_rrset(
+        answer.canonical_name, answer.rdclass, answer.rdtype, ttl, ips
+    )
+    if rrset is None:
         # 记录类型与 IP 地址族不符时未产出任何记录，保留原应答。
         return response
     if answer.rrset is None:
@@ -142,15 +160,8 @@ def append_answer_rrset(
         message.authority = [
             item for item in message.authority if item.rdtype != RdataType.SOA
         ]
-    message.index = None  # ty: ignore[invalid-assignment]
-    copied = Answer(
-        answer.qname,
-        answer.rdtype,
-        answer.rdclass,
-        message,
-        answer.nameserver,
-        answer.port,
-    )
+    detach_index(message)
+    copied = _rewrap(answer, message)
     copied.expiration = _replacement_expiration(copied, answer, reset_ttl=True)
     return Response.from_answer(copied, upstream=response.upstream)
 
@@ -181,11 +192,5 @@ def replace_response_ipinfo(
     response: Response, ips: dict[IPv4Address | IPv6Address, IPInfo]
 ) -> Response:
     """按测速结果重建响应；不原地修改候选 Response。"""
-    answer = response.ans
-    if answer is None:
-        return response
-    if answer.rdtype == RdataType.A:
-        selected = [ip for ip in ips if isinstance(ip, IPv4Address)]
-    else:
-        selected = [ip for ip in ips if isinstance(ip, IPv6Address)]
-    return replace_response_ip(response, selected)
+    # 地址族过滤由 address_rrset 按应答 rdtype 完成。
+    return replace_response_ip(response, list(ips))

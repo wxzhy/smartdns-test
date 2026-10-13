@@ -1,3 +1,5 @@
+"""Action 基类：定义 before/after/resolver 各阶段的 hook。"""
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

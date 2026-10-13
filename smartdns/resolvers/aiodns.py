@@ -53,7 +53,7 @@ from pycares import (
     URIRecordData,
 )
 
-from smartdns.actions._helper import clone_answer
+from smartdns.actions._helper import clone_answer, detach_index
 from smartdns.models.context import Request, Response
 from smartdns.resolvers._aiodns_pool import AioDNSPool
 from smartdns.resolvers.base import BaseResolver
@@ -202,8 +202,8 @@ class AioDNSResolver(BaseResolver):
         ):
             for record in records:
                 AioDNSResolver.merge_record(answer, section, record)
-        # 关闭 RRset 索引（dnspython 运行期支持 index=None，其类型标注未含 None）。
-        answer.index = None  # ty: ignore[invalid-assignment]
+        # 索引只在组装时有用；缓存中的应答不必长期持有这份额外引用。
+        detach_index(answer)
         return answer
 
     @staticmethod

@@ -1,14 +1,14 @@
+"""静态应答 Action：before 阶段直接以配置的 IP 回答并结束路由。"""
+
 from time import time
 from typing import TYPE_CHECKING, cast
 
 from dns.message import QueryMessage, make_query, make_response
 from dns.rdatatype import RdataType
-from dns.rdtypes.IN.A import A
-from dns.rdtypes.IN.AAAA import AAAA
 from dns.resolver import Answer
-from dns.rrset import RRset
 from loguru import logger
 
+from smartdns.actions._helper import address_rrset
 from smartdns.actions.base import BaseAction
 from smartdns.models.context import Context, Response
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class StaticAction(BaseAction):
-    """静态返回 Action：before 阶段直接以配置的静态 IP 应答并停止后续处理。"""
+    """A/AAAA 返回配置的地址，其他类型返回空 NOERROR；TTL 均为配置值。"""
 
     def __init__(self, config: StaticActionConfig):
         super().__init__(config)
@@ -26,32 +26,39 @@ class StaticAction(BaseAction):
         self.ttl = config.ttl
 
     async def start(self) -> None:
-        logger.info("启动静态返回 Action: {}", self.name)
+        logger.info(
+            "启动静态返回 Action {}：IPv4={} IPv6={} TTL={}",
+            self.name,
+            sorted(map(str, self.ipv4)),
+            sorted(map(str, self.ipv6)),
+            self.ttl,
+        )
 
     async def on_request(self, context: Context) -> None:
         request = context.request
         name, rdclass, rdtype = request.qname, request.rdclass, request.rdtype
+        # 不基于客户端报文构造，避免把客户端的标志位与 EDNS 选项写进缓存条目。
         message = make_response(
             make_query(name, rdtype, rdclass, use_edns=True, payload=1232), True, 1232
         )
-        rrset = RRset(name, rdclass, rdtype)
-        rrset.update_ttl(self.ttl)
-        if self.ipv4 and rdtype == RdataType.A:
-            for ip in self.ipv4:
-                rrset.add(A(rdclass, rdtype, ip))
-        elif self.ipv6 and rdtype == RdataType.AAAA:
-            for ip in self.ipv6:
-                rrset.add(AAAA(rdclass, rdtype, ip))
-        else:
-            logger.debug("静态返回 Action {} 不匹配请求类型 {}", self.name, rdtype)
-        if rrset:
-            message.answer.append(rrset)
-            # append 后旧索引查不到新 rrset，置 None 让 find_rrset 重建；
-            # 否则 Answer.resolve_chaining 拿不到 answer，rrset/ip_list 为空。
-            message.index = None  # ty: ignore[invalid-assignment]
+        addresses = {RdataType.A: self.ipv4, RdataType.AAAA: self.ipv6}.get(rdtype, ())
+        rrset = address_rrset(name, rdclass, rdtype, self.ttl, addresses)
+        if rrset is not None:
+            # find_rrset(create=True) 同时维护索引，Answer 才能取到主应答。
+            target = message.find_rrset(
+                message.answer, name, rdclass, rdtype, create=True
+            )
+            target.update(rrset)
         answer = Answer(name, rdtype, rdclass, cast("QueryMessage", message))
         # 空静态应答没有 SOA，dnspython 默认使用 MAX_TTL；仍应遵守配置 TTL。
         answer.expiration = min(answer.expiration, time() + self.ttl)
+        logger.debug(
+            "静态返回 Action {}：{} {} -> {}",
+            self.name,
+            name,
+            rdtype.name,
+            [rr.to_text() for rr in rrset] if rrset is not None else "空应答",
+        )
         context.response = Response.from_answer(answer, upstream=self.name)
         # 静态应答后立即停止后续处理。
         context.stop = True

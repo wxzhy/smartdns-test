@@ -1,3 +1,5 @@
+"""过滤 Action：丢弃 IP 命中排除标签的候选应答（常用于识别污染结果）。"""
+
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -46,13 +48,24 @@ class FilterAction(BaseAction):
                 response.ans is not None
                 and response.ans.rdtype != context.request.rdtype
             ):
-                response.invalid = True
+                self._reject(context, response, "记录类型与请求不符")
                 return
-            for item in self.map:
+            for index, item in enumerate(self.map):
                 if not match_context(item.match_name, context):
                     continue
                 if not match_response(item.match_ip, response):
-                    response.invalid = True
+                    self._reject(context, response, f"命中第 {index + 1} 条过滤项")
                     return
         finally:
             context.response = original
+
+    def _reject(self, context: Context, response: Response, reason: str) -> None:
+        response.invalid = True
+        logger.debug(
+            "Filter Action {}：丢弃 {} 来自 {} 的候选（{}）: {}",
+            self.name,
+            context.request.qname,
+            response.upstream,
+            reason,
+            response.ip_list,
+        )

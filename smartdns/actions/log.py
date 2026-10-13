@@ -1,3 +1,5 @@
+"""日志 Action：在 before 阶段记录请求摘要。"""
+
 from typing import TYPE_CHECKING
 
 from dns.rdatatype import to_text

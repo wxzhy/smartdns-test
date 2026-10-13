@@ -1,16 +1,14 @@
+"""IP 测速：ICMP/TCP 建连探测、结果缓存与全进程并发上限。"""
+
 from __future__ import annotations
 
 from threading import Lock
 from time import perf_counter
 from typing import TYPE_CHECKING
 
-from anyio import (
-    connect_tcp,
-    create_memory_object_stream,
-    create_task_group,
-    fail_after,
-)
+from anyio import connect_tcp, create_task_group, fail_after
 from icmplib import async_ping
+from loguru import logger
 
 from smartdns.utils.cache_async import cached
 from smartdns.utils.concurrency import GlobalCapacityLimiter
@@ -72,6 +70,7 @@ async def tcping(ip: str, port: int, timeout: float = 1.0) -> float | None:
 
 
 async def _measure(ip: str, config: PingConfig) -> float:
+    """并发运行 ICMP 与各端口 TCP 探测，取首个有效 RTT；全部失败返回 inf。"""
     probes: list[Callable[[], Awaitable[float | None]]] = []
     if config.ping:
         probes.append(
@@ -85,34 +84,24 @@ async def _measure(ip: str, config: PingConfig) -> float:
         lambda port=port: tcping(ip, port, config.timeout)
         for port in sorted(config.port or set())
     )
-    if not probes:
-        return float("inf")
-
-    send, receive = create_memory_object_stream[float | None](len(probes))
-    # 首个有效结果：先取消并退出 task group，再在组外关流返回；
-    # 组内关流会让未及取消的探测任务向已关闭的流发送而抛
-    # ClosedResourceError，吞掉已取得的结果。
-    result: float | None = None
+    first: float | None = None
 
     async def run(probe: Callable[[], Awaitable[float | None]]) -> None:
+        nonlocal first
         try:
-            await send.send(await probe())
-        except Exception:
-            await send.send(None)
+            rtt = await probe()
+        except Exception as error:
+            logger.debug("测速 {} 失败: {}: {}", ip, type(error).__name__, error)
+            return
+        # 只采纳首个有效结果；屏蔽取消而晚到的探测不能覆盖它。
+        if rtt is not None and first is None:
+            first = rtt
+            tg.cancel_scope.cancel()
 
     async with create_task_group() as tg:
         for probe in probes:
             tg.start_soon(run, probe)
-        for _ in probes:
-            received = await receive.receive()
-            if received is not None:
-                result = received
-                tg.cancel_scope.cancel()
-                break
-
-    await send.aclose()
-    await receive.aclose()
-    return result if result is not None else float("inf")
+    return float("inf") if first is None else first
 
 
 @cached(_get_cache, key=_speedtest_key, lock=_cache_lock)

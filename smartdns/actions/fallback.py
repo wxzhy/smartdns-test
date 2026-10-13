@@ -1,3 +1,5 @@
+"""回退 Action：没有可用 IP 时以配置的静态地址作答。"""
+
 from typing import TYPE_CHECKING
 
 from dns.rdatatype import RdataType
@@ -46,12 +48,17 @@ class FallbackAction(BaseAction):
         for item in self.map:
             if not match_context(item.match_name, context):
                 continue
-            if context.request.rdtype == RdataType.A and item.ipv4:
-                context.response = replace_response_ip(
-                    context.response, item.ipv4, item.ttl
+            addresses = (
+                item.ipv4 if context.request.rdtype == RdataType.A else item.ipv6
+            )
+            if addresses:
+                logger.info(
+                    "Fallback Action {}：{} 无可用 IP，回退到 {}",
+                    self.name,
+                    context.request.qname,
+                    sorted(map(str, addresses)),
                 )
-            elif context.request.rdtype == RdataType.AAAA and item.ipv6:
                 context.response = replace_response_ip(
-                    context.response, item.ipv6, item.ttl
+                    context.response, addresses, item.ttl
                 )
             return

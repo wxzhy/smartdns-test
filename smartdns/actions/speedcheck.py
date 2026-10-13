@@ -1,3 +1,5 @@
+"""测速择优 Action：resolver 阶段采样 RTT，after 阶段按加权 RTT 选出最优 IP。"""
+
 from math import isfinite
 from typing import TYPE_CHECKING
 
