@@ -1,46 +1,32 @@
+"""DNS over TLS 上游（utls 握手，可伪装 ClientHello 指纹）。"""
+
 from ipaddress import ip_address
 from typing import TYPE_CHECKING
 
-import dns.asyncbackend
-import dns.asyncquery
-import dns.message
 import utls
-from anyio import CancelScope
 from loguru import logger
 
-from smartdns.nameservers._pool_compat import CancellationSafeConnectionPool
-from smartdns.nameservers._socket import AnyioStreamSocket
+from smartdns.nameservers._stream import StreamNameserver
 from smartdns.nameservers._tls import (
     TLSStreamConnection,
     TLSStreamConnectionManager,
     connect_tls,
 )
-from smartdns.nameservers.base import (
-    BaseAddressNameserver,
-    query_deadline,
-    remaining_timeout,
-)
 
 if TYPE_CHECKING:
-    from generic_connection_pool.asyncio import ConnectionPool
     from utls import SSLContext
 
     from smartdns.models.nameserver import TLSNameserverConfig
-    from smartdns.nameservers._pool import TcpEndpoint
 
 
-class TLSNameserver(BaseAddressNameserver):
+class TLSNameserver(StreamNameserver):
     """TLS 上游解析器（DNS over TLS，utls 握手可伪装 ClientHello 指纹）。"""
 
     def __init__(self, config: TLSNameserverConfig):
         super().__init__(config)
-        self._pool_size = config.pool_size
         self._fingerprint = config.fingerprint
         self._verify = config.verify
         self._ssl_context: SSLContext | None = None
-        self._pool: ConnectionPool[TcpEndpoint, TLSStreamConnection] | None = None
-        self.host = config.address
-        self.port = config.port
         # SNI/验证锚点：显式 server_name 优先；域名地址用地址本身；IP 地址
         # 不发送 SNI（RFC 6066 禁止 literal IP）。
         self._server_hostname = config.server_name
@@ -68,106 +54,28 @@ class TLSNameserver(BaseAddressNameserver):
             context.set_fingerprint(self._fingerprint)
         return context
 
+    def _connection_manager(self) -> TLSStreamConnectionManager:
+        assert self._ssl_context is not None
+        return TLSStreamConnectionManager(
+            self._ssl_context, self._server_hostname, connect_timeout=self.timeout
+        )
+
+    async def _connect(self, timeout: float) -> TLSStreamConnection:
+        ssl_context = self._ssl_context or self._build_ssl_context()
+        return await connect_tls(
+            str(self.host), self.port, ssl_context, self._server_hostname, timeout
+        )
+
     async def start(self):
         """启动 TLS 上游；pool_size>0 时创建连接池以复用加密连接。"""
         self._ssl_context = self._build_ssl_context()
-        if self._pool_size:
-            self._pool = CancellationSafeConnectionPool(
-                TLSStreamConnectionManager(
-                    self._ssl_context,
-                    self._server_hostname,
-                    connect_timeout=self.timeout,
-                ),
-                min_idle=1,
-                max_size=self._pool_size,
-                total_max_size=self._pool_size,
-            )
+        await super().start()
         logger.info(
-            "TLS 上游 {} 已启动，目标: {}:{}，指纹: {}",
+            "TLS 上游 {} 已启动，目标: {}:{}，SNI: {}，指纹: {}，连接池: {}",
             self.name,
             self.host,
             self.port,
+            self._server_hostname or "无",
             self._fingerprint or "标准 ClientHello",
+            self._pool_size or "关闭",
         )
-
-    async def stop(self):
-        """停止 TLS 上游，关闭连接池。"""
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
-
-    async def _query_on_stream(
-        self,
-        raw_sock: TLSStreamConnection,
-        request: dns.message.QueryMessage,
-        timeout: float,
-        one_rr_per_rrset: bool,
-        ignore_trailing: bool,
-    ) -> dns.message.Message:
-        sock = AnyioStreamSocket(raw_sock)
-        return await dns.asyncquery.tcp(
-            request,
-            where=self.address,
-            timeout=timeout,
-            port=self.port,
-            sock=sock,
-            one_rr_per_rrset=one_rr_per_rrset,
-            ignore_trailing=ignore_trailing,
-        )
-
-    async def async_query(
-        self,
-        request: dns.message.QueryMessage,
-        timeout: float,
-        source: str | None,
-        source_port: int,
-        max_size: bool,
-        backend: dns.asyncbackend.Backend,
-        one_rr_per_rrset: bool = False,
-        ignore_trailing: bool = False,
-    ) -> dns.message.Message:
-        deadline = query_deadline(timeout, self.timeout)
-        endpoint: TcpEndpoint = (self.address, self.port)
-        try:
-            if self._pool is not None:
-                async with self._pool.connection(
-                    endpoint, timeout=remaining_timeout(deadline)
-                ) as conn:
-                    try:
-                        return await self._query_on_stream(
-                            conn,
-                            request,
-                            remaining_timeout(deadline),
-                            one_rr_per_rrset,
-                            ignore_trailing,
-                        )
-                    except BaseException:
-                        # 交换中途失败（如超时打断半条 TLS 记录）后记录层
-                        # 对齐不可信，标记脏连接，归还池后由健康检查在
-                        # 下次获取时重建。
-                        conn.healthy = False
-                        raise
-            # 无池路径：建连、握手与查询共用同一截止时刻，黑洞地址
-            # 不会挂到 OS 级超时。
-            ssl_context = self._ssl_context or self._build_ssl_context()
-            conn = await connect_tls(
-                str(self.host),
-                self.port,
-                ssl_context,
-                self._server_hostname,
-                remaining_timeout(deadline),
-            )
-            try:
-                return await self._query_on_stream(
-                    conn,
-                    request,
-                    remaining_timeout(deadline),
-                    one_rr_per_rrset,
-                    ignore_trailing,
-                )
-            finally:
-                with CancelScope(shield=True):
-                    await conn.aclose()
-        except Exception:
-            logger.warning("TLS 上游 {} 查询失败", self.name)
-            raise

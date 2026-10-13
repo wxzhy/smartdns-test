@@ -1,3 +1,5 @@
+"""DNS over UDP 上游；应答截断（TC）时 dnspython 会改用同一地址的 TCP 重试。"""
+
 from typing import TYPE_CHECKING
 
 import dns.asyncbackend
@@ -18,7 +20,7 @@ if TYPE_CHECKING:
 
 
 class UDPNameserver(BaseAddressNameserver):
-    """UDP解析器类"""
+    """UDP 上游：每次查询新建 connected socket；可重复发包、过滤伪造应答。"""
 
     def __init__(self, config: UDPNameserverConfig):
         super().__init__(config)
@@ -31,14 +33,18 @@ class UDPNameserver(BaseAddressNameserver):
         return "udp"
 
     async def start(self):
-        """启动UDP解析器"""
+        """UDP 上游无常驻资源，启动只记录配置。"""
         logger.info(
-            "UDP解析器 {} 已启动，监听地址: {}:{}", self.name, self.host, self.port
+            "UDP 上游 {} 已启动，目标: {}:{}，重复发包: {}，伪造包过滤: {}",
+            self.name,
+            self.host,
+            self.port,
+            self._repeat,
+            self._use_tricks,
         )
 
     async def stop(self):
-        """停止UDP解析器"""
-        logger.info("UDP解析器 {} 已停止", self.name)
+        logger.info("UDP 上游 {} 已停止", self.name)
 
     async def async_query(
         self,
@@ -88,6 +94,8 @@ class UDPNameserver(BaseAddressNameserver):
                     ignore_trailing=ignore_trailing,
                     raise_on_truncation=True,
                 )
-        except Exception:
-            logger.warning("UDP 上游 {} 查询失败", self.name)
+        except Exception as error:
+            logger.warning(
+                "UDP 上游 {} 查询失败: {}: {}", self.name, type(error).__name__, error
+            )
             raise

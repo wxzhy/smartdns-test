@@ -1,3 +1,5 @@
+"""Worker 内的 HTTP 客户端：创建 curl-cffi 会话，并查询、缓存 ECHConfig。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -65,13 +67,16 @@ class HTTPClient:
         curl 会话不再在此集中创建；每个 CurlNameserver 通过 create_session()
         独立持有一个会话，避免共享可变状态（逐请求修改 ECH 选项）导致的竞态。
         """
-        logger.info("启动HTTP客户端")
+        logger.info(
+            "启动 HTTP 客户端，ECH 引导解析器: {}",
+            self.resolver.name if self.resolver is not None else "未配置",
+        )
         if self.resolver is not None:
             await self.resolver.start()
 
     async def stop(self) -> None:
         """停止HTTP客户端（停止内置解析器；curl 会话由各 CurlNameserver 自行关闭）。"""
-        logger.info("停止HTTP客户端")
+        logger.info("停止 HTTP 客户端")
         if self.resolver is not None:
             await self.resolver.stop()
 

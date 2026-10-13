@@ -1,3 +1,5 @@
+"""DNS over HTTPS 上游（curl-cffi，支持 ECH 与浏览器指纹模拟）。"""
+
 from base64 import urlsafe_b64encode
 from typing import TYPE_CHECKING
 
@@ -102,11 +104,11 @@ class CurlNameserver(BaseNameserver):
             if ech_key is not None:
                 self._curl.curl_options[CurlOpt.ECH] = f"ecl:{ech_key}"
                 # ECH 密钥属于敏感数据，日志只记录已配置状态，不打印密钥内容。
-                logger.debug("Curl解析器 {} 已设置 ECH 密钥", self.name)
+                logger.debug("Curl 上游 {} 已设置 ECH 密钥", self.name)
             else:
                 self._curl.curl_options.pop(CurlOpt.ECH, None)
                 logger.warning(
-                    "Curl解析器 {} 未能获取 ECH 密钥，使用默认设置", self.name
+                    "Curl 上游 {} 未能获取 ECH 密钥，使用默认设置", self.name
                 )
         try:
             # curl 的 timeout 从取到句柄后才计时，外层范围还须覆盖会话池排队。
@@ -134,8 +136,10 @@ class CurlNameserver(BaseNameserver):
                         timeout=remaining_timeout(deadline),
                         verify=self.verify,
                     )
-        except Exception:
-            logger.warning("Curl 上游 {} 请求失败", self.name)
+        except Exception as error:
+            logger.warning(
+                "Curl 上游 {} 请求失败: {}: {}", self.name, type(error).__name__, error
+            )
             raise
         if result.status_code != 200:
             raise ValueError(

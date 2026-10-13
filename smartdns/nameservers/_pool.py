@@ -1,3 +1,5 @@
+"""TCP 连接池的连接管理器与空闲连接健康探测（供 generic-connection-pool 使用）。"""
+
 import socket
 
 from anyio import connect_tcp, fail_after

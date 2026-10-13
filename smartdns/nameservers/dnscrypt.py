@@ -1,3 +1,5 @@
+"""DNSCrypt 协议 2 上游：证书获取、轮换刷新与加密查询交换。"""
+
 from time import monotonic, time
 from typing import TYPE_CHECKING
 

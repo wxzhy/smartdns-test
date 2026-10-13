@@ -18,6 +18,8 @@ from ipaddress import ip_address
 from re import fullmatch
 from struct import pack, unpack
 from time import time
+from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import dns.flags
 import dns.message
@@ -26,6 +28,7 @@ import dns.rcode
 import dns.rdatatype
 import dnsstamps
 from anyio import CancelScope, connect_tcp, create_connected_udp_socket, fail_after
+from anyio.streams.buffered import BufferedByteReceiveStream
 from loguru import logger
 from nacl.exceptions import CryptoError
 from nacl.signing import VerifyKey
@@ -37,6 +40,9 @@ from smartdns.nameservers._sodium import (
     box_open_easy_afternm,
 )
 from smartdns.nameservers.base import query_deadline, remaining_timeout
+
+if TYPE_CHECKING:
+    from anyio.abc import SocketStream
 
 RESOLVER_MAGIC = b"r6fnvWj8"
 CERT_MAGIC = b"DNSC"
@@ -74,34 +80,26 @@ def parse_addr(addr: str) -> tuple[str, int]:
     """解析 stamp 的 addr 字段，返回 (host, port)。
 
     支持 ``IP:port``、``[IPv6]:port``、无端口的 ``IP``/``[IPv6]``（端口默认
-    443），多个地址以 ``;`` 分隔时取第一个。
+    443），多个地址以 ``;`` 分隔时取第一个。方括号与端口由 urlsplit 解析。
     """
     text = addr.split(";", maxsplit=1)[0]
-    if text.startswith("["):
-        host, sep, rest = text[1:].partition("]")
-        if not sep:
-            raise ValueError(f"stamp 地址缺少右括号: {addr!r}")
-        if rest and not rest.startswith(":"):
-            raise ValueError(f"stamp 地址非法: {addr!r}")
-        if rest == ":":
-            raise ValueError(f"stamp 端口非法: {addr!r}")
-        port_text = rest[1:] if rest.startswith(":") else ""
-    else:
-        host, sep, port_text = text.rpartition(":")
-        if not sep:
-            host, port_text = text, ""
-        elif not port_text:
-            raise ValueError(f"stamp 端口非法: {addr!r}")
+    if text.startswith("[") and "]" not in text:
+        raise ValueError(f"stamp 地址缺少右括号: {addr!r}")
     try:
-        ip_address(host)
+        parts = urlsplit(f"//{text}")
+        host, port = parts.hostname, parts.port
+    except ValueError as error:
+        raise ValueError(f"stamp 地址或端口非法: {addr!r}") from error
+    # urlsplit 把 "IP:"（冒号后为空）视为未写端口，stamp 中按非法处理。
+    if text.endswith(":"):
+        raise ValueError(f"stamp 端口非法: {addr!r}")
+    try:
+        ip_address(host or "")
     except ValueError:
         raise ValueError(f"stamp IP 地址非法: {addr!r}") from None
-    if not port_text:
+    assert host is not None
+    if port is None:
         return host, DEFAULT_DNSCRYPT_PORT
-    try:
-        port = int(port_text)
-    except ValueError:
-        raise ValueError(f"stamp 端口非法: {addr!r}") from None
     if not 1 <= port <= 65535:
         raise ValueError(f"stamp 端口越界: {addr!r}")
     return host, port
@@ -242,22 +240,13 @@ def unpad_response(wire: bytes) -> bytes:
     return wire[:end]
 
 
-async def _receive_exact(stream, size: int) -> bytes:
-    """从 anyio 流中精确读取 size 字节。"""
-    chunks: list[bytes] = []
-    remaining = size
-    while remaining:
-        chunks.append(await stream.receive(remaining))
-        remaining -= len(chunks[-1])
-    return b"".join(chunks)
-
-
-async def _tcp_exchange(stream, wire: bytes, timeout: float) -> bytes:
-    """在既有 TCP 流上完成 2 字节分帧交换，返回应答 wire。"""
+async def _tcp_exchange(stream: SocketStream, wire: bytes, timeout: float) -> bytes:
+    """在既有 TCP 流上完成 2 字节长度前缀分帧交换，返回应答 wire。"""
     with fail_after(timeout):
         await stream.send(pack("!H", len(wire)) + wire)
-        (length,) = unpack("!H", await _receive_exact(stream, 2))
-        return await _receive_exact(stream, length)
+        reader = BufferedByteReceiveStream(stream)
+        (length,) = unpack("!H", await reader.receive_exactly(2))
+        return await reader.receive_exactly(length)
 
 
 async def _tcp_roundtrip(host: str, port: int, wire: bytes, timeout: float) -> bytes:

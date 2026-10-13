@@ -1,3 +1,5 @@
+"""上游 Nameserver 基类与单次查询截止时间工具。"""
+
 from time import monotonic
 from typing import TYPE_CHECKING
 
