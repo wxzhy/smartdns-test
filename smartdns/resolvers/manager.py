@@ -1,7 +1,6 @@
-from typing import TYPE_CHECKING
+"""按配置创建并管理单个 Worker 内的全部 Resolver。"""
 
-from anyio import CancelScope
-from loguru import logger
+from typing import TYPE_CHECKING
 
 from smartdns.models.resolver import (
     AioDNSResolverConfig,
@@ -12,6 +11,7 @@ from smartdns.models.resolver import (
 from smartdns.resolvers.aiodns import AioDNSResolver
 from smartdns.resolvers.concurrent import ConcurrentResolver
 from smartdns.resolvers.plain import PlainResolver
+from smartdns.utils.components import ComponentManager
 
 if TYPE_CHECKING:
     from smartdns.actions.manager import ActionManager
@@ -19,46 +19,37 @@ if TYPE_CHECKING:
     from smartdns.resolvers.base import BaseResolver
 
 
-class ResolverManager:
+class ResolverManager(ComponentManager[ResolverConfig, "BaseResolver"]):
+    kind = "Resolver"
+
     def __init__(self, config: list[ResolverConfig]) -> None:
-        self.config = config
-        self.resolvers: dict[str, BaseResolver] = {}
+        super().__init__(config)
+        self._nameservers: NameserverManager | None = None
+        self._actions: ActionManager | None = None
+
+    @property
+    def resolvers(self) -> dict[str, BaseResolver]:
+        return self.components
+
+    def _create(self, config: ResolverConfig) -> BaseResolver:
+        match config:
+            case PlainResolverConfig():
+                assert self._nameservers is not None
+                return PlainResolver(config=config, nameservers=self._nameservers)
+            case AioDNSResolverConfig():
+                return AioDNSResolver(config=config)
+            case ConcurrentResolverConfig():
+                assert self._actions is not None
+                # 配置校验保证只引用排在前面的 Resolver，按顺序启动即可解析。
+                return ConcurrentResolver(
+                    config=config, resolvers=self, actions=self._actions
+                )
+            case _:
+                raise ValueError(f"不支持的解析器类型: {config.type}")
 
     async def start_all(
         self, nameservers: NameserverManager, actions: ActionManager
     ) -> None:
-        try:
-            for config in self.config:
-                match config:
-                    case PlainResolverConfig():
-                        resolver: BaseResolver = PlainResolver(
-                            config=config, nameservers=nameservers
-                        )
-                    case AioDNSResolverConfig():
-                        resolver = AioDNSResolver(config=config)
-                    case ConcurrentResolverConfig():
-                        resolver = ConcurrentResolver(
-                            config=config,
-                            resolvers=self,
-                            actions=actions,
-                        )
-                    case _:
-                        raise ValueError(f"不支持的解析器类型: {config.type}")
-                self.resolvers[resolver.name] = resolver
-                await resolver.start()
-        except BaseException:
-            with CancelScope(shield=True):
-                await self.stop_all()
-            raise
-
-    def get(self, name: str) -> BaseResolver | None:
-        return self.resolvers.get(name)
-
-    async def stop_all(self) -> None:
-        resolvers = list(self.resolvers.values())
-        self.resolvers.clear()
-        for resolver in reversed(resolvers):
-            try:
-                await resolver.stop()
-            except Exception:
-                logger.exception("停止 Resolver {} 失败", resolver.name)
+        self._nameservers = nameservers
+        self._actions = actions
+        await self._start_components()

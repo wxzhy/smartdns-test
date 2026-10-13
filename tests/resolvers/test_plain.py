@@ -362,7 +362,7 @@ def _failover_resolver(
     first = _FakeNameserver("dead", blackhole=blackhole_first)
     second = _FakeNameserver("alive", blackhole=False)
     manager = NameserverManager(config=[], client=cast("HTTPClient", None))
-    manager.nameservers = {"dead": first, "alive": second}
+    manager.nameservers.update({"dead": first, "alive": second})
     config = PlainResolverConfig(
         name="p",
         type="plain",
@@ -387,7 +387,7 @@ async def test_default_attempt_timeout_leaves_time_to_fail_over() -> None:
 async def test_single_nameserver_keeps_full_lifetime_per_attempt() -> None:
     alive = _FakeNameserver("alive", blackhole=False)
     manager = NameserverManager(config=[], client=cast("HTTPClient", None))
-    manager.nameservers = {"alive": alive}
+    manager.nameservers.update({"alive": alive})
     config = PlainResolverConfig(
         name="p", type="plain", nameservers=["alive"], lifetime=0.4, cache_size=0
     )
