@@ -1,3 +1,5 @@
+"""Do53 UDP 监听器。"""
+
 from socket import (
     AF_INET6,
     IPPROTO_IPV6,
@@ -19,12 +21,7 @@ from dns.message import from_wire
 from loguru import logger
 
 from smartdns.listeners._socket import AnyioDatagramSocket
-from smartdns.listeners.base import (
-    BaseListener,
-    should_drop,
-    unsupported_opcode_response,
-)
-from smartdns.models.context import Request
+from smartdns.listeners.base import BaseListener, remaining, should_drop
 
 if TYPE_CHECKING:
     from dns.message import Message
@@ -44,6 +41,10 @@ _MAX_UDP_PAYLOAD = 1232
 
 
 class UDPListener(BaseListener):
+    """UDP 监听器：单个套接字接收，每个请求在独立任务中处理并回写。"""
+
+    transport = "UDP"
+
     def __init__(self, config: Do53ListenerConfig):
         super().__init__(config)
         self.host = str(config.host) if config.host is not None else "::"
@@ -63,7 +64,7 @@ class UDPListener(BaseListener):
             if platform == "win32":
                 sock.setsockopt(SOL_SOCKET, SO_EXCLUSIVEADDRUSE, 1)
                 if self.reuse_port:
-                    logger.warning("UDP监听器 {}: Windows 忽略 reuse_port", self.name)
+                    logger.warning("UDP 监听器 {}: Windows 忽略 reuse_port", self.name)
             else:
                 sock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
                 if self.reuse_port:
@@ -106,45 +107,26 @@ class UDPListener(BaseListener):
             self._sock = None
             raise
         logger.info(
-            "UDP监听器 {} 已启动，监听地址: {}:{}", self.name, self.host, self.port
+            "UDP 监听器 {} 已启动，监听地址: {}:{}", self.name, self.host, self.port
         )
         async with self._listener:
             anyio_socket = AnyioDatagramSocket(self._listener)
             limiter = Semaphore(256)
 
-            async def process(msg, client, deadline: float) -> None:
+            async def process(msg: Message, client: tuple, deadline: float) -> None:
                 try:
                     if deadline <= monotonic():
                         return
-                    with fail_after(max(0.0, deadline - monotonic())):
-                        response = unsupported_opcode_response(msg)
-                        if response is None:
-                            request = Request.from_message(
-                                msg=msg,
-                                listener=self.name,
-                                remote_address=client[0],
-                                deadline=deadline,
-                            )
-                            response = await handler(request)
+                    with self.log_failures(), fail_after(remaining(deadline)):
+                        response = await self.answer(msg, client[0], deadline)
                         if response is not None:
                             wire = self._serialize_response(msg, response)
                             await send_udp(
                                 anyio_socket,
                                 wire,
                                 client,
-                                expiration=time() + max(0.0, deadline - monotonic()),
+                                expiration=time() + remaining(deadline),
                             )
-                except TimeoutError:
-                    logger.warning("UDP监听器 {} 请求处理超时", self.name)
-                except Exception as error:
-                    # 不用 logger.exception：Loguru diagnose 会展开 sendto 局部变量，
-                    # 从而把完整 DNS wire 写入日志。
-                    logger.warning(
-                        "UDP监听器 {} 处理请求失败: {}: {}",
-                        self.name,
-                        type(error).__name__,
-                        error,
-                    )
                 finally:
                     limiter.release()
 
@@ -157,7 +139,7 @@ class UDPListener(BaseListener):
                     except Exception as error:
                         # 套接字及其他持续性接收故障采用短退避，避免错误热循环。
                         logger.warning(
-                            "UDP监听器 {} 接收请求失败: {}: {}",
+                            "UDP 监听器 {} 接收请求失败: {}: {}",
                             self.name,
                             type(error).__name__,
                             error,
@@ -170,7 +152,7 @@ class UDPListener(BaseListener):
                         # 解析失败只说明单个报文有问题（畸形、TSIG 签名等），丢弃后
                         # 立即继续接收；退避会让任意客户端用坏包拖停整个监听器。
                         logger.debug(
-                            "UDP监听器 {} 丢弃无法解析的请求: {}: {}",
+                            "UDP 监听器 {} 丢弃无法解析的请求: {}: {}",
                             self.name,
                             type(error).__name__,
                             error,
@@ -178,7 +160,7 @@ class UDPListener(BaseListener):
                         continue
                     if should_drop(msg):
                         logger.debug(
-                            "UDP监听器 {} 丢弃应答报文或无 question 报文", self.name
+                            "UDP 监听器 {} 丢弃应答报文或无 question 报文", self.name
                         )
                         continue
                     deadline = monotonic() + self.timeout
@@ -186,7 +168,7 @@ class UDPListener(BaseListener):
                         with fail_after(max(0.0, deadline - monotonic())):
                             await limiter.acquire()
                     except TimeoutError:
-                        logger.warning("UDP监听器 {} 请求排队超时", self.name)
+                        logger.warning("UDP 监听器 {} 请求排队超时", self.name)
                         continue
                     try:
                         tg.start_soon(process, msg, client, deadline)
@@ -202,4 +184,4 @@ class UDPListener(BaseListener):
         if self._sock is not None:
             self._sock.close()
             self._sock = None
-        logger.info("UDP监听器 {} 已停止", self.name)
+        logger.info("UDP 监听器 {} 已停止", self.name)

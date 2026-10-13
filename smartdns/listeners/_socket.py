@@ -1,3 +1,5 @@
+"""把 anyio 套接字适配为 dnspython 后端的 Datagram/StreamSocket 接口（监听侧）。"""
+
 from socket import SOCK_DGRAM, SOCK_STREAM
 from time import monotonic
 

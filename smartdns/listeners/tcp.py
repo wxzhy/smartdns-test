@@ -1,3 +1,5 @@
+"""Do53 TCP 监听器（RFC 7766：长度前缀分帧，支持流水线查询）。"""
+
 from __future__ import annotations
 
 from time import monotonic, time
@@ -17,12 +19,7 @@ from dns.asyncquery import receive_tcp, send_tcp
 from loguru import logger
 
 from smartdns.listeners._socket import AnyioStreamSocket
-from smartdns.listeners.base import (
-    BaseListener,
-    should_drop,
-    unsupported_opcode_response,
-)
-from smartdns.models.context import Request
+from smartdns.listeners.base import BaseListener, remaining, should_drop
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -38,7 +35,9 @@ _ACCEPT_ERROR_BACKOFF = 0.1
 
 
 class TCPListener(BaseListener):
-    """TCP监听器类"""
+    """TCP 监听器：限制并发连接与在途查询，同一连接上的查询可并发处理。"""
+
+    transport = "TCP"
 
     def __init__(self, config: Do53ListenerConfig, max_connections: int = 256):
         super().__init__(config)
@@ -68,7 +67,7 @@ class TCPListener(BaseListener):
         )
         self.handler = handler
         logger.info(
-            "TCP监听器 {} 已启动，监听地址: {}:{}", self.name, self.host, self.port
+            "TCP 监听器 {} 已启动，监听地址: {}:{}", self.name, self.host, self.port
         )
         limiter = Semaphore(self._max_connections)
         listener = self._listener
@@ -83,7 +82,7 @@ class TCPListener(BaseListener):
                 except ClosedResourceError:
                     return
                 except Exception:
-                    logger.warning("TCP监听器 {} 接收连接失败", self.name)
+                    logger.warning("TCP 监听器 {} 接收连接失败", self.name)
                     await sleep(_ACCEPT_ERROR_BACKOFF)
                     continue
                 try:
@@ -91,7 +90,7 @@ class TCPListener(BaseListener):
                         await limiter.acquire()
                 except TimeoutError:
                     await aclose_forcefully(stream)
-                    logger.debug("TCP监听器 {} 连接排队超时", self.name)
+                    logger.debug("TCP 监听器 {} 连接排队超时", self.name)
                     continue
                 except BaseException:
                     await aclose_forcefully(stream)
@@ -119,7 +118,7 @@ class TCPListener(BaseListener):
         if self._listener is not None:
             await self._listener.aclose()
             self._listener = None
-            logger.info("TCP监听器 {} 已停止", self.name)
+            logger.info("TCP 监听器 {} 已停止", self.name)
 
     async def handle_connection(self, stream: SocketStream):
         """处理传入的TCP连接"""
@@ -138,16 +137,8 @@ class TCPListener(BaseListener):
                     if deadline <= monotonic():
                         return
                     # 接收帧、限流排队、处理、等待写锁与回写共享截止时刻。
-                    with fail_after(max(0.0, deadline - monotonic())):
-                        response: Message | None = unsupported_opcode_response(data)
-                        if response is None:
-                            request = Request.from_message(
-                                msg=data,
-                                listener=self.name,
-                                remote_address=client_address,
-                                deadline=deadline,
-                            )
-                            response = await handler(request)
+                    with self.log_failures(), fail_after(remaining(deadline)):
+                        response = await self.answer(data, client_address, deadline)
                         if response is not None:
                             wire = self._serialize_response(response)
                             # 多个查询可并发处理，但 TCP 帧必须完整、串行写入。
@@ -156,23 +147,13 @@ class TCPListener(BaseListener):
                                     await send_tcp(
                                         anyio_stream,
                                         wire,
-                                        expiration=time()
-                                        + max(0.0, deadline - monotonic()),
+                                        expiration=time() + remaining(deadline),
                                     )
                                 except BaseException:
                                     # 一次写入若只完成了部分字节，后续响应会接在
                                     # 残帧后面；终止整条连接上的读取和待写任务。
                                     tg.cancel_scope.cancel()
                                     raise
-                except TimeoutError:
-                    logger.warning("TCP监听器 {} 请求处理超时", self.name)
-                except Exception as error:
-                    logger.warning(
-                        "TCP监听器 {} 处理请求失败: {}: {}",
-                        self.name,
-                        type(error).__name__,
-                        error,
-                    )
                 finally:
                     self._query_limiter.release()
 
@@ -187,7 +168,8 @@ class TCPListener(BaseListener):
                             )
                         if should_drop(data):
                             logger.debug(
-                                "TCP监听器 {} 跳过应答报文或无 question 报文", self.name
+                                "TCP 监听器 {} 跳过应答报文或无 question 报文",
+                                self.name,
                             )
                             continue
                         deadline = (
@@ -197,7 +179,7 @@ class TCPListener(BaseListener):
                             with fail_after(max(0.0, deadline - monotonic())):
                                 await self._query_limiter.acquire()
                         except TimeoutError:
-                            logger.warning("TCP监听器 {} 请求排队超时", self.name)
+                            logger.warning("TCP 监听器 {} 请求排队超时", self.name)
                             continue
                         try:
                             tg.start_soon(process, data, deadline)
@@ -208,10 +190,10 @@ class TCPListener(BaseListener):
                     # 客户端正常关闭连接（读到 EOF），非错误路径。
                     pass
                 except TimeoutError:
-                    logger.debug("TCP监听器 {} 连接空闲超时", self.name)
+                    logger.debug("TCP 监听器 {} 连接空闲超时", self.name)
                 except Exception as error:
                     logger.warning(
-                        "TCP监听器 {} 读取连接失败: {}: {}",
+                        "TCP 监听器 {} 读取连接失败: {}: {}",
                         self.name,
                         type(error).__name__,
                         error,

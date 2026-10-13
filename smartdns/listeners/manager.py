@@ -1,3 +1,5 @@
+"""按配置启动全部监听器，并在停机时等待连接与查询任务收尾。"""
+
 from asyncio import current_task
 from typing import TYPE_CHECKING
 
