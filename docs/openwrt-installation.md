@@ -14,7 +14,7 @@ df -h / /tmp
 uv --version
 ```
 
-上述命令必须成功；`uv` 的取得方式取决于设备架构和固件软件源。第 3 步会在程序目录内安装 Python 3.14，服务启动时不会下载 Python 或依赖。若使用 DNSCrypt，上游还要求目标系统中有可动态加载的 libsodium。
+上述命令必须成功；`uv` 的取得方式取决于设备架构和固件软件源。第 3 步会在程序目录内安装 Python 3.14，服务启动时不会下载 Python 或依赖。
 
 此服务要求 OpenWrt 的 `procd-ujail`：在 25.12 及更新版本使用 `apk add procd-ujail`，在 24.10 及更早版本使用 `opkg update && opkg install procd-ujail`。确认 `test -x /sbin/ujail` 成功；启动脚本使用 `ls -ldn` 检查安全文件的数字 UID/GID 和权限，无需额外安装 `stat`。若设备内核或容器环境不允许创建 jail 所需的挂载命名空间，服务会启动失败，应先解决平台限制。
 
@@ -127,9 +127,9 @@ ls -ldn /opt/smartdns-python/deploy/smartdns.openwrt.capabilities.json
 id -u smartdnspy
 ```
 
-上面 `ls -ldn` 的首列应为 `-rw-r--r--`，第三、四列数字 UID/GID 应均为 `0`。若使用可选的 `environment` 文件，其首列应为 `-rw-------`，UID/GID 同样为 `0`。
+上面 `ls -ldn` 的首列应为 `-rw-r--r--`，第三、四列数字 UID/GID 应均为 `0`。
 
-解释器的真实路径必须在 `/opt/smartdns-python` 下，而且 `smartdnspy` 用户必须能读取它。服务用户还必须能穿过程序目录、读取 `smartdns/*.py` 和配置引用的地理数据；仅给 `.python`、`.venv` 加读取权限不足以运行源码。`chmod -R go-w` 只移除写权限，不会给原本是 0600 的文件补上读取权限；因此上面另对源码与地理数据执行 `chmod -R a+rX`，但保留 `config.yaml` 的 0640 和可选 `environment` 的 0600。程序目录、Python 安装、虚拟环境和 capability 配置应始终保持 root 拥有且不可由该用户修改。jail 会只读挂载整个程序目录、常见系统库目录、CA 证书及主机解析文件；不再单独挂载解释器文件，因为某些 ujail 构建在处理该 Python 文件时会崩溃。如果原生库放在其他目录，需要把对应目录加入 init 脚本的只读挂载列表。如果日志出现 `PermissionError: .../smartdns/main.py`，先按本节修复源码读取权限。如果导入仍失败，再检查缺失的 Python 包、原生库或 ABI 问题。
+解释器的真实路径必须在 `/opt/smartdns-python` 下，而且 `smartdnspy` 用户必须能读取它。服务用户还必须能穿过程序目录、读取 `smartdns/*.py` 和配置引用的地理数据；仅给 `.python`、`.venv` 加读取权限不足以运行源码。`chmod -R go-w` 只移除写权限，不会给原本是 0600 的文件补上读取权限；因此上面另对源码与地理数据执行 `chmod -R a+rX`，但保留 `config.yaml` 的 0640。程序目录、Python 安装、虚拟环境和 capability 配置应始终保持 root 拥有且不可由该用户修改。jail 会只读挂载整个程序目录、常见系统库目录、CA 证书及主机解析文件；不再单独挂载解释器文件，因为某些 ujail 构建在处理该 Python 文件时会崩溃。如果原生库放在其他目录，需要把对应目录加入 init 脚本的只读挂载列表。如果日志出现 `PermissionError: .../smartdns/main.py`，先按本节修复源码读取权限。如果导入仍失败，再检查缺失的 Python 包、原生库或 ABI 问题。
 
 对已安装的实例，遇到上述 `main.py` 权限错误时可直接修复并重新启动，无需重建虚拟环境或覆盖现有配置。如果 dnsmasq 已只转发到 SmartDNS，先按第 5 节撤销转发、确认路由器 DNS 恢复，再执行下列停机命令：
 
@@ -144,8 +144,6 @@ fi
 /etc/init.d/smartdns-python status
 logread -e smartdns | tail -n 20
 ```
-
-若 DNSCrypt 使用的 libsodium 不在动态库默认搜索路径，可另建 `/opt/smartdns-python/environment`，写入一行 `SMARTDNS_LIBSODIUM_PATH=/绝对路径/libsodium.so`，并执行 `chown root:root /opt/smartdns-python/environment && chmod 0600 /opt/smartdns-python/environment`。init 脚本只读取这个赋值，不执行文件内容；它会拒绝符号链接、非 root:root 0600 文件以及其他配置项，并将该库只读挂载进 jail。启用 DNSCrypt 前，先用相同路径验证 `SMARTDNS_LIBSODIUM_PATH=/绝对路径/libsodium.so /opt/smartdns-python/.venv/bin/python -c 'from smartdns.nameservers._sodium import require_libsodium; require_libsodium()'` 能成功执行。
 
 ## 4. 安装并启动 procd 服务
 
@@ -162,7 +160,7 @@ logread -e smartdns
 
 上面的临时文件加 `mv` 会将旧脚本或符号链接替换为名为 `smartdns-python` 的普通文件；只用 `cp` 覆盖已有符号链接可能会改写其目标、保留链接。`rc.common` 使用链接目标的文件名作为 procd 服务名，目标名与 `smartdns-python` 不同时，状态和停止命令可能查错服务。可用 `ls -l /etc/init.d/smartdns-python` 检查。
 
-启动脚本让 procd 通过 `ujail` 监管 Python 服务，异常退出后重启；标准输出和错误进入 OpenWrt 日志。隔离配置使用专用用户/组、`no_new_privs`，并将 capability 的五个集合均限制为 `CAP_NET_BIND_SERVICE` 和 `CAP_NET_RAW`；不挂载 `/proc`、`/sys` 或 ubus。程序与配置只读，仅 `/var/run/smartdns-python` 对服务可写，并作为 `HOME` 和 `TMPDIR`。该目录在每次启动时创建为 `smartdnspy:smartdnspy`、0700；Python 进程采用与 systemd 示例相同的 `0027` umask。`term_timeout 35` 为被隔离的进程提供 35 秒停止宽限时间。ujail 的 PID 命名空间可能让 Python 成为 PID 1；Linux 不会向没有注册相应处理器的命名空间 PID 1 递送通常的终止信号。程序入口显式接收 `SIGTERM`，取消主服务并清理监听器和 Worker。`rc.common` 的默认 `stop` 只发出异步删除请求；本脚本在请求之后最多等待 75 秒，进程仍运行时返回错误，不再报告停止成功。若需访问程序目录之外的地理数据、证书或库，先按最小范围补充只读挂载。修改 `/opt/smartdns-python/config.yaml`、capability 配置或 `environment` 后用 `/etc/init.d/smartdns-python restart`，停用自启动用 `/etc/init.d/smartdns-python disable`。若 `/opt` 在服务启动时尚未挂载，需要先解决挂载顺序。
+启动脚本让 procd 通过 `ujail` 监管 Python 服务，异常退出后重启；标准输出和错误进入 OpenWrt 日志。隔离配置使用专用用户/组、`no_new_privs`，并将 capability 的五个集合均限制为 `CAP_NET_BIND_SERVICE` 和 `CAP_NET_RAW`；不挂载 `/proc`、`/sys` 或 ubus。程序与配置只读，仅 `/var/run/smartdns-python` 对服务可写，并作为 `HOME` 和 `TMPDIR`。该目录在每次启动时创建为 `smartdnspy:smartdnspy`、0700；Python 进程采用与 systemd 示例相同的 `0027` umask。`term_timeout 35` 为被隔离的进程提供 35 秒停止宽限时间。ujail 的 PID 命名空间可能让 Python 成为 PID 1；Linux 不会向没有注册相应处理器的命名空间 PID 1 递送通常的终止信号。程序入口显式接收 `SIGTERM`，取消主服务并清理监听器和 Worker。`rc.common` 的默认 `stop` 只发出异步删除请求；本脚本在请求之后最多等待 75 秒，进程仍运行时返回错误，不再报告停止成功。若需访问程序目录之外的地理数据、证书或库，先按最小范围补充只读挂载。修改 `/opt/smartdns-python/config.yaml` 或 capability 配置后用 `/etc/init.d/smartdns-python restart`，停用自启动用 `/etc/init.d/smartdns-python disable`。若 `/opt` 在服务启动时尚未挂载，需要先解决挂载顺序。
 
 启动后可运行 `ubus call service list '{"name":"smartdns-python","verbose":true}'` 检查 `main` 实例的 `jail`、`user`、`group`、`no_new_privs`、`capabilities` 和 `term_timeout` 参数；再用 `ps` 找到 Python 子进程 PID，检查 `/proc/PID/status` 中的 `Uid`、`Gid`、`NoNewPrivs`、`CapEff`、`CapPrm`、`CapInh`、`CapBnd` 和 `CapAmb`，以及 `/proc/PID/root` 是否指向 ujail 根目录。正常情况下 Python 进程的五个 capability 值均应为 `0000000000002400`（仅包含两项网络权限），`NoNewPrivs` 应为 `1`；若实际值不同，先检查 procd/ujail 版本及日志。若 procd 持续重启，先从 `logread -e smartdns` 和 `logread -e jail` 检查缺少的挂载或权限。
 

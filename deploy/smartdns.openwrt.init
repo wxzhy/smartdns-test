@@ -8,7 +8,6 @@ USE_PROCD=1
 APP_DIR=/opt/smartdns-python
 PYTHON="$APP_DIR/.venv/bin/python"
 CONFIG="$APP_DIR/config.yaml"
-ENV_FILE="$APP_DIR/environment"
 CAPABILITIES="$APP_DIR/deploy/smartdns.openwrt.capabilities.json"
 RUN_DIR=/var/run/smartdns-python
 RUN_USER=smartdnspy
@@ -39,45 +38,6 @@ root_owned_regular_file() {
     set -- $details
     [ "$#" -ge 4 ] && [ "$1" = "$expected" ] && \
         [ "$3" = 0 ] && [ "$4" = 0 ]
-}
-
-load_environment() {
-    SMARTDNS_LIBSODIUM_PATH=
-    [ -e "$ENV_FILE" ] || [ -L "$ENV_FILE" ] || return 0
-
-    # Never execute a writable or symlinked file as root. Only one data key is supported.
-    if ! root_owned_regular_file "$ENV_FILE" '-rw-------'; then
-        echo "smartdns: environment must be a regular root:root 0600 file" >&2
-        return 1
-    fi
-
-    local line
-    while IFS= read -r line || [ -n "$line" ]; do
-        case "$line" in
-            ''|'#'*) ;;
-            SMARTDNS_LIBSODIUM_PATH=/*)
-                SMARTDNS_LIBSODIUM_PATH=${line#*=}
-                ;;
-            *)
-                echo "smartdns: unsupported environment entry" >&2
-                return 1
-                ;;
-        esac
-    done < "$ENV_FILE"
-
-    if [ -n "${SMARTDNS_LIBSODIUM_PATH:-}" ]; then
-        SMARTDNS_LIBSODIUM_PATH=$(readlink -f "$SMARTDNS_LIBSODIUM_PATH") || return 1
-        case "$SMARTDNS_LIBSODIUM_PATH" in
-            *[[:space:]]*)
-                echo "smartdns: libsodium path cannot contain whitespace" >&2
-                return 1
-                ;;
-        esac
-        if [ ! -f "$SMARTDNS_LIBSODIUM_PATH" ]; then
-            echo "smartdns: libsodium path does not exist" >&2
-            return 1
-        fi
-    fi
 }
 
 start_service() {
@@ -125,7 +85,6 @@ start_service() {
             return 1
             ;;
     esac
-    load_environment || return 1
 
     # /var/run is root-managed on OpenWrt; reject a substituted leaf symlink.
     if [ -L "$RUN_DIR" ] || { [ -e "$RUN_DIR" ] && [ ! -d "$RUN_DIR" ]; }; then
@@ -147,14 +106,8 @@ start_service() {
     procd_set_param no_new_privs 1
     # Keep the profile's capability sets in sync with smartdns.service.
     procd_set_param capabilities "$CAPABILITIES"
-    if [ -n "${SMARTDNS_LIBSODIUM_PATH:-}" ]; then
-        procd_set_param env "HOME=$RUN_DIR" "TMPDIR=$RUN_DIR" \
-            PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 \
-            "SMARTDNS_LIBSODIUM_PATH=$SMARTDNS_LIBSODIUM_PATH"
-    else
-        procd_set_param env "HOME=$RUN_DIR" "TMPDIR=$RUN_DIR" \
-            PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
-    fi
+    procd_set_param env "HOME=$RUN_DIR" "TMPDIR=$RUN_DIR" \
+        PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1
     procd_add_jail smartdns-python ronly log requirejail
     # Stage the Python installation via APP_DIR; staging its ELF binary alone
     # can crash ujail on some OpenWrt-derived builds.
@@ -164,8 +117,6 @@ start_service() {
         /etc/TZ /etc/localtime /etc/passwd /etc/group; do
         [ -e "$path" ] && procd_add_jail_mount "$path"
     done
-    [ -n "${SMARTDNS_LIBSODIUM_PATH:-}" ] && \
-        procd_add_jail_mount "$SMARTDNS_LIBSODIUM_PATH"
     procd_add_jail_mount_rw "$RUN_DIR"
     # Give the jailed process the same 35-second stop grace as TimeoutStopSec.
     procd_set_param term_timeout 35

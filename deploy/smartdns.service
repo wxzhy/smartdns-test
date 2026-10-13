@@ -10,7 +10,6 @@ DynamicUser=yes
 WorkingDirectory=/opt/smartdns
 Environment=HOME=/var/lib/smartdns
 Environment=PYTHONDONTWRITEBYTECODE=1
-EnvironmentFile=-/opt/smartdns/environment
 LoadCredential=config.yaml:/opt/smartdns/config.yaml
 ExecStart=/opt/smartdns/.venv/bin/python -m smartdns.main --config ${CREDENTIALS_DIRECTORY}/config.yaml
 Restart=on-failure

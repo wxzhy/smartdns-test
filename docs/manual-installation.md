@@ -4,7 +4,7 @@
 
 ## 1. 准备环境和源码
 
-准备系统中可执行、且非 root 服务进程也能访问的 Python 3.14，以及 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)。若配置 DNSCrypt 上游，还要安装系统动态库 libsodium。以下命令在 Linux 的仓库根目录执行，后续代码块沿用同一终端中的 `SRC` 变量：
+准备系统中可执行、且非 root 服务进程也能访问的 Python 3.14，以及 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)。以下命令在 Linux 的仓库根目录执行，后续代码块沿用同一终端中的 `SRC` 变量：
 
 ```sh
 cd /path/to/smartdns-test
@@ -79,7 +79,7 @@ sudo install -o root -g root -m 0600 \
     "$SRC/deploy/config.yaml" /opt/smartdns/config.yaml
 ```
 
-若 DNSCrypt 的 libsodium 不在默认动态库搜索路径，在同一程序目录另建 `/opt/smartdns/environment`，内容只写一行 `SMARTDNS_LIBSODIUM_PATH=/绝对路径/libsodium.so`，并将其设为 root 所有、权限 `0600`。例如在编辑后执行 `sudo chown root:root /opt/smartdns/environment` 和 `sudo chmod 0600 /opt/smartdns/environment`。systemd 和 `init.d` 示例均会读取此文件。systemd 单元已包含 `CAP_NET_RAW`（`icmplib` 原始 ICMP socket）及 `CAP_NET_BIND_SERVICE`（低端口绑定）。
+systemd 单元已包含 `CAP_NET_RAW`（`icmplib` 原始 ICMP socket）及 `CAP_NET_BIND_SERVICE`（低端口绑定）。
 
 先以 root 检查配置内容及引用是否有效；systemd 启动时会把该文件复制为动态用户可读取的只读凭据：
 
@@ -94,15 +94,6 @@ config = Config()
 print(f'OK: {len(config.listeners)} listeners, {len(config.nameservers)} nameservers')
 PY
 ```
-
-如果使用 DNSCrypt，还要确认服务进程能加载 libsodium。默认搜索路径下可运行：
-
-```sh
-sudo /opt/smartdns/.venv/bin/python -c \
-    'from smartdns.nameservers._sodium import require_libsodium; require_libsodium()'
-```
-
-使用自定义库路径时，在上面的命令中通过 `env SMARTDNS_LIBSODIUM_PATH=/绝对路径/libsodium.so` 传入与环境文件相同的值。
 
 ## 5. 选择一种服务管理方式
 

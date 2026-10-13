@@ -111,7 +111,7 @@ DNS endpoints and proxy addresses for the target network before deployment.
 For Linux systemd or init.d, see docs/manual-installation.md or use
 deploy/install.sh for a fresh installation. Install Python and native
 dependencies for the target architecture; never copy a .venv from another
-platform. DNSCrypt requires a loadable libsodium library.
+platform.
 """
 
     contents = {name: (ROOT / name).read_bytes() for name in source_files()}

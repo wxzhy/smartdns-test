@@ -180,26 +180,6 @@ UDP 在收到完整请求后开始计时，TCP 在收到帧首字节后开始计
 
 分帧与 DNS over TCP 相同（2 字节长度前缀），收发复用 `dns.asyncquery.tcp`。握手由内置的 utls（BoringSSL）驱动，连接池健康检查为非破坏性 `MSG_PEEK`（peek 到 TLS 密文视为存活）。
 
-### DNSCrypt
-
-```yaml
-- name: dnscrypt-cryptostorm
-  type: dnscrypt
-  stamp: sdns://AQcAAAAAAAAADTk0LjE5OC40MS4yMzUgMTNyrVlWMsJBa4cvCY-FG925ZShMbL6aTxkJZDDbqVoeMi5kbnNjcnlwdC1jZXJ0LmNyeXB0b3N0b3JtLmlz
-  timeout: 5
-  tcp_only: false
-```
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `stamp` | 必填 | `sdns://` DNSCrypt stamp，包含地址（端口省略时默认 443）、提供者名称与 Ed25519 公钥；配置加载期解析，非法格式直接报错 |
-| `tcp_only` | false | 强制所有查询走 TCP |
-| `pool_size` | 0 | 已弃用；为兼容旧配置仍接受该字段，但 DNSCrypt 每次 TCP 查询都使用新连接 |
-
-协议实现 DNSCrypt v2 的 X25519 + XChaCha20_DJB-Poly1305，仅接受 es_version=2 证书。`dnsstamps` 解析 stamp，PyNaCl 生成客户端密钥并校验证书；由于 PyNaCl 未公开该协议所需的 XChaCha20 `crypto_box` 接口，还需要可动态加载的 libsodium。系统安装 libsodium 后，若无法通过默认库路径找到它，请将 `SMARTDNS_LIBSODIUM_PATH` 设为库文件绝对路径（Windows 建议使用 [libsodium 官方 MSVC 预编译包](https://download.libsodium.org/libsodium/releases/)中的 64 位动态库）。缺少该库时 DNSCrypt 上游会在启动时明确报错。`dnsstamps` 1.4.1 对少见的长提供者名称解析不完整；配置校验会拒绝这类 stamp，避免静默截短。
-
-启动时向上游自身 `地址:端口` 发送普通 DNS TXT 查询获取证书（UDP 失败或截断回退 TCP），选取 serial 最高的有效证书；证书临期时自动刷新。普通查询走 UDP，应答 TC 时由 dnspython 以 `max_size=True` 改走 TCP。解密后校验响应 nonce、填充、DNS ID 和问题是否匹配。DNSCrypt TCP 每条连接只处理一次查询。stamp 可从解析器提供方或 dnscrypt 公共解析器列表获取。
-
 ### curl DoH
 
 ```yaml

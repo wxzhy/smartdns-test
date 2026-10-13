@@ -293,7 +293,7 @@ uv run python -m smartdns.main --config example.yaml
 
 ### Linux 服务安装示例
 
-仓库的 [`deploy/install.sh`](deploy/install.sh) 提供首次安装示例，支持 systemd 和 Debian/Ubuntu 的 SysV `init.d`（使用 `start-stop-daemon`）。先准备系统可访问的 Python 3.14 和 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)；如果配置了 DNSCrypt 上游，还须安装可动态加载的 libsodium。脚本不会安装这些系统依赖，也不会自动启动服务。
+仓库的 [`deploy/install.sh`](deploy/install.sh) 提供首次安装示例，支持 systemd 和 Debian/Ubuntu 的 SysV `init.d`（使用 `start-stop-daemon`）。先准备系统可访问的 Python 3.14 和 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)。脚本不会安装这些系统依赖，也不会自动启动服务。
 
 如果希望逐条执行安装命令，请参阅 [`docs/manual-installation.md`](docs/manual-installation.md)。
 
@@ -302,11 +302,9 @@ uv run python -m smartdns.main --config example.yaml
 sudo sh deploy/install.sh systemd
 # 或在使用 SysV init 的 Debian/Ubuntu 系统上：
 sudo sh deploy/install.sh initd /path/to/your-config.yaml
-# 自定义 libsodium 库路径时，第三个参数传入只含 KEY=value 的环境文件：
-sudo sh deploy/install.sh systemd /path/to/your-config.yaml /path/to/environment
 ```
 
-安装脚本将运行代码和 `config.yaml` 都放在 `/opt/smartdns`。systemd 模式要求版本不低于 247，使用 `DynamicUser=yes`，无需创建固定用户；SysV 模式仍会创建无登录权限的 `smartdns` 用户。已有应用目录或服务文件会使脚本停止，避免覆盖现有部署。若源码目录含 `tags/geosite.dat`，脚本会复制 Geo 输入并在目标设备安装完依赖后生成 `geosite.trie`、`geoip.radix`；`tags/output` 中仅复制 MaxMind DB 文件，不复制其他设备的构建产物。配置中的相对地理数据路径以 `/opt/smartdns` 为起点。安装时会校验配置及可选的 libsodium 加载。
+安装脚本将运行代码和 `config.yaml` 都放在 `/opt/smartdns`。systemd 模式要求版本不低于 247，使用 `DynamicUser=yes`，无需创建固定用户；SysV 模式仍会创建无登录权限的 `smartdns` 用户。已有应用目录或服务文件会使脚本停止，避免覆盖现有部署。若源码目录含 `tags/geosite.dat`，脚本会复制 Geo 输入并在目标设备安装完依赖后生成 `geosite.trie`、`geoip.radix`；`tags/output` 中仅复制 MaxMind DB 文件，不复制其他设备的构建产物。配置中的相对地理数据路径以 `/opt/smartdns` 为起点。安装时会校验配置。
 
 默认的 [`deploy/config.yaml`](deploy/config.yaml) 只监听 `127.0.0.1:5335` 的 UDP/TCP，并转发到 `1.1.1.1:53`。要对外提供 DNS 服务，请先检查监听地址、端口、上游和主机防火墙，再启动服务。完整功能配置可参考 [`example.yaml`](example.yaml)，其中的占位地址需要按实际环境调整。
 
@@ -323,7 +321,7 @@ sudo service smartdns status
 sudo tail -f /var/log/smartdns.log
 ```
 
-systemd 示例用 `LoadCredential=` 将程序目录中 root 私有的配置交给动态用户读取，并授予绑定低端口所需的 `CAP_NET_BIND_SERVICE` 和 `icmplib` 原始 ICMP 测速所需的 `CAP_NET_RAW`。`init.d` 示例以固定普通用户运行，因此监听端口须不低于 1024；默认的 5335 可直接使用。它依靠专用用户和 Python 可执行文件识别进程，并使用 `/var/log/smartdns.log` 记录输出；长期运行时请为该日志配置轮转。若 DNSCrypt 所需的 libsodium 不在系统默认搜索路径，请将仅由 root 修改的环境文件作为安装脚本的第三个参数传入，其中写一行 `SMARTDNS_LIBSODIUM_PATH=/绝对路径/libsodium.so`。脚本会把它复制到 `/opt/smartdns/environment`，供两种服务配置读取。更改配置后重启服务即可生效。
+systemd 示例用 `LoadCredential=` 将程序目录中 root 私有的配置交给动态用户读取，并授予绑定低端口所需的 `CAP_NET_BIND_SERVICE` 和 `icmplib` 原始 ICMP 测速所需的 `CAP_NET_RAW`。`init.d` 示例以固定普通用户运行，因此监听端口须不低于 1024；默认的 5335 可直接使用。它依靠专用用户和 Python 可执行文件识别进程，并使用 `/var/log/smartdns.log` 记录输出；长期运行时请为该日志配置轮转。更改配置后重启服务即可生效。
 
 ### OpenWrt（procd）
 

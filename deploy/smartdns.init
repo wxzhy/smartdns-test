@@ -14,16 +14,9 @@ umask 027
 APP_DIR=/opt/smartdns
 DAEMON="$APP_DIR/.venv/bin/python"
 CONFIG=/opt/smartdns/config.yaml
-ENV_FILE=/opt/smartdns/environment
 LOG_FILE=/var/log/smartdns.log
 RUN_USER=smartdns
 
-# /opt/smartdns/environment 必须由 root 管理，仅写 KEY=value 的 shell 赋值。
-if [ -r "$ENV_FILE" ]; then
-    set -a
-    . "$ENV_FILE"
-    set +a
-fi
 HOME=/var/lib/smartdns
 PYTHONDONTWRITEBYTECODE=1
 export HOME PYTHONDONTWRITEBYTECODE

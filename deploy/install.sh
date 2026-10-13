@@ -4,11 +4,11 @@ set -eu
 umask 022
 
 usage() {
-    echo "Usage: sudo sh deploy/install.sh {systemd|initd} [config.yaml] [environment]" >&2
+    echo "Usage: sudo sh deploy/install.sh {systemd|initd} [config.yaml]" >&2
     exit 2
 }
 
-[ "$#" -ge 1 ] && [ "$#" -le 3 ] || usage
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
 case "$1" in
     systemd)
         SERVICE_FILE=/etc/systemd/system/smartdns.service
@@ -21,17 +21,12 @@ esac
 MODE=$1
 SOURCE_DIR=$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)
 CONFIG_SOURCE=${2:-"$SOURCE_DIR/deploy/config.yaml"}
-ENV_SOURCE=${3:-}
 APP_DIR=/opt/smartdns
 RUN_USER=smartdns
 
 [ "$(uname -s)" = Linux ] || { echo "This installer is for Linux." >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || { echo "Run this installer as root." >&2; exit 1; }
 [ -f "$CONFIG_SOURCE" ] || { echo "Config file not found: $CONFIG_SOURCE" >&2; exit 1; }
-[ -z "$ENV_SOURCE" ] || [ -f "$ENV_SOURCE" ] || {
-    echo "Environment file not found: $ENV_SOURCE" >&2
-    exit 1
-}
 [ ! -e "$APP_DIR" ] && [ ! -L "$APP_DIR" ] || {
     echo "$APP_DIR already exists; this example installer only performs a fresh install." >&2
     exit 1
@@ -167,9 +162,6 @@ else
 fi
 install -o root -g "$CONFIG_GROUP" -m "$CONFIG_FILE_MODE" \
     "$CONFIG_SOURCE" "$APP_DIR/config.yaml"
-if [ -n "$ENV_SOURCE" ]; then
-    install -o root -g root -m 0600 "$ENV_SOURCE" "$APP_DIR/environment"
-fi
 if [ "$MODE" = systemd ]; then
     CONFIG_BYTES=$(wc -c < "$APP_DIR/config.yaml")
     [ "$CONFIG_BYTES" -le 1000000 ] || {
@@ -179,11 +171,6 @@ if [ "$MODE" = systemd ]; then
 fi
 if [ "$MODE" = initd ]; then
     install -d -o "$RUN_USER" -g "$RUN_USER" -m 0750 /var/lib/smartdns
-fi
-if [ -r "$APP_DIR/environment" ]; then
-    set -a
-    . "$APP_DIR/environment"
-    set +a
 fi
 
 (
@@ -199,7 +186,6 @@ import os
 from pathlib import Path
 
 from smartdns.models.config import Config
-from smartdns.models.nameserver import DNSCryptNameserverConfig
 
 Config.set_config_file(Path('/opt/smartdns/config.yaml'))
 config = Config()
@@ -207,10 +193,6 @@ if os.environ['SMARTDNS_INSTALL_MODE'] == 'initd' and any(
     listener.port < 1024 for listener in config.listeners
 ):
     raise SystemExit('init.d example runs unprivileged; listener ports must be >= 1024')
-if any(isinstance(server, DNSCryptNameserverConfig) for server in config.nameservers):
-    from smartdns.nameservers._sodium import require_libsodium
-
-    require_libsodium()
 print('Configuration references validated.')
 PY
 )

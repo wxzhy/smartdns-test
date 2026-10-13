@@ -4,14 +4,12 @@ from typing import TYPE_CHECKING
 
 from smartdns.models.nameserver import (
     CurlNameserverConfig,
-    DNSCryptNameserverConfig,
     NameserverConfig,
     TCPNameserverConfig,
     TLSNameserverConfig,
     UDPNameserverConfig,
 )
 from smartdns.nameservers.curl import CurlNameserver
-from smartdns.nameservers.dnscrypt import DNSCryptNameserver
 from smartdns.nameservers.tcp import TCPNameserver
 from smartdns.nameservers.tls import TLSNameserver
 from smartdns.nameservers.udp import UDPNameserver
@@ -39,8 +37,6 @@ class NameserverManager(ComponentManager[NameserverConfig, "BaseNameserver"]):
                 return TCPNameserver(config=config)
             case TLSNameserverConfig():
                 return TLSNameserver(config=config)
-            case DNSCryptNameserverConfig():
-                return DNSCryptNameserver(config=config)
             case UDPNameserverConfig():
                 return UDPNameserver(config=config)
             case CurlNameserverConfig():
