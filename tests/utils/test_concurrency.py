@@ -8,7 +8,7 @@ from anyio import create_task_group, fail_after
 from anyio.from_thread import start_blocking_portal
 from anyio.lowlevel import checkpoint
 
-from smartdns.utils.concurrency import GlobalCapacityLimiter
+from smartdns.utils.concurrency import GlobalCapacityLimiter, submit_threadsafe
 
 
 async def test_cancel_after_grant_does_not_lose_capacity() -> None:
@@ -82,3 +82,20 @@ async def test_cross_thread_cancel_and_release_return_one_slot() -> None:
         with fail_after(0.5):
             async with limiter:
                 pass
+
+
+def test_submit_threadsafe_closes_coroutine_when_loop_is_closed() -> None:
+    loop = asyncio.new_event_loop()
+    loop.close()
+    started = False
+
+    async def job() -> None:
+        nonlocal started
+        started = True
+
+    coroutine = job()
+    with pytest.raises(RuntimeError):
+        submit_threadsafe(coroutine, loop)
+    # 已关闭的协程无法再启动，也不会触发 "never awaited" 警告。
+    assert coroutine.cr_frame is None
+    assert not started

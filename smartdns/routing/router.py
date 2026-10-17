@@ -122,14 +122,12 @@ class Router:
                         if subquery.stop:
                             break
             if subquery.response is None:
-                subquery.response = Response.from_rcode(Rcode.SERVFAIL, upstream="")
+                subquery.response = Response.servfail()
         except Exception:
             logger.warning(
                 "路由 {} 的子查询 {} 失败", self.config.name, subquery.request.qname
             )
-            subquery.response = Response.from_rcode(
-                Rcode.SERVFAIL, upstream=self._upstream or ""
-            )
+            subquery.response = Response.servfail(self._upstream or "")
         for action in self.after:
             await action.on_subquery(context, subquery.response)
             if context.stop:

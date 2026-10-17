@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from asyncio import current_task, gather, get_running_loop, run_coroutine_threadsafe
+from asyncio import current_task, gather, get_running_loop
 from typing import TYPE_CHECKING
 
 from aiofastnet import patch_loop
 from anyio import CancelScope
-from dns.rcode import Rcode
 from loguru import logger
 
 from smartdns.actions.manager import ActionManager
@@ -16,6 +15,7 @@ from smartdns.nameservers.client import HTTPClient
 from smartdns.nameservers.manager import NameserverManager
 from smartdns.resolvers.manager import ResolverManager
 from smartdns.routing.router import Router
+from smartdns.utils.concurrency import submit_threadsafe
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop, Task
@@ -25,11 +25,6 @@ if TYPE_CHECKING:
 
     from smartdns.models.config import Config
     from smartdns.models.context import Request
-
-
-def _servfail() -> Response:
-    """构造一个空 upstream 的 SERVFAIL 响应。"""
-    return Response.from_rcode(Rcode.SERVFAIL, upstream="")
 
 
 class Worker:
@@ -57,11 +52,7 @@ class Worker:
         if loop is None or self._stopping:
             coroutine.close()
             raise RuntimeError(f"Worker {self.worker_id} 未运行或正在停止")
-        try:
-            return run_coroutine_threadsafe(coroutine, loop)
-        except BaseException:
-            coroutine.close()
-            raise
+        return submit_threadsafe(coroutine, loop)
 
     async def start(self) -> None:
         """启动 Worker 服务"""
@@ -131,7 +122,7 @@ class Worker:
     async def handle(self, request: Request) -> Response:
         """处理请求"""
         if self._stopping:
-            return _servfail()
+            return Response.servfail()
         task = current_task()
         assert task is not None
         self._tasks.add(task)
@@ -145,7 +136,7 @@ class Worker:
             if ctx.response is not None:
                 return ctx.response
             logger.debug("Worker {} 无法处理请求: {}", self.worker_id, request.qname)
-            return _servfail()
+            return Response.servfail()
         finally:
             self._tasks.discard(task)
 
@@ -161,7 +152,7 @@ class Worker:
             for rule in self._rules:
                 if await rule.query(context):
                     return
-            context.response = _servfail()
+            context.response = Response.servfail()
         except Exception:
             logger.exception("Worker {} 处理请求上下文失败", self.worker_id)
-            context.response = _servfail()
+            context.response = Response.servfail()

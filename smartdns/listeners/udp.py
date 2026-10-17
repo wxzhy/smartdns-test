@@ -21,7 +21,9 @@ from dns.message import from_wire
 from loguru import logger
 
 from smartdns.listeners._socket import AnyioDatagramSocket
-from smartdns.listeners.base import BaseListener, remaining, should_drop
+from smartdns.listeners.base import BaseListener, should_drop
+from smartdns.models.context import EDNS_PAYLOAD
+from smartdns.utils.deadline import time_left
 
 if TYPE_CHECKING:
     from dns.message import Message
@@ -35,9 +37,6 @@ else:
     from socket import SO_REUSEPORT
 
 _RECEIVE_ERROR_BACKOFF = 0.1
-# 与 make_response 宣告的 our_payload 一致：客户端声明更大的 payload 也不超过
-# 此值，避免 UDP 放大与 IP 分片（DNS Flag Day 2020 建议值）。
-_MAX_UDP_PAYLOAD = 1232
 
 
 class UDPListener(BaseListener):
@@ -79,12 +78,11 @@ class UDPListener(BaseListener):
     def _serialize_response(request: Message, response: Message) -> bytes:
         """按客户端声明的 UDP 容量序列化，超限时返回带 TC 的合法响应。
 
-        RFC 6891：小于 512 的声明按 512 处理；上限取本端宣告的 payload。
+        RFC 6891：小于 512 的声明按 512 处理；客户端声明更大的 payload 也不超过
+        本端宣告的 EDNS_PAYLOAD。
         """
         max_size = (
-            min(max(request.payload, 512), _MAX_UDP_PAYLOAD)
-            if request.edns >= 0
-            else 512
+            min(max(request.payload, 512), EDNS_PAYLOAD) if request.edns >= 0 else 512
         )
         # 保留 speedcheck 等动作排定的记录顺序。
         return response.to_wire(
@@ -117,7 +115,7 @@ class UDPListener(BaseListener):
                 try:
                     if deadline <= monotonic():
                         return
-                    with self.log_failures(), fail_after(remaining(deadline)):
+                    with self.log_failures(), fail_after(time_left(deadline)):
                         response = await self.answer(msg, client[0], deadline)
                         if response is not None:
                             wire = self._serialize_response(msg, response)
@@ -125,7 +123,7 @@ class UDPListener(BaseListener):
                                 anyio_socket,
                                 wire,
                                 client,
-                                expiration=time() + remaining(deadline),
+                                expiration=time() + time_left(deadline),
                             )
                 finally:
                     limiter.release()
@@ -165,7 +163,7 @@ class UDPListener(BaseListener):
                         continue
                     deadline = monotonic() + self.timeout
                     try:
-                        with fail_after(max(0.0, deadline - monotonic())):
+                        with fail_after(time_left(deadline)):
                             await limiter.acquire()
                     except TimeoutError:
                         logger.warning("UDP 监听器 {} 请求排队超时", self.name)

@@ -1,12 +1,25 @@
-"""跨 Worker 事件循环的可取消容量限制，不使用轮询。"""
+"""跨线程事件循环的协作工具：协程提交与可取消的全局容量限制（不轮询）。"""
 
-from asyncio import get_running_loop
+from asyncio import get_running_loop, run_coroutine_threadsafe
 from collections import deque
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from asyncio import Future
+    from asyncio import AbstractEventLoop, Future
+    from collections.abc import Coroutine
+    from concurrent import futures
+
+
+def submit_threadsafe[T](
+    coroutine: Coroutine[Any, Any, T], loop: AbstractEventLoop
+) -> futures.Future[T]:
+    """把协程排入另一线程的事件循环；提交失败时关闭协程，避免 never awaited 警告。"""
+    try:
+        return run_coroutine_threadsafe(coroutine, loop)
+    except BaseException:
+        coroutine.close()
+        raise
 
 
 class _Waiter:

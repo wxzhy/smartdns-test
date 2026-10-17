@@ -154,7 +154,7 @@ class ConcurrentResolver(BaseResolver):
         """
         resolvers = self._resolve_upstreams()
         if not resolvers:
-            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
+            return Response.servfail(self.name)
 
         candidates: dict[str, Response] = {}
         winner: Response | None = None
@@ -237,4 +237,4 @@ class ConcurrentResolver(BaseResolver):
                 return candidate
         if candidates:
             return next(iter(candidates.values()))
-        return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
+        return Response.servfail(self.name)

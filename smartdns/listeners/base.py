@@ -5,16 +5,14 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from ipaddress import ip_address
-from time import monotonic
 from typing import TYPE_CHECKING
 
 from dns.flags import QR
-from dns.message import make_response
 from dns.opcode import Opcode
 from dns.rcode import Rcode
 from loguru import logger
 
-from smartdns.models.context import Request
+from smartdns.models.context import Request, reply_to
 
 if TYPE_CHECKING:
     from dns.message import Message
@@ -37,14 +35,9 @@ def unsupported_opcode_response(msg: Message) -> Message | None:
     """非 QUERY 操作码（NOTIFY/UPDATE 等）返回 NOTIMP，不进入解析流程。"""
     if msg.opcode() == Opcode.QUERY:
         return None
-    response = make_response(msg, True, our_payload=1232, pad=0)
+    response = reply_to(msg)
     response.set_rcode(Rcode.NOTIMP)
     return response
-
-
-def remaining(deadline: float) -> float:
-    """距截止时刻的剩余秒数（不小于 0），供 fail_after 与 dnspython 期限使用。"""
-    return max(0.0, deadline - monotonic())
 
 
 class BaseListener:

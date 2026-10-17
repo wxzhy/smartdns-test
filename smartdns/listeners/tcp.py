@@ -19,7 +19,8 @@ from dns.asyncquery import receive_tcp, send_tcp
 from loguru import logger
 
 from smartdns.listeners._socket import AnyioStreamSocket
-from smartdns.listeners.base import BaseListener, remaining, should_drop
+from smartdns.listeners.base import BaseListener, should_drop
+from smartdns.utils.deadline import time_left
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -137,7 +138,7 @@ class TCPListener(BaseListener):
                     if deadline <= monotonic():
                         return
                     # 接收帧、限流排队、处理、等待写锁与回写共享截止时刻。
-                    with self.log_failures(), fail_after(remaining(deadline)):
+                    with self.log_failures(), fail_after(time_left(deadline)):
                         response = await self.answer(data, client_address, deadline)
                         if response is not None:
                             wire = self._serialize_response(response)
@@ -147,7 +148,7 @@ class TCPListener(BaseListener):
                                     await send_tcp(
                                         anyio_stream,
                                         wire,
-                                        expiration=time() + remaining(deadline),
+                                        expiration=time() + time_left(deadline),
                                     )
                                 except BaseException:
                                     # 一次写入若只完成了部分字节，后续响应会接在
@@ -176,7 +177,7 @@ class TCPListener(BaseListener):
                             anyio_stream.request_started or monotonic()
                         ) + self.timeout
                         try:
-                            with fail_after(max(0.0, deadline - monotonic())):
+                            with fail_after(time_left(deadline)):
                                 await self._query_limiter.acquire()
                         except TimeoutError:
                             logger.warning("TCP 监听器 {} 请求排队超时", self.name)

@@ -16,6 +16,11 @@ if TYPE_CHECKING:
     from smartdns.models.context import Request
 
 
+def time_left(deadline: float) -> float:
+    """距 monotonic 截止时刻的剩余秒数（不小于 0），供 fail_after 等期限使用。"""
+    return max(0.0, deadline - monotonic())
+
+
 class SharedDeadline:
     """共享查询的等待者期限；通知须在各自 Worker 循环内更新取消范围。"""
 
@@ -95,7 +100,7 @@ class ResponseScope:
             return
         deadline = self._shared.deadline(response_ready=self._ready)
         now = current_time()
-        remaining = inf if deadline is None else max(0.0, deadline - monotonic())
+        remaining = inf if deadline is None else time_left(deadline)
         budget = (
             max(0.0, remaining - max(0.05, remaining * 0.1))
             if isfinite(remaining)

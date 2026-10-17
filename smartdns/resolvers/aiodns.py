@@ -7,7 +7,7 @@ import dns.rdataclass
 import dns.rdatatype
 from aiodns import DNSResolver, query_type_map
 from aiodns.error import ARES_ENODATA, ARES_ENOTFOUND, DNSError
-from dns.message import Message, QueryMessage, make_query, make_response
+from dns.message import Message, QueryMessage, make_query
 from dns.name import Name, from_text
 from dns.rcode import Rcode
 from dns.rdata import from_wire
@@ -55,8 +55,8 @@ from pycares import (
     URIRecordData,
 )
 
-from smartdns.actions._helper import clone_answer, detach_index
-from smartdns.models.context import Request, Response
+from smartdns.actions._helper import detach_index, replay_answer
+from smartdns.models.context import EDNS_PAYLOAD, Request, Response, reply_to
 from smartdns.resolvers._aiodns_pool import AioDNSPool
 from smartdns.resolvers.base import BaseResolver
 from smartdns.utils.cache_async import AnswerCache
@@ -128,10 +128,7 @@ class AioDNSResolver(BaseResolver):
         """处理查询"""
         try:
             answer = await self.resolve(request.qname, request.rdtype, request.rdclass)
-            remaining = max(0, int(answer.expiration - time()))
-            return Response.from_answer(
-                clone_answer(answer, remaining_ttl=remaining), upstream=self.name
-            )
+            return Response.from_answer(replay_answer(answer), upstream=self.name)
         except DNSError as error:
             # c-ares 的超时、SERVFAIL、REFUSED 等属常规故障，不打印堆栈。
             logger.warning(
@@ -140,10 +137,10 @@ class AioDNSResolver(BaseResolver):
                 request.qname,
                 error,
             )
-            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
+            return Response.servfail(self.name)
         except Exception:
             logger.exception("AioDNSResolver {} 解析 {} 出错", self.name, request.qname)
-            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
+            return Response.servfail(self.name)
 
     async def resolve(
         self,
@@ -197,13 +194,12 @@ class AioDNSResolver(BaseResolver):
 
     def make_query(self, key: CacheKey) -> Message:
         """构造 DNS 查询消息。"""
-        return make_query(key[0], key[1], key[2], use_edns=self.edns, payload=1232)
+        return make_query(*key, use_edns=self.edns, payload=EDNS_PAYLOAD)
 
     @staticmethod
     def make_response(message: Message, result: DNSResult | None = None) -> Message:
         """将 pycares 的 DNSResult 填充为 dns 响应消息。"""
-        answer = make_response(message, True, our_payload=1232, pad=0)
-        answer.set_rcode(Rcode.NOERROR)
+        answer = reply_to(message)
         if result is None:
             return answer
         for records, section in (

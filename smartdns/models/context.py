@@ -22,6 +22,15 @@ from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
 from smartdns.models.geodata import IPInfo, NameInfo
 from smartdns.utils.deadline import SharedDeadline
 
+# 本端宣告的 EDNS UDP payload（DNS Flag Day 2020 建议值）；回包、自建查询与
+# UDP 回包截断上限统一使用，避免 UDP 放大与 IP 分片。
+EDNS_PAYLOAD = 1232
+
+
+def reply_to(msg: Message) -> Message:
+    """以 msg 为查询构造空响应：RA=1、宣告 EDNS_PAYLOAD、不填充。"""
+    return make_response(msg, True, our_payload=EDNS_PAYLOAD, pad=0)
+
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
 class Request:
@@ -75,7 +84,7 @@ class Request:
 
     def make_answer(self, ans: Answer) -> Message:
         """创建响应对象；rcode 跟随上游应答（NXDOMAIN 等负应答保留原语义）。"""
-        answer = make_response(self.msg, True, our_payload=1232, pad=0)
+        answer = reply_to(self.msg)
         answer.set_rcode(ans.response.rcode())
         answer.answer = ans.response.answer
         answer.authority = ans.response.authority
@@ -84,7 +93,7 @@ class Request:
 
     def make_error(self, rcode: Rcode) -> Message:
         """创建错误响应对象"""
-        response = make_response(self.msg, True, our_payload=1232, pad=0)
+        response = reply_to(self.msg)
         response.set_rcode(rcode)
         return response
 
@@ -142,7 +151,12 @@ class Response:
     @classmethod
     def from_rcode(cls, rcode: Rcode, upstream: str) -> Response:
         """从rcode创建Response对象"""
-        return cls(rcode=rcode, upstream=upstream, invalid=False)
+        return cls(rcode=rcode, upstream=upstream)
+
+    @classmethod
+    def servfail(cls, upstream: str = "") -> Response:
+        """SERVFAIL 响应；upstream 为空表示失败不属于某个上游。"""
+        return cls(rcode=Rcode.SERVFAIL, upstream=upstream)
 
     @classmethod
     def from_answer(cls, answer: Answer, upstream: str) -> Response:

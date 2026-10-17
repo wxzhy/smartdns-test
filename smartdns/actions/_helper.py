@@ -1,4 +1,4 @@
-"""Action 共享的 copy-on-write 应答重建工具。"""
+"""copy-on-write 应答复制与重建工具（Action、解析器与 Master 缓存回放共用）。"""
 
 from copy import copy, deepcopy
 from time import time
@@ -31,6 +31,11 @@ def detach_index(message: Message) -> None:
     index=None（类型标注未含 None）。
     """
     message.index = None  # ty: ignore[invalid-assignment]
+
+
+def ttl_left(expiration: float, now: float | None = None) -> int:
+    """距墙钟过期时刻的剩余整秒数（不小于 0），用作回放或派生记录的 TTL。"""
+    return max(0, int(expiration - (time() if now is None else now)))
 
 
 def address_rrset(
@@ -92,6 +97,11 @@ def clone_answer(answer: Answer, *, remaining_ttl: int | None = None) -> Answer:
     copied = _rewrap(answer, message)
     copied.expiration = answer.expiration
     return copied
+
+
+def replay_answer(answer: Answer) -> Answer:
+    """复制缓存中的应答，并把各 section TTL 刷新为剩余生存期。"""
+    return clone_answer(answer, remaining_ttl=ttl_left(answer.expiration))
 
 
 def replace_answer_rrset(

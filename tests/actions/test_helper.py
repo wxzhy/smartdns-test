@@ -20,6 +20,8 @@ from smartdns.actions._helper import (
     replace_answer_rrset,
     replace_response_ip,
     replace_response_ipinfo,
+    replay_answer,
+    ttl_left,
 )
 from smartdns.models.context import Response
 from smartdns.models.geodata import IPInfo
@@ -234,3 +236,28 @@ def test_replace_answer_rrset_recomputes_expiration() -> None:
     assert result.ans is not None
     remaining = result.ans.expiration - time()
     assert remaining == pytest.approx(60, abs=5)
+
+
+def test_ttl_left_truncates_and_never_goes_negative() -> None:
+    assert ttl_left(110.9, now=100.0) == 10
+    assert ttl_left(90.0, now=100.0) == 0
+
+
+def test_replay_answer_refreshes_ttl_without_touching_cached_answer() -> None:
+    message = dns.message.make_response(dns.message.make_query("example.com.", "A"))
+    message.answer.append(
+        dns.rrset.from_text("example.com.", 300, "IN", "A", "192.0.2.1")
+    )
+    answer = Answer(
+        from_text("example.com."),
+        RdataType.A,
+        RdataClass.IN,
+        cast("QueryMessage", message),
+    )
+    answer.expiration = time() + 42.5
+
+    replay = replay_answer(answer)
+
+    assert replay.response.answer[0].ttl in {41, 42}
+    assert message.answer[0].ttl == 300
+    assert replay.expiration == answer.expiration

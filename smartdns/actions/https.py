@@ -3,7 +3,6 @@
 from time import time
 from typing import TYPE_CHECKING, cast
 
-from dns.message import make_response
 from dns.name import root
 from dns.rcode import Rcode
 from dns.rdatatype import RdataType
@@ -13,9 +12,13 @@ from dns.resolver import Answer
 from dns.rrset import RRset, from_rdata_list
 from loguru import logger
 
-from smartdns.actions._helper import append_answer_rrset, replace_answer_rrset
+from smartdns.actions._helper import (
+    append_answer_rrset,
+    replace_answer_rrset,
+    ttl_left,
+)
 from smartdns.actions.base import BaseAction
-from smartdns.models.context import Context, Response
+from smartdns.models.context import Context, Response, reply_to
 from smartdns.routing.matcher import match_context, match_response
 
 if TYPE_CHECKING:
@@ -229,7 +232,7 @@ class HTTPSAction(BaseAction):
         ttl = old_rrset.ttl
         if injected and ech_expiration is not None:
             # 注入的 ECH 不能比其来源 HTTPS 记录活得更久。
-            ttl = min(ttl, max(0, int(ech_expiration - time())))
+            ttl = min(ttl, ttl_left(ech_expiration))
         new_rrset = from_rdata_list(old_rrset.name, ttl, [rr for rr, _ in rewritten])
         logger.debug(
             "HTTPS Action {}：重写 {} 的 HTTPS 记录（注入 ECH: {}）",
@@ -254,7 +257,7 @@ class HTTPSAction(BaseAction):
     ) -> None:
         """仅在 A 子查询命中时，把 HTTPS NODATA 变成短 TTL 的 ECH 记录。"""
         if main.ans is None:
-            message = make_response(context.request.msg, True, our_payload=1232, pad=0)
+            message = reply_to(context.request.msg)
             answer = Answer(
                 context.request.qname,
                 RdataType.HTTPS,
@@ -271,9 +274,9 @@ class HTTPSAction(BaseAction):
         ttl = min(
             _SYNTHETIC_HTTPS_MAX_TTL,
             sub_answer.rrset.ttl,
-            max(0, int(sub_answer.expiration - now)),
-            max(0, int(answer.expiration - now)),
-            max(0, int(ech_result.expiration - now)),
+            ttl_left(sub_answer.expiration, now),
+            ttl_left(answer.expiration, now),
+            ttl_left(ech_result.expiration, now),
         )
         record = HTTPS(
             answer.rdclass,

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from asyncio import Lock, get_running_loop, run_coroutine_threadsafe, wrap_future
+from asyncio import Lock, get_running_loop, wrap_future
 from contextlib import ExitStack
 from dataclasses import replace
 from random import randint
-from time import monotonic, time
 from typing import TYPE_CHECKING, cast
 
 from aiofastnet import patch_loop
@@ -16,14 +15,15 @@ from cachetools import TLRUCache
 from dns.rcode import Rcode
 from loguru import logger
 
-from smartdns.actions._helper import clone_answer
+from smartdns.actions._helper import replay_answer
 from smartdns.actions._ping import set_cache
 from smartdns.listeners.manager import ListenerManager
 from smartdns.models.context import Request, Response
 from smartdns.nameservers.client import set_ech_cache
 from smartdns.routing.manager import close_geo_manager, init_geo_manager
 from smartdns.utils.cache_async import AnswerCache
-from smartdns.utils.deadline import SharedDeadline
+from smartdns.utils.concurrency import submit_threadsafe
+from smartdns.utils.deadline import SharedDeadline, time_left
 
 from .worker import Worker
 
@@ -164,13 +164,7 @@ class Master:
         loop = self._loop
         if loop is None or loop is get_running_loop():
             return await self.resolve(request)
-        coroutine = self.resolve(request)
-        try:
-            future = run_coroutine_threadsafe(coroutine, loop)
-        except BaseException:
-            coroutine.close()
-            raise
-        return await wrap_future(future)
+        return await wrap_future(submit_threadsafe(self.resolve(request), loop))
 
     async def resolve(self, request: Request, *, with_tags: bool = True) -> Response:
         """取得完整路由加工后的独立 Response，供监听器与内部子查询共用。
@@ -178,15 +172,11 @@ class Master:
         with_tags=False 时缓存回放不展开 ip_infos/name_infos（监听器回包路径）。
         """
         if self._stopping:
-            return Response.from_rcode(Rcode.SERVFAIL, upstream="")
+            return Response.servfail()
         cache = self._cache
         if cache is None:
             return await self._query_worker(request)
-        timeout = (
-            None
-            if request.deadline is None
-            else max(0.0, request.deadline - monotonic())
-        )
+        timeout = None if request.deadline is None else time_left(request.deadline)
         with fail_after(timeout):
             key = _cache_key(request)
             answer = await cache.read(key)
@@ -215,8 +205,7 @@ class Master:
                         del self._shared_deadlines[key]
         # 复制回放：命中与未命中统一按剩余生存期刷新各 section TTL，
         # 缓存内原始 Answer 不外泄给调用方。
-        remaining = max(0, int(answer.expiration - time()))
-        replay = clone_answer(answer, remaining_ttl=remaining)
+        replay = replay_answer(answer)
         if not with_tags:
             return Response(replay.response.rcode(), replay, upstream="cache")
         return Response.from_answer(replay, upstream="cache")
@@ -256,7 +245,7 @@ class Master:
             return result
         except Exception:
             logger.exception("分发请求到 Worker {} 失败", worker_id)
-            return Response.from_rcode(Rcode.SERVFAIL, upstream="")
+            return Response.servfail()
 
     async def _query_answer(self, request: Request) -> Answer:
         """缓存取数函数：可缓存结果正常返回（由 AnswerCache.fetch 落库），

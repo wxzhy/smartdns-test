@@ -11,8 +11,8 @@ from dns.rcode import Rcode
 from dns.resolver import NXDOMAIN, Answer
 from loguru import logger
 
-from smartdns.actions._helper import clone_answer
-from smartdns.models.context import Request, Response
+from smartdns.actions._helper import replay_answer
+from smartdns.models.context import EDNS_PAYLOAD, Request, Response
 from smartdns.resolvers.base import BaseResolver
 from smartdns.utils.cache_async import AnswerCache
 
@@ -39,7 +39,7 @@ class PlainResolver(BaseResolver, Resolver):
         self.config: PlainResolverConfig = config
         self.rotate = config.rotate
         self.edns = config.edns
-        self.payload = 1232
+        self.payload = EDNS_PAYLOAD
         if config.ecs is not None:
             self.ednsoptions = [
                 ECSOption(str(config.ecs.network_address), config.ecs.prefixlen)
@@ -111,10 +111,7 @@ class PlainResolver(BaseResolver, Resolver):
                 )
             # 复制回放：命中时 RRset TTL 须按剩余生存期衰减，缓存内原始
             # Answer 不外泄给调用方。
-            remaining = max(0, int(answer.expiration - time()))
-            return Response.from_answer(
-                clone_answer(answer, remaining_ttl=remaining), upstream=self.name
-            )
+            return Response.from_answer(replay_answer(answer), upstream=self.name)
         except NXDOMAIN:
             return Response.from_rcode(Rcode.NXDOMAIN, upstream=self.name)
         except DNSException as error:
@@ -126,10 +123,10 @@ class PlainResolver(BaseResolver, Resolver):
                 type(error).__name__,
                 error,
             )
-            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
+            return Response.servfail(self.name)
         except Exception:
             logger.exception("PlainResolver {} 解析 {} 出错", self.name, request.qname)
-            return Response.from_rcode(Rcode.SERVFAIL, upstream=self.name)
+            return Response.servfail(self.name)
 
     async def _resolve_answer(
         self, qname: Name, rdtype: RdataType, rdclass: RdataClass

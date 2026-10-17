@@ -3,14 +3,14 @@
 from time import time
 from typing import TYPE_CHECKING, cast
 
-from dns.message import QueryMessage, make_query, make_response
+from dns.message import QueryMessage, make_query
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 from loguru import logger
 
 from smartdns.actions._helper import address_rrset
 from smartdns.actions.base import BaseAction
-from smartdns.models.context import Context, Response
+from smartdns.models.context import EDNS_PAYLOAD, Context, Response, reply_to
 
 if TYPE_CHECKING:
     from smartdns.models.action import StaticActionConfig
@@ -38,8 +38,8 @@ class StaticAction(BaseAction):
         request = context.request
         name, rdclass, rdtype = request.qname, request.rdclass, request.rdtype
         # 不基于客户端报文构造，避免把客户端的标志位与 EDNS 选项写进缓存条目。
-        message = make_response(
-            make_query(name, rdtype, rdclass, use_edns=True, payload=1232), True, 1232
+        message = reply_to(
+            make_query(name, rdtype, rdclass, use_edns=True, payload=EDNS_PAYLOAD)
         )
         addresses = {RdataType.A: self.ipv4, RdataType.AAAA: self.ipv6}.get(rdtype, ())
         rrset = address_rrset(name, rdclass, rdtype, self.ttl, addresses)
