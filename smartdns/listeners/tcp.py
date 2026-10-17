@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from time import monotonic, time
+from time import monotonic
 from typing import TYPE_CHECKING, cast
 
 from anyio import (
@@ -20,7 +20,6 @@ from loguru import logger
 
 from smartdns.listeners._socket import AnyioStreamSocket
 from smartdns.listeners.base import BaseListener, should_drop
-from smartdns.utils.deadline import time_left
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -133,30 +132,19 @@ class TCPListener(BaseListener):
             logger.debug("接收到来自 {} 的TCP连接", client_address)
             write_lock = Lock()
 
-            async def process(data: Message, deadline: float) -> None:
-                try:
-                    if deadline <= monotonic():
-                        return
-                    # 接收帧、限流排队、处理、等待写锁与回写共享截止时刻。
-                    with self.log_failures(), fail_after(time_left(deadline)):
-                        response = await self.answer(data, client_address, deadline)
-                        if response is not None:
-                            wire = self._serialize_response(response)
-                            # 多个查询可并发处理，但 TCP 帧必须完整、串行写入。
-                            async with write_lock:
-                                try:
-                                    await send_tcp(
-                                        anyio_stream,
-                                        wire,
-                                        expiration=time() + time_left(deadline),
-                                    )
-                                except BaseException:
-                                    # 一次写入若只完成了部分字节，后续响应会接在
-                                    # 残帧后面；终止整条连接上的读取和待写任务。
-                                    tg.cancel_scope.cancel()
-                                    raise
-                finally:
-                    self._query_limiter.release()
+            async def reply(
+                request: Message, response: Message, expiration: float
+            ) -> None:
+                wire = self._serialize_response(response)
+                # 多个查询可并发处理，但 TCP 帧必须完整、串行写入。
+                async with write_lock:
+                    try:
+                        await send_tcp(anyio_stream, wire, expiration=expiration)
+                    except BaseException:
+                        # 一次写入若只完成了部分字节，后续响应会接在残帧后面；
+                        # 终止整条连接上的读取和待写任务。
+                        tg.cancel_scope.cancel()
+                        raise
 
             async with create_task_group() as tg:
                 try:
@@ -173,20 +161,18 @@ class TCPListener(BaseListener):
                                 self.name,
                             )
                             continue
+                        # 请求期限从首字节到达起算，覆盖接收帧、排队、处理与回写。
                         deadline = (
                             anyio_stream.request_started or monotonic()
                         ) + self.timeout
-                        try:
-                            with fail_after(time_left(deadline)):
-                                await self._query_limiter.acquire()
-                        except TimeoutError:
-                            logger.warning("TCP 监听器 {} 请求排队超时", self.name)
-                            continue
-                        try:
-                            tg.start_soon(process, data, deadline)
-                        except BaseException:
-                            self._query_limiter.release()
-                            raise
+                        await self.dispatch(
+                            tg,
+                            self._query_limiter,
+                            data,
+                            client_address,
+                            deadline,
+                            reply,
+                        )
                 except EOFError:
                     # 客户端正常关闭连接（读到 EOF），非错误路径。
                     pass

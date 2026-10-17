@@ -1,5 +1,6 @@
 """Do53 UDP 监听器。"""
 
+from functools import partial
 from socket import (
     AF_INET6,
     IPPROTO_IPV6,
@@ -10,10 +11,10 @@ from socket import (
     socket,
 )
 from sys import platform
-from time import monotonic, time
+from time import monotonic
 from typing import TYPE_CHECKING
 
-from anyio import ClosedResourceError, Semaphore, create_task_group, fail_after, sleep
+from anyio import ClosedResourceError, Semaphore, create_task_group, sleep
 from anyio.abc import UDPSocket
 from dns.asyncquery import send_udp
 from dns.inet import af_for_address
@@ -23,7 +24,6 @@ from loguru import logger
 from smartdns.listeners._socket import AnyioDatagramSocket
 from smartdns.listeners.base import BaseListener, should_drop
 from smartdns.models.context import EDNS_PAYLOAD
-from smartdns.utils.deadline import time_left
 
 if TYPE_CHECKING:
     from dns.message import Message
@@ -92,6 +92,17 @@ class UDPListener(BaseListener):
             want_shuffle=False,  # ty: ignore[invalid-argument-type]
         )
 
+    async def _reply(
+        self,
+        sock: AnyioDatagramSocket,
+        client: tuple,
+        request: Message,
+        response: Message,
+        expiration: float,
+    ) -> None:
+        wire = self._serialize_response(request, response)
+        await send_udp(sock, wire, client, expiration=expiration)
+
     async def start(self, handler: Handler):
         """启动UDP监听器并进入接收循环。"""
         self.handler = handler
@@ -110,23 +121,6 @@ class UDPListener(BaseListener):
         async with self._listener:
             anyio_socket = AnyioDatagramSocket(self._listener)
             limiter = Semaphore(256)
-
-            async def process(msg: Message, client: tuple, deadline: float) -> None:
-                try:
-                    if deadline <= monotonic():
-                        return
-                    with self.log_failures(), fail_after(time_left(deadline)):
-                        response = await self.answer(msg, client[0], deadline)
-                        if response is not None:
-                            wire = self._serialize_response(msg, response)
-                            await send_udp(
-                                anyio_socket,
-                                wire,
-                                client,
-                                expiration=time() + time_left(deadline),
-                            )
-                finally:
-                    limiter.release()
 
             async with create_task_group() as tg:
                 while True:
@@ -161,18 +155,14 @@ class UDPListener(BaseListener):
                             "UDP 监听器 {} 丢弃应答报文或无 question 报文", self.name
                         )
                         continue
-                    deadline = monotonic() + self.timeout
-                    try:
-                        with fail_after(time_left(deadline)):
-                            await limiter.acquire()
-                    except TimeoutError:
-                        logger.warning("UDP 监听器 {} 请求排队超时", self.name)
-                        continue
-                    try:
-                        tg.start_soon(process, msg, client, deadline)
-                    except BaseException:
-                        limiter.release()
-                        raise
+                    await self.dispatch(
+                        tg,
+                        limiter,
+                        msg,
+                        client[0],
+                        monotonic() + self.timeout,
+                        partial(self._reply, anyio_socket, client),
+                    )
 
     async def stop(self):
         """停止UDP监听器并释放套接字。"""

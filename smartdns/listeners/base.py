@@ -5,22 +5,29 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from ipaddress import ip_address
+from time import monotonic, time
 from typing import TYPE_CHECKING
 
+from anyio import fail_after
 from dns.flags import QR
 from dns.opcode import Opcode
 from dns.rcode import Rcode
 from loguru import logger
 
 from smartdns.models.context import Request, reply_to
+from smartdns.utils.deadline import time_left
 
 if TYPE_CHECKING:
+    from anyio import Semaphore
+    from anyio.abc import TaskGroup
     from dns.message import Message
 
     from smartdns.models.listener import ListenerConfig
 
 # 监听器接收到请求后调用的处理器：Request -> Message | None（None 表示不应答）。
 Handler = Callable[["Request"], Awaitable["Message | None"]]
+# 把响应写回客户端：(请求, 响应, dnspython 墙钟 expiration)。
+Reply = Callable[["Message", "Message", float], Awaitable[None]]
 
 
 def should_drop(msg: Message) -> bool:
@@ -41,7 +48,7 @@ def unsupported_opcode_response(msg: Message) -> Message | None:
 
 
 class BaseListener:
-    """UDP/TCP 监听器的公共部分：请求处理与失败日志。"""
+    """UDP/TCP 监听器的公共部分：限流派发、请求处理、回写与失败日志。"""
 
     # 日志中的传输协议名称。
     transport = "DNS"
@@ -79,6 +86,47 @@ class BaseListener:
             deadline=deadline,
         )
         return await self.handler(request)
+
+    async def dispatch(
+        self,
+        tg: TaskGroup,
+        limiter: Semaphore,
+        msg: Message,
+        client_address: str | None,
+        deadline: float,
+        reply: Reply,
+    ) -> None:
+        """在截止时刻前取得处理名额并启动处理任务；排队超时只记日志并丢弃请求。"""
+        try:
+            with fail_after(time_left(deadline)):
+                await limiter.acquire()
+        except TimeoutError:
+            logger.warning("{} 监听器 {} 请求排队超时", self.transport, self.name)
+            return
+        try:
+            tg.start_soon(self._serve, limiter, msg, client_address, deadline, reply)
+        except BaseException:
+            limiter.release()
+            raise
+
+    async def _serve(
+        self,
+        limiter: Semaphore,
+        msg: Message,
+        client_address: str | None,
+        deadline: float,
+        reply: Reply,
+    ) -> None:
+        """处理单个请求并回写；接收、排队、处理与回写共享同一截止时刻。"""
+        try:
+            if deadline <= monotonic():
+                return
+            with self.log_failures(), fail_after(time_left(deadline)):
+                response = await self.answer(msg, client_address, deadline)
+                if response is not None:
+                    await reply(msg, response, time() + time_left(deadline))
+        finally:
+            limiter.release()
 
     @contextmanager
     def log_failures(self) -> Iterator[None]:
