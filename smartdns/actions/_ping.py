@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from threading import Lock
 from time import perf_counter
 from typing import TYPE_CHECKING
 
@@ -10,11 +9,11 @@ from anyio import connect_tcp, create_task_group, fail_after
 from icmplib import async_ping
 from loguru import logger
 
-from smartdns.utils.cache_async import cached
+from smartdns.utils.cache_async import CacheSlot, cached
 from smartdns.utils.concurrency import GlobalCapacityLimiter
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, MutableMapping
+    from collections.abc import Awaitable, Callable
     from ipaddress import IPv4Address, IPv6Address
 
     from smartdns.models.action import PingConfig
@@ -22,21 +21,10 @@ if TYPE_CHECKING:
 SpeedtestKey = tuple[str, bool, bool, tuple[int, ...], float]
 
 
-class _CacheHolder:
-    cache: MutableMapping[SpeedtestKey, float] | None = None
-
-
-_cache_lock = Lock()
+# 测速结果缓存（RTT 毫秒）由 Master 启动时绑定，全部 Worker 共享。
+SPEEDTEST_CACHE: CacheSlot[SpeedtestKey, float] = CacheSlot()
+set_cache = SPEEDTEST_CACHE.bind
 _MEASURE_LIMIT = GlobalCapacityLimiter(128)
-
-
-def set_cache(cache: MutableMapping[SpeedtestKey, float] | None) -> None:
-    """绑定结果缓存；缓存中只保存跨线程安全的数值。"""
-    _CacheHolder.cache = cache
-
-
-def _get_cache() -> MutableMapping[SpeedtestKey, float] | None:
-    return _CacheHolder.cache
 
 
 def _speedtest_key(
@@ -104,7 +92,7 @@ async def _measure(ip: str, config: PingConfig) -> float:
     return float("inf") if first is None else first
 
 
-@cached(_get_cache, key=_speedtest_key, lock=_cache_lock)
+@cached(SPEEDTEST_CACHE.get, key=_speedtest_key, lock=SPEEDTEST_CACHE.lock)
 async def speedtest(ip: str | IPv4Address | IPv6Address, config: PingConfig) -> float:
     """测速指定 IP；结果缓存和同键调用合并由 decorator 统一处理。"""
     # 缓存命中和同键等待者不占测速名额，只有实际执行探测时才限流。

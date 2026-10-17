@@ -357,15 +357,15 @@ Router 在 after 动作循环结束后检查 `context.subquery`：已设置且�
 项目中有四类缓存设计：
 
 1. Master DNS Answer 缓存：`AnswerCache` 直建实例（跨线程锁 + TLRUCache，ttu 取 Answer 自身 expiration），容量由顶层 `cache_size` 控制，`0` 关闭；`fetch` 的同键 in-flight 合并覆盖全部监听器。
-2. 全局 ECHConfig 缓存：Master 创建 100 项、300 秒的 TTLCache 并通过 `set_ech_cache` 注入，所有 Worker 的 HTTPClient 共享；键为域名规范化文本，不含实例标识。
-3. 测速缓存：Master 创建 10000 项、1800 秒的 TLRUCache，保存跨 Worker 可共享的数值结果。
-4. Resolver 应答缓存：plain 与 aiodns 各自的 `cache_size` 控制容量，经 `AnswerCache.shared` 按完整解析器配置注册并跨 Worker 线程共享，同名但配置不同的解析器相互隔离；aiodns 挂在 `resolve()` 边界（ECH 引导查询亦受益），plain 挂在 `query()` 出口前。
+2. 全局 ECHConfig 缓存：Master 创建 100 项的 `AnswerCache`（按来源 HTTPS 应答 TTL 过期，最长 300 秒）并绑定到 `nameservers.client.ECH_CACHE`，所有 Worker 的 HTTPClient 共享；键为域名规范化文本，不含实例标识。
+3. 测速缓存：Master 创建 10000 项、1800 秒的 `cachetools.TTLCache` 并绑定到 `actions._ping.SPEEDTEST_CACHE`，保存跨 Worker 可共享的数值结果。
+4. Resolver 应答缓存：plain 与 aiodns 各自的 `cache_size` 控制容量，经 `AnswerCache.for_config` 按完整解析器配置注册并跨 Worker 线程共享，同名但配置不同的解析器相互隔离；aiodns 挂在 `resolve()` 边界（ECH 引导查询亦受益），plain 挂在 `query()` 出口前。
 
 `AnswerCache`（`utils/cache_async.py`）是三类 Answer 缓存的统一载体：存储层为线程锁串行化的 TLRUCache（墙钟计时、按应答自身 TTL 过期），实现 MutableMapping 协议，对外提供 `read`/`write` 异步读写与 `fetch(key, fn)`（未命中执行 fn 并写入，同键并发经 `cached()` in-flight 表合并为一次执行）。
 
 Master Answer 缓存键为 `(qname, type, class)`；监听器、客户端地址与入站 ECS 都不入键，因为路由不区分监听器、上游查询也不转发客户端地址或 ECS。持久层保存最终 Answer，回放时复制并按剩余存活时间刷新所有 section 的 TTL。dispatch 仅运行于 Master 主循环，同缓存键的未命中请求会共享一次进行中的 Worker 查询；持久缓存中不会保存 Task/Future，请求期限也不改变缓存键。
 
-ECHConfig、测速与 AnswerCache.fetch 统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task（跨循环首次填充可能各执行一次，锁内 setdefault 保证只落一份）。ECHConfig 与测速缓存为进程级全局（Master 经 `set_cache`/`set_ech_cache` 注入，Action/HTTPClient 层经 getter 解耦），只保存跨线程安全的不可变值。
+ECHConfig、测速与 AnswerCache.fetch 统一使用 `utils.cache_async.cached` decorator：cachetools 缓存只保存最终结果，同一事件循环内的同键调用复用进行中的 Task，不同事件循环之间不会共享 Future/Task（跨循环首次填充可能各执行一次，锁内 setdefault 保证只落一份）。ECHConfig 与测速缓存为进程级全局：Master 启动时绑定到各自的 `CacheSlot`，`cached()` 以 `CacheSlot.get` 为 getter、以槽自带的锁串行化读写，Action/HTTPClient 层因此与 Master 解耦；缓存只保存跨线程安全的不可变值。
 
 单个等待者取消时保留其他等待者使用的取数任务；最后一个等待者离开时取消底层任务并等待清理完成，重复取消也不会打断这段等待。已经失去全部等待者的任务即使吞掉取消并返回，也不会写入缓存。Master 的共享期限组保留到所有等待者退出，旧取数任务结束不会删除取消清理期间新调用正在使用的期限组。
 

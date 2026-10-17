@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from ipaddress import IPv6Address
-from threading import Lock
 from time import time
 from typing import TYPE_CHECKING
 
@@ -15,11 +14,9 @@ from dns.rdtypes.svcbbase import ParamKey
 from loguru import logger
 
 from smartdns.resolvers.aiodns import AioDNSResolver
-from smartdns.utils.cache_async import cached
+from smartdns.utils.cache_async import CacheSlot, cached
 
 if TYPE_CHECKING:
-    from collections.abc import MutableMapping
-
     from smartdns.models.config import HTTPClientConfig
 
 
@@ -29,20 +26,9 @@ class ECHResult:
     expiration: float
 
 
-class _CacheHolder:
-    cache: MutableMapping[str, ECHResult] | None = None
-
-
-_cache_lock = Lock()
-
-
-def set_ech_cache(cache: MutableMapping[str, ECHResult] | None) -> None:
-    """绑定 ECH 结果缓存，值与来源 TTL 均为跨线程安全的不可变数据。"""
-    _CacheHolder.cache = cache
-
-
-def _get_ech_cache() -> MutableMapping[str, ECHResult] | None:
-    return _CacheHolder.cache
+# ECH 结果缓存由 Master 启动时绑定；值与来源 TTL 均为跨线程安全的不可变数据。
+ECH_CACHE: CacheSlot[str, ECHResult] = CacheSlot()
+set_ech_cache = ECH_CACHE.bind
 
 
 def _ech_cache_key(client: object, domain: str | Name) -> str:
@@ -146,7 +132,7 @@ class HTTPClient:
             logger.exception("获取ECH密钥失败，域名: {}", domain)
             return None
 
-    @cached(_get_ech_cache, key=_ech_cache_key, lock=_cache_lock)
+    @cached(ECH_CACHE.get, key=_ech_cache_key, lock=ECH_CACHE.lock)
     async def _resolve_ech(self, domain: str | Name) -> ECHResult:
         if isinstance(domain, str):
             domain = from_text(domain)

@@ -14,7 +14,7 @@ from loguru import logger
 from smartdns.actions._helper import replay_answer
 from smartdns.models.context import EDNS_PAYLOAD, Request, Response
 from smartdns.resolvers.base import BaseResolver
-from smartdns.utils.cache_async import AnswerCache
+from smartdns.utils.cache_async import AnswerCache, fetch_cached
 
 if TYPE_CHECKING:
     from dns.message import QueryMessage
@@ -68,17 +68,10 @@ class PlainResolver(BaseResolver, Resolver):
                 config.timeout,
                 self.lifetime,
             )
-        # 应答缓存（AnswerCache）：相同完整配置跨 Worker 线程共享；同名但配置
-        # 不同的解析器彼此隔离。cache_size=0 关闭；fetch 的同键 in-flight
-        # 合并按事件循环隔离。
-        if config.cache_size > 0:
-            self._cache: AnswerCache[ResolverCacheKey, Answer] | None = (
-                AnswerCache.shared(
-                    f"plain:{config.model_dump_json()}", config.cache_size
-                )
-            )
-        else:
-            self._cache = None
+        # 应答缓存按完整配置跨 Worker 共享；同键 in-flight 合并按事件循环隔离。
+        self._cache: AnswerCache[ResolverCacheKey, Answer] | None = (
+            AnswerCache.for_config("plain", config)
+        )
 
     async def start(self):
         """启动解析器"""
@@ -98,17 +91,10 @@ class PlainResolver(BaseResolver, Resolver):
     async def query(self, request: Request, context: Context | None = None) -> Response:
         """解析域名"""
         try:
-            if self._cache is None:
-                answer = await self._resolve_answer(
-                    request.qname, request.rdtype, request.rdclass
-                )
-            else:
-                answer = await self._cache.fetch(
-                    (request.qname, request.rdtype, request.rdclass),
-                    lambda: self._resolve_answer(
-                        request.qname, request.rdtype, request.rdclass
-                    ),
-                )
+            key = (request.qname, request.rdtype, request.rdclass)
+            answer = await fetch_cached(
+                self._cache, key, lambda: self._resolve_answer(*key)
+            )
             # 复制回放：命中时 RRset TTL 须按剩余生存期衰减，缓存内原始
             # Answer 不外泄给调用方。
             return Response.from_answer(replay_answer(answer), upstream=self.name)

@@ -59,7 +59,7 @@ from smartdns.actions._helper import detach_index, replay_answer
 from smartdns.models.context import EDNS_PAYLOAD, Request, Response, reply_to
 from smartdns.resolvers._aiodns_pool import AioDNSPool
 from smartdns.resolvers.base import BaseResolver
-from smartdns.utils.cache_async import AnswerCache
+from smartdns.utils.cache_async import AnswerCache, fetch_cached
 
 if TYPE_CHECKING:
     from smartdns.models.context import Context
@@ -87,15 +87,11 @@ class AioDNSResolver(BaseResolver):
         self.nodata_ttl = config.nodata_ttl
         self.nameservers = [str(address) for address in config.nameservers]
         self._resolver: AioDNSPool | None = None
-        # 应答缓存（AnswerCache）：相同完整配置跨 Worker 线程共享；同名但配置
-        # 不同的解析器彼此隔离。cache_size=0 关闭。挂在 resolve() 边界，
-        # query() 与 HTTPClient 的 ECH 引导查询共用同一缓存。
-        if config.cache_size > 0:
-            self._cache: AnswerCache[CacheKey, Answer] | None = AnswerCache.shared(
-                f"aiodns:{config.model_dump_json()}", config.cache_size
-            )
-        else:
-            self._cache = None
+        # 应答缓存按完整配置跨 Worker 共享；挂在 resolve() 边界，query() 与
+        # HTTPClient 的 ECH 引导查询共用同一缓存。
+        self._cache: AnswerCache[CacheKey, Answer] | None = AnswerCache.for_config(
+            "aiodns", config
+        )
 
     async def start(self):
         """启动解析器"""
@@ -149,10 +145,8 @@ class AioDNSResolver(BaseResolver):
         rdclass: RdataClass = RdataClass.IN,
     ) -> Answer:
         """解析域名；缓存开启时经 AnswerCache（同键并发合并为一次上游查询）。"""
-        cache = self._cache
-        if cache is None:
-            return await self._resolve_once(qname, rdtype, rdclass)
-        return await cache.fetch(
+        return await fetch_cached(
+            self._cache,
             (qname, rdtype, rdclass),
             lambda: self._resolve_once(qname, rdtype, rdclass),
         )

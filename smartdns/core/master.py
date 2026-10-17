@@ -6,12 +6,12 @@ from asyncio import Lock, get_running_loop, wrap_future
 from contextlib import ExitStack
 from dataclasses import replace
 from random import randint
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from aiofastnet import patch_loop
 from anyio import CancelScope, fail_after
 from anyio.from_thread import BlockingPortal, start_blocking_portal
-from cachetools import TLRUCache
+from cachetools import TTLCache
 from dns.rcode import Rcode
 from loguru import logger
 
@@ -29,7 +29,6 @@ from .worker import Worker
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
-    from collections.abc import MutableMapping
 
     from dns.message import Message
     from dns.name import Name
@@ -91,10 +90,11 @@ class Master:
         logger.info("启动 Master 服务")
         if self.config.geodata:
             init_geo_manager(self.config.geodata)
-        speedtest_cache: TLRUCache = TLRUCache(
-            maxsize=10000, ttu=lambda key, value, now: now + 1800
+        # 测速结果固定保留 30 分钟；ECH 结果按来源应答 TTL 过期。
+        speedtest_cache: TTLCache[SpeedtestKey, float] = TTLCache(
+            maxsize=10000, ttl=1800
         )
-        set_cache(cast("MutableMapping[SpeedtestKey, float]", speedtest_cache))
+        set_cache(speedtest_cache)
         ech_cache: AnswerCache[str, ECHResult] = AnswerCache(maxsize=100)
         set_ech_cache(ech_cache)
         with ExitStack() as stack:

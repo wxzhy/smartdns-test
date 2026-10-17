@@ -24,8 +24,8 @@ if TYPE_CHECKING:
 
 async def test_explicit_concurrent_stop_closes_live_tcp_connection(monkeypatch) -> None:
     # 实际启动会设置进程级缓存，结束后恢复，避免污染后续测速测试。
-    monkeypatch.setattr(_ping._CacheHolder, "cache", None)
-    monkeypatch.setattr(client._CacheHolder, "cache", None)
+    monkeypatch.setattr(_ping.SPEEDTEST_CACHE, "cache", None)
+    monkeypatch.setattr(client.ECH_CACHE, "cache", None)
     ready = Event()
     original = tcp_module.create_tcp_listener
 

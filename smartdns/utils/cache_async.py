@@ -27,6 +27,32 @@ class IdentityFunction[T](Protocol):
     def __call__(self, value: T, /) -> T: ...
 
 
+class CacheConfig(Protocol):
+    """带 cache_size 的组件配置（pydantic 模型）。"""
+
+    cache_size: int
+
+    def model_dump_json(self) -> str: ...
+
+
+class CacheSlot[KT, VT]:
+    """进程级缓存的运行时绑定点：Master 启动时注入，cached() 以 get 为 getter。
+
+    lock 串行化对非线程安全缓存（如 cachetools）的跨 Worker 读写。
+    """
+
+    def __init__(self) -> None:
+        self.cache: MutableMapping[KT, VT] | None = None
+        self.lock = Lock()
+
+    def bind(self, cache: MutableMapping[KT, VT] | None) -> None:
+        """绑定（或以 None 解绑）缓存；缓存中只应保存跨线程安全的值。"""
+        self.cache = cache
+
+    def get(self) -> MutableMapping[KT, VT] | None:
+        return self.cache
+
+
 def _consume_task_exception(task: Task[Any]) -> None:
     """取出无人等待的任务异常，避免事件循环产生未处理异常警告。"""
     if not task.cancelled():
@@ -150,10 +176,29 @@ class AnswerCache[KT, VT](MutableMappingABC[KT, VT]):
             return cast("AnswerCache[KT, VT]", cache)
 
     @classmethod
+    def for_config(cls, kind: str, config: CacheConfig) -> AnswerCache[KT, VT] | None:
+        """按组件完整配置取共享缓存；cache_size=0 表示关闭，返回 None。
+
+        相同配置的组件跨 Worker 线程共享同一缓存，同名但配置不同的组件彼此隔离。
+        """
+        if config.cache_size <= 0:
+            return None
+        return cls.shared(f"{kind}:{config.model_dump_json()}", config.cache_size)
+
+    @classmethod
     def reset_shared(cls) -> None:
         """清空共享注册表；供测试在用例间隔离缓存。"""
         with cls._shared_lock:
             cls._shared.clear()
+
+
+async def fetch_cached[KT, VT](
+    cache: AnswerCache[KT, VT] | None, key: KT, fetch: Callable[[], Awaitable[VT]]
+) -> VT:
+    """缓存关闭（None）时直接取数，否则经 AnswerCache.fetch 读缓存并合并同键并发。"""
+    if cache is None:
+        return await fetch()
+    return await cache.fetch(key, fetch)
 
 
 def cached[KT, VT](

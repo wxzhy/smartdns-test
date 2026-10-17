@@ -7,7 +7,8 @@ from time import time
 import pytest
 from anyio import Event, create_task_group, sleep
 
-from smartdns.utils.cache_async import AnswerCache
+from smartdns.models.resolver import AioDNSResolverConfig
+from smartdns.utils.cache_async import AnswerCache, CacheSlot, fetch_cached
 
 
 class _Item:
@@ -118,6 +119,46 @@ def test_shared_registry_by_name() -> None:
     other = AnswerCache.shared("probe-b", 10)
     assert first is second
     assert first is not other
+
+
+def test_for_config_shares_by_full_config_and_disables_at_zero() -> None:
+    def config(**overrides: object) -> AioDNSResolverConfig:
+        values = {"name": "r", "type": "aiodns", "nameservers": ["192.0.2.1"]}
+        return AioDNSResolverConfig.model_validate(values | overrides)
+
+    first = AnswerCache.for_config("aiodns", config())
+    assert first is not None
+    assert AnswerCache.for_config("aiodns", config()) is first
+    assert AnswerCache.for_config("aiodns", config(tries=2)) is not first
+    assert AnswerCache.for_config("aiodns", config(cache_size=0)) is None
+
+
+async def test_fetch_cached_bypasses_disabled_cache() -> None:
+    calls = 0
+
+    async def load() -> _Item:
+        nonlocal calls
+        calls += 1
+        return _Item()
+
+    await fetch_cached(None, "key", load)
+    await fetch_cached(None, "key", load)
+    assert calls == 2
+
+    cache: AnswerCache[str, _Item] = AnswerCache(maxsize=4)
+    await fetch_cached(cache, "key", load)
+    await fetch_cached(cache, "key", load)
+    assert calls == 3
+
+
+def test_cache_slot_binds_and_unbinds() -> None:
+    slot: CacheSlot[str, int] = CacheSlot()
+    assert slot.get() is None
+    store = {"a": 1}
+    slot.bind(store)
+    assert slot.get() is store
+    slot.bind(None)
+    assert slot.get() is None
 
 
 def test_cross_thread_shared_read_write() -> None:
