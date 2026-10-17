@@ -1,106 +1,56 @@
-"""把 anyio 套接字适配为 dnspython 后端的 Datagram/StreamSocket 接口（监听侧）。"""
+"""监听侧的 anyio → dnspython Socket 适配器。"""
 
-from socket import SOCK_DGRAM, SOCK_STREAM
 from time import monotonic
 
-from anyio import CancelScope, EndOfStream, Lock, current_time, fail_after
-from anyio.abc import SocketAttribute
-from dns._asyncbackend import DatagramSocket, StreamSocket
-from dns.exception import Timeout
+from anyio import CancelScope, Lock, current_time
+
+from smartdns.utils.sockets import (
+    DatagramSocketAdapter,
+    StreamSocketAdapter,
+    dns_timeout,
+)
 
 
-class AnyioDatagramSocket(DatagramSocket):
-    """基于 anyio 的 DatagramSocket 实现，支持超时处理。"""
+class AnyioDatagramSocket(DatagramSocketAdapter):
+    """未连接的监听 UDP 套接字：按目的地址发送，接收时返回对端地址。"""
 
     def __init__(self, sock):
-        self._sock = sock
+        super().__init__(sock)
         # AnyIO UDPSocket 拒绝多个任务同时写入；Listener 会并发处理请求，
         # 因此在适配器边界将每个完整 datagram 的发送排队。
         self._send_lock = Lock()
-        super().__init__(
-            family=sock.extra(SocketAttribute.family, None), type=SOCK_DGRAM
-        )
 
     async def sendto(self, what, destination, timeout):
-        try:
-            with fail_after(timeout):
-                async with self._send_lock:
-                    await self._sock.sendto(what, destination[0], destination[1])
-        except TimeoutError as err:
-            raise Timeout(timeout=timeout) from err
+        with dns_timeout(timeout):
+            async with self._send_lock:
+                await self._sock.sendto(what, destination[0], destination[1])
         return len(what)
 
     async def recvfrom(self, size, timeout):
-        try:
-            with fail_after(timeout):
-                data, addr = await self._sock.receive()
-                return data[:size], addr
-        except TimeoutError as err:
-            raise Timeout(timeout=timeout) from err
-
-    async def close(self):
-        await self._sock.aclose()
-
-    async def getpeername(self):
-        return self._sock.extra(SocketAttribute.remote_address, None)
-
-    async def getsockname(self):
-        return self._sock.extra(SocketAttribute.local_address, None)
-
-    async def getpeercert(self, timeout):
-        return None
+        with dns_timeout(timeout):
+            data, addr = await self._sock.receive()
+            return data[:size], addr
 
 
-class AnyioStreamSocket(StreamSocket):
-    """基于 anyio 的 StreamSocket 实现，支持超时处理。"""
+class AnyioStreamSocket(StreamSocketAdapter):
+    """监听 TCP 连接：记录每条请求首字节到达的时刻，供请求期限从此计时。"""
 
     def __init__(self, stream):
-        self._stream = stream
+        super().__init__(stream)
         self.request_started: float | None = None
         self._receive_scope: CancelScope | None = None
         self._receive_timeout = 0.0
-        super().__init__(
-            family=stream.extra(SocketAttribute.family, None), type=SOCK_STREAM
-        )
 
     def begin_request(self, scope: CancelScope, timeout: float) -> None:
         self.request_started = None
         self._receive_scope = scope
         self._receive_timeout = timeout
 
-    async def sendall(self, what, timeout):
-        try:
-            with fail_after(timeout):
-                return await self._stream.send(what)
-        except TimeoutError as err:
-            raise Timeout(timeout=timeout) from err
-
     async def recv(self, size, timeout):
-        try:
-            with fail_after(timeout):
-                data = await self._stream.receive(size)
-                if data and self.request_started is None:
-                    self.request_started = monotonic()
-                    if self._receive_scope is not None:
-                        # 空闲连接等待与单条帧的接收预算分别计时。
-                        self._receive_scope.deadline = (
-                            current_time() + self._receive_timeout
-                        )
-                return data
-        except TimeoutError as err:
-            raise Timeout(timeout=timeout) from err
-        except EndOfStream:
-            # 对端关闭连接，返回空字节以模拟 dnspython 期望的 EOF 行为。
-            return b""
-
-    async def close(self):
-        await self._stream.aclose()
-
-    async def getpeername(self):
-        return self._stream.extra(SocketAttribute.remote_address, None)
-
-    async def getsockname(self):
-        return self._stream.extra(SocketAttribute.local_address, None)
-
-    async def getpeercert(self, timeout):
-        return None
+        data = await super().recv(size, timeout)
+        if data and self.request_started is None:
+            self.request_started = monotonic()
+            if self._receive_scope is not None:
+                # 空闲连接等待与单条帧的接收预算分别计时。
+                self._receive_scope.deadline = current_time() + self._receive_timeout
+        return data

@@ -1,25 +1,23 @@
-"""把 anyio 套接字适配为 dnspython 后端的 Datagram/StreamSocket 接口（上游侧）。"""
+"""上游侧的 anyio → dnspython Socket 适配器（可选重复发包与抗抢答技巧）。"""
 
-from socket import MSG_OOB, SOCK_DGRAM, SOCK_STREAM
+from socket import MSG_OOB
 
-from anyio import EndOfStream, fail_after
 from anyio.abc import SocketAttribute
-from dns._asyncbackend import DatagramSocket, StreamSocket
-from dns.exception import Timeout
 from dns.inet import low_level_address_tuple
 
-# 以下方法中名为 `timeout` 的参数是 dnspython 后端 Socket ABC 接口签名的一部分，
-# 无法重命名，因此对 ASYNC109 规则在各方法上单独禁用。
+from smartdns.utils.sockets import (
+    DatagramSocketAdapter,
+    StreamSocketAdapter,
+    dns_timeout,
+    underlying_socket,
+)
 
 
-class AnyioDatagramSocket(DatagramSocket):
-    """基于anyio的DatagramSocket实现，支持超时处理"""
+class AnyioDatagramSocket(DatagramSocketAdapter):
+    """已连接的上游 UDP 套接字：可重复发包，可跳过疑似抢答的伪造应答。"""
 
     def __init__(self, sock, repeat: int = 0, use_tricks: bool = False):
-        self._sock = sock
-        super().__init__(
-            family=sock.extra(SocketAttribute.family, None), type=SOCK_DGRAM
-        )
+        super().__init__(sock)
         self._repeat = repeat
         self._use_tricks = use_tricks
         # anyio 将 IPv6 对端地址规约为 (host, port) 二元组，而 dnspython 校验
@@ -30,49 +28,31 @@ class AnyioDatagramSocket(DatagramSocket):
         self._addr = low_level_address_tuple(remote) if remote is not None else None
 
     async def sendto(self, what, destination, timeout):
-        try:
-            with fail_after(timeout):
-                # UDP socket 已连接，destination 仅用于兼容 dnspython 接口。
-                for _ in range(self._repeat + 1):
-                    await self._sock.send(what)
-        except TimeoutError as err:
-            raise Timeout(timeout=timeout) from err
+        with dns_timeout(timeout):
+            # UDP socket 已连接，destination 仅用于兼容 dnspython 接口。
+            for _ in range(self._repeat + 1):
+                await self._sock.send(what)
         return len(what)
 
     async def recvfrom(self, size, timeout):
-        try:
-            with fail_after(timeout):
-                data = await self._sock.receive()
-                if self._use_tricks:
-                    # 对 EDNS 查询的真实应答必带 OPT（ARCOUNT ≥ 1），抢答注入的伪造
-                    # 包通常没有；跳过这类包直到超时（UDP socket 已连接，只收上游）。
-                    while len(data) <= 32 or data[10:12] == b"\x00\x00":
-                        data = await self._sock.receive()
-                return data[:size], self._addr
-        except TimeoutError as err:
-            raise Timeout(timeout=timeout) from err
-
-    async def close(self):
-        await self._sock.aclose()
+        with dns_timeout(timeout):
+            data = await self._sock.receive()
+            if self._use_tricks:
+                # 对 EDNS 查询的真实应答必带 OPT（ARCOUNT ≥ 1），抢答注入的伪造
+                # 包通常没有；跳过这类包直到超时（UDP socket 已连接，只收上游）。
+                while len(data) <= 32 or data[10:12] == b"\x00\x00":
+                    data = await self._sock.receive()
+            return data[:size], self._addr
 
     async def getpeername(self):
         return self._addr
 
-    async def getsockname(self):
-        return self._sock.extra(SocketAttribute.local_address, None)
 
-    async def getpeercert(self, timeout):
-        return None
-
-
-class AnyioStreamSocket(StreamSocket):
-    """基于anyio的StreamSocket实现，支持超时处理"""
+class AnyioStreamSocket(StreamSocketAdapter):
+    """上游 TCP/TLS 连接；``use_tricks`` 时先以 OOB 方式发送报文前缀。"""
 
     def __init__(self, stream, use_tricks: bool = False):
-        super().__init__(
-            family=stream.extra(SocketAttribute.family, None), type=SOCK_STREAM
-        )
-        self._stream = stream
+        super().__init__(stream)
         self._use_tricks = use_tricks
 
     def _send_trick_prefix(self, what: bytes) -> bool:
@@ -81,13 +61,9 @@ class AnyioStreamSocket(StreamSocket):
             return False
 
         try:
-            raw_socket = self._stream.extra(SocketAttribute.raw_socket, None)
-            if raw_socket is None:
+            socket = underlying_socket(self._stream)
+            if socket is None:
                 return False
-
-            # asyncio 后端暴露的是 TransportSocket，实际 socket 位于 _sock；
-            # 其他后端可能直接返回标准库 socket。
-            socket = getattr(raw_socket, "_sock", raw_socket)
             trick_prefix = what[:16] + b"\x00"
             sent = socket.send(trick_prefix, MSG_OOB)
         except Exception:
@@ -101,32 +77,6 @@ class AnyioStreamSocket(StreamSocket):
         return True
 
     async def sendall(self, what, timeout):
-        try:
-            with fail_after(timeout):
-                if self._send_trick_prefix(what):
-                    what = what[16:]
-                await self._stream.send(what)
-        except TimeoutError as err:
-            raise Timeout(timeout=timeout) from err
-
-    async def recv(self, size, timeout):
-        try:
-            with fail_after(timeout):
-                return await self._stream.receive(size)
-        except TimeoutError as err:
-            raise Timeout(timeout=timeout) from err
-        except EndOfStream:
-            # 对端关闭连接，返回空字节以模拟 dnspython 期望的 EOF 行为
-            return b""
-
-    async def close(self):
-        await self._stream.aclose()
-
-    async def getpeername(self):
-        return self._stream.extra(SocketAttribute.remote_address, None)
-
-    async def getsockname(self):
-        return self._stream.extra(SocketAttribute.local_address, None)
-
-    async def getpeercert(self, timeout):
-        return None
+        if self._send_trick_prefix(what):
+            what = what[16:]
+        await super().sendall(what, timeout)

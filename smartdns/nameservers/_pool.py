@@ -3,8 +3,10 @@
 import socket
 
 from anyio import connect_tcp, fail_after
-from anyio.abc import SocketAttribute, SocketStream
+from anyio.abc import SocketStream
 from generic_connection_pool.asyncio import BaseConnectionManager
+
+from smartdns.utils.sockets import underlying_socket
 
 TcpEndpoint = tuple[str, int]
 
@@ -12,14 +14,12 @@ TcpEndpoint = tuple[str, int]
 def idle_socket_alive(stream: object) -> bool:
     """MSG_PEEK 探测池内空闲连接：内核缓冲为空且未关闭才算存活。
 
-    asyncio 后端返回 TransportSocket（真实 socket 位于 _sock），其他后端可能
-    直接返回标准 socket；uvloop 未打补丁时是不支持 recv 的 PseudoSocket。
-    无法探测时一律判死重建，不能把异常抛给获取连接的查询。
+    uvloop 未打补丁时底层是不支持 recv 的 PseudoSocket。无法探测时一律判死
+    重建，不能把异常抛给获取连接的查询。
     """
-    raw = stream.extra(SocketAttribute.raw_socket, None)  # ty: ignore[unresolved-attribute]
-    if raw is None:
+    probe = underlying_socket(stream)
+    if probe is None:
         return False
-    probe = getattr(raw, "_sock", raw)
     try:
         probe.recv(1, socket.MSG_PEEK)
     except BlockingIOError:
