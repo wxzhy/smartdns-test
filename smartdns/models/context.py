@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import field
 from ipaddress import ip_network
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from dns.edns import ECSOption
+from dns.edns import ECSOption, OptionType
 from dns.exception import FormError
 from dns.message import Message, make_query, make_response
 from dns.name import Name
@@ -21,6 +21,9 @@ from pydantic.networks import IPvAnyAddress, IPvAnyNetwork
 
 from smartdns.models.geodata import IPInfo, NameInfo
 from smartdns.utils.deadline import SharedDeadline
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # 本端宣告的 EDNS UDP payload（DNS Flag Day 2020 建议值）；回包、自建查询与
 # UDP 回包截断上限统一使用，避免 UDP 放大与 IP 分片。
@@ -112,26 +115,42 @@ class Request:
             # 残缺报文（QDCOUNT=0）无法构造查询上下文；监听器应在入口预检丢弃。
             raise FormError("DNS message has no question")
         question = msg.question[0]
-        qname = question.name
-        rdtype = question.rdtype
-        rdclass = question.rdclass
-        ecs = None
-        for option in msg.options:
-            if isinstance(option, ECSOption):
-                ecs = ip_network(f"{option.address}/{option.srclen}", strict=False)
-                break
+        option = next(iter(msg.get_options(OptionType.ECS)), None)
+        ecs = (
+            ip_network(f"{option.address}/{option.srclen}", strict=False)
+            if isinstance(option, ECSOption)
+            else None
+        )
         return cls(
             id=msg.id,
             listener=listener,
             msg=msg,
             remote_address=remote_address,
-            qname=qname,
-            rdtype=rdtype,
-            rdclass=rdclass,
+            qname=question.name,
+            rdtype=question.rdtype,
+            rdclass=question.rdclass,
             ecs=ecs,
             deadline=deadline,
             shared_deadline=shared_deadline,
         )
+
+
+def _answer_addresses(answer: Answer) -> list[Any] | None:
+    """A/AAAA 记录的地址，或 HTTPS 记录 ipv4hint/ipv6hint 中的地址；其他为 None。"""
+    rrset = answer.rrset
+    if rrset is None:
+        return None
+    if answer.rdtype in (RdataType.A, RdataType.AAAA):
+        return [rr.address for rr in rrset]
+    if answer.rdtype == RdataType.HTTPS:
+        return [
+            ip
+            for rr in rrset
+            for param in rr.params.values()
+            if isinstance(param, (IPv4HintParam, IPv6HintParam))
+            for ip in param.addresses
+        ]
+    return None
 
 
 @dataclass(slots=True, config=ConfigDict(arbitrary_types_allowed=True))
@@ -165,31 +184,15 @@ class Response:
         非 NOERROR 的负应答同样保留 ans（含 authority 区 SOA），
         供上游透传给客户端做负缓存。
         """
-        rcode = answer.response.rcode()
-        response = cls(rcode, answer, upstream)
-        response.name_list, response.name_infos = [], []
-        # 处理CNAME链
-        for cname in answer.chaining_result.cnames:
-            for rr in cname:
-                response.name_list.append(rr.target)
-                response.name_infos.append(NameInfo.from_name(rr.target))
-        # 处理IP列表
-        if answer.rdtype in (RdataType.A, RdataType.AAAA) and answer.rrset is not None:
-            response.ip_list, response.ip_infos = [], []
-            for rr in answer.rrset:
-                response.ip_list.append(rr.address)
-                response.ip_infos.append(IPInfo.from_ip(rr.address, resolver=upstream))
-        elif answer.rdtype == RdataType.HTTPS and answer.rrset is not None:
-            response.ip_list, response.ip_infos = [], []
-            for rr in answer.rrset:
-                for param in rr.params.values():
-                    # HTTPS记录的ipv4hint/ipv6hint参数包含了IP地址列表
-                    if isinstance(param, (IPv4HintParam, IPv6HintParam)):
-                        for ip in param.addresses:
-                            response.ip_list.append(ip)
-                            response.ip_infos.append(
-                                IPInfo.from_ip(ip, resolver=upstream)
-                            )
+        # 构造后再赋值列表字段：构造参数会逐元素校验，回包热路径不需要。
+        response = cls(answer.response.rcode(), answer, upstream)
+        targets = [rr.target for cname in answer.chaining_result.cnames for rr in cname]
+        response.name_list = targets
+        response.name_infos = [NameInfo.from_name(target) for target in targets]
+        ips = _answer_addresses(answer)
+        if ips is not None:
+            response.ip_list = ips
+            response.ip_infos = [IPInfo.from_ip(ip, resolver=upstream) for ip in ips]
         return response
 
     def __str__(self):
@@ -201,6 +204,30 @@ class Response:
         )
 
 
+def published_ip_infos(
+    candidates: Mapping[str, Response], ip_infos: Mapping[IPvAnyAddress, IPInfo]
+) -> dict[IPvAnyAddress, IPInfo]:
+    """筛出属于已发布候选的测速信息。
+
+    ip_infos 按 IP 聚合、同 IP 后写覆盖，可能被未发布（被取消或判无效）的同
+    IP 候选覆盖；只保留 resolver 仍对应已发布候选的条目，并用已发布候选自己的
+    信息补回被覆盖的 IP。
+    """
+    published = {
+        (name, info.ip)
+        for name, candidate in candidates.items()
+        for info in candidate.ip_infos or ()
+    }
+    result = {
+        ip: info for ip, info in ip_infos.items() if (info.resolver, ip) in published
+    }
+    for candidate in candidates.values():
+        for info in candidate.ip_infos or ():
+            if info.ip in ip_infos:
+                result.setdefault(info.ip, info)
+    return result
+
+
 @dataclass(slots=True)
 class Context:
     """worker 处理期间贯穿所有 hook 的全局上下文。"""
@@ -209,9 +236,9 @@ class Context:
     request: Request
     # 当前处理的响应对象
     response: Response | None = None
-    # 结果列表
-    candidates: dict[str, Response] | None = None
-    ip_infos: dict[IPvAnyAddress, IPInfo] | None = None
+    # ConcurrentResolver 收集的候选（按上游名）与测速结果（按 IP）
+    candidates: dict[str, Response] = Field(default_factory=dict)
+    ip_infos: dict[IPvAnyAddress, IPInfo] = Field(default_factory=dict)
     stop: bool = False
     # ConcurrentResolver 打在嵌套解析器子上下文上的内部查询标记
     is_subquery: bool = False

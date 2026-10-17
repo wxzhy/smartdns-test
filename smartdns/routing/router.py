@@ -7,6 +7,7 @@ from loguru import logger
 
 from smartdns.models.context import Context, Response
 from smartdns.routing.matcher import match_request
+from smartdns.utils.components import lookup_all
 from smartdns.utils.deadline import response_scope
 
 if TYPE_CHECKING:
@@ -33,17 +34,8 @@ class Router:
         self._upstream = config.resolver
         self.resolver = None
         self._matcher = config.matcher
-        self.before, self.after = [], []
-        if config.before:
-            for action_name in config.before:
-                action = self._actions.get(action_name)
-                if action is not None:
-                    self.before.append(action)
-        if config.after:
-            for action_name in config.after:
-                action = self._actions.get(action_name)
-                if action is not None:
-                    self.after.append(action)
+        self.before = lookup_all(actions, config.before or ())
+        self.after = lookup_all(actions, config.after or ())
         if self._upstream:
             self.resolver = self._resolvers.get(self._upstream)
             if self.resolver is None:

@@ -8,7 +8,7 @@ from anyio import CancelScope
 from loguru import logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
 
 
 class Component(Protocol):
@@ -19,6 +19,17 @@ class Component(Protocol):
     async def start(self) -> None: ...
 
     async def stop(self) -> None: ...
+
+
+class Lookup[T](Protocol):
+    """按名称取组件的对象（ComponentManager 及测试替身）。"""
+
+    def get(self, name: str, /) -> T | None: ...
+
+
+def lookup_all[T](lookup: Lookup[T], names: Iterable[str]) -> list[T]:
+    """按 names 顺序取出存在的组件，跳过不存在的名称（配置加载期已校验引用）。"""
+    return [item for name in names if (item := lookup.get(name)) is not None]
 
 
 class ComponentManager[ConfigT, ComponentT: Component]:

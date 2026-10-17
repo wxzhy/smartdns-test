@@ -11,6 +11,7 @@ from loguru import logger
 from smartdns.actions._helper import replace_response_ipinfo
 from smartdns.actions._ping import speedtest
 from smartdns.actions.base import BaseAction
+from smartdns.models.context import published_ip_infos
 from smartdns.routing.matcher import match_response
 from smartdns.utils.deadline import response_scope, response_timeout
 
@@ -82,10 +83,7 @@ class SpeedcheckAction(BaseAction):
                     for info in response.ip_infos:
                         tg.start_soon(measure, info)
         # 任务组退出并完成取消清理后才发布，后续必需的 Action 仍会运行。
-        if context.ip_infos is None:
-            context.ip_infos = {}
-        for info in response.ip_infos:
-            context.ip_infos[info.ip] = info
+        context.ip_infos.update((info.ip, info) for info in response.ip_infos)
 
     async def on_response(self, context: Context) -> None:
         if not context.candidates or not context.ip_infos:
@@ -97,21 +95,7 @@ class SpeedcheckAction(BaseAction):
             and candidate.rcode == Rcode.NOERROR
             and candidate.ans is not None
         }
-        valid_ips = {
-            (name, info.ip)
-            for name, candidate in candidates.items()
-            for info in candidate.ip_infos or ()
-        }
-        available = {
-            ip: info
-            for ip, info in context.ip_infos.items()
-            if (info.resolver, ip) in valid_ips
-        }
-        # 同 IP 的后到候选可能在发布应答前被取消；保留已完成候选自己的信息。
-        for candidate in candidates.values():
-            for info in candidate.ip_infos or ():
-                if info.ip in context.ip_infos:
-                    available.setdefault(info.ip, info)
+        available = published_ip_infos(candidates, context.ip_infos)
         if not available:
             return
         ranked = sorted(

@@ -149,7 +149,6 @@ async def test_fallback_replaces_when_nodata_without_ip() -> None:
         worker_id=0,
         request=_request(),
         response=_nodata_response(),
-        ip_infos=None,
     )
 
     await action.on_response(context)
@@ -167,7 +166,6 @@ async def test_fallback_keeps_nodata_when_no_map_matches() -> None:
         worker_id=0,
         request=_request(),
         response=_nodata_response(),
-        ip_infos=None,
     )
     original = context.response
 
@@ -176,11 +174,8 @@ async def test_fallback_keeps_nodata_when_no_map_matches() -> None:
     assert context.response is original
 
 
-@pytest.mark.parametrize("stats", [None, {}])
-async def test_fallback_keeps_valid_answer_without_speed_statistics(stats) -> None:
-    context = Context(
-        worker_id=0, request=_request(), response=_a_response(), ip_infos=stats
-    )
+async def test_fallback_keeps_valid_answer_without_speed_statistics() -> None:
+    context = Context(worker_id=0, request=_request(), response=_a_response())
     original = context.response
     await FallbackAction(_config()).on_response(context)
     assert context.response is original

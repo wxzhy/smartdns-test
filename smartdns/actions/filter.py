@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from smartdns.actions.base import BaseAction
-from smartdns.routing.matcher import match_context, match_response
+from smartdns.routing.matcher import match_candidate, match_response
 
 if TYPE_CHECKING:
     from smartdns.models.action import FilterActionConfig, FilterItem
@@ -39,25 +39,17 @@ class FilterAction(BaseAction):
             response.rcode,
             response.upstream,
         )
-        # 临时挂载当前候选，让 match_context 匹配其 CNAME 链（同 ReplaceAction）。
-        original = context.response
-        context.response = response
-        try:
-            # 返回类型和请求类型不符
-            if (
-                response.ans is not None
-                and response.ans.rdtype != context.request.rdtype
-            ):
-                self._reject(context, response, "记录类型与请求不符")
+        # 返回类型和请求类型不符
+        if response.ans is not None and response.ans.rdtype != context.request.rdtype:
+            self._reject(context, response, "记录类型与请求不符")
+            return
+        for index, item in enumerate(self.map, start=1):
+            # 域名条件按请求域名加本候选自己的 CNAME 链判定。
+            if not match_candidate(item.match_name, context.request, response):
+                continue
+            if not match_response(item.match_ip, response):
+                self._reject(context, response, f"命中第 {index} 条过滤项")
                 return
-            for index, item in enumerate(self.map):
-                if not match_context(item.match_name, context):
-                    continue
-                if not match_response(item.match_ip, response):
-                    self._reject(context, response, f"命中第 {index + 1} 条过滤项")
-                    return
-        finally:
-            context.response = original
 
     def _reject(self, context: Context, response: Response, reason: str) -> None:
         response.invalid = True

@@ -41,6 +41,20 @@ class ResponseIPMatcher(StrictModel):
     asn_include: set[int] | None = Field(default=None, description="包含的ASN列表")
     asn_exclude: set[int] | None = Field(default=None, description="排除的ASN列表")
 
+    @property
+    def has_include(self) -> bool:
+        """配置了 IP 标签或 ASN 的 include 条件（二者之间为 OR）。"""
+        return self.ip_include is not None or self.asn_include is not None
+
+    @property
+    def has_conditions(self) -> bool:
+        """配置了任一 include/exclude 条件；否则匹配结果恒为真，无需 IP 标签。"""
+        return (
+            self.has_include
+            or self.ip_exclude is not None
+            or self.asn_exclude is not None
+        )
+
 
 class Rule(StrictModel):
     """规则配置类"""

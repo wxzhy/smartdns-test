@@ -8,7 +8,7 @@ from loguru import logger
 
 from smartdns.actions._helper import address_rrset, replace_answer_rrset
 from smartdns.actions.base import BaseAction
-from smartdns.routing.matcher import match_context, match_ip
+from smartdns.routing.matcher import match_candidate, match_ip
 
 if TYPE_CHECKING:
     from ipaddress import IPv4Address, IPv6Address
@@ -43,13 +43,8 @@ class ReplaceAction(BaseAction):
             response.rcode,
             response.upstream,
         )
-        original = context.response
-        context.response = response
-        try:
-            if not match_context(self.matcher, context):
-                return
-        finally:
-            context.response = original
+        if not match_candidate(self.matcher, context.request, response):
+            return
         if response.ans is None or response.ans.rrset is None or not response.ip_infos:
             return
         match = self._find_match(response.ip_infos)

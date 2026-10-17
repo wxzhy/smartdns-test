@@ -46,12 +46,7 @@ class HTTPSAction(BaseAction):
         self._match_name.query_types = {"HTTPS"}
         self._match_ip = config.match_ip
         # match_ip 是否配置了判定条件；无条件时判定恒定，缺标签也无需子查询。
-        self._match_ip_needs_tags = (
-            config.match_ip.ip_include is not None
-            or config.match_ip.ip_exclude is not None
-            or config.match_ip.asn_include is not None
-            or config.match_ip.asn_exclude is not None
-        )
+        self._match_ip_needs_tags = config.match_ip.has_conditions
         self._add_ech = config.add_ech
         self._enable_subquery = config.enable_subquery
         self._remove_hint = config.remove_hint

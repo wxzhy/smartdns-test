@@ -63,11 +63,14 @@ class Config(BaseSettings):
     @model_validator(mode="after")
     def validate_references(self) -> Config:
         """在启动前验证名称唯一性和跨组件引用。"""
-        self._ensure_unique("listener", [item.name for item in self.listeners])
-        self._ensure_unique("nameserver", [item.name for item in self.nameservers])
-        self._ensure_unique("resolver", [item.name for item in self.resolvers])
-        self._ensure_unique("action", [item.name for item in self.actions])
-        self._ensure_unique("routing rule", [item.name for item in self.routing])
+        for kind, items in (
+            ("listener", self.listeners),
+            ("nameserver", self.nameservers),
+            ("resolver", self.resolvers),
+            ("action", self.actions),
+            ("routing rule", self.routing),
+        ):
+            self._ensure_unique(kind, [item.name for item in items])
 
         unsupported = [
             item.name for item in self.listeners if isinstance(item, HTTPListenerConfig)

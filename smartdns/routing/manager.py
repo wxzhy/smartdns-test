@@ -44,10 +44,7 @@ class GeoManager:
 
     def lookup_domain(self, domain: str | Name) -> set[str]:
         """查找域名对应的标签"""
-        tags = set()
-        if self.geosite is not None:
-            tags = self.geosite.lookup(domain)
-        return tags
+        return self.geosite.lookup(domain) if self.geosite is not None else set()
 
     def close(self) -> None:
         """释放全部 Geo 数据映射和文件句柄。"""

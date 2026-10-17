@@ -1,6 +1,6 @@
 """Request/Response 负应答保留与 rcode 透传测试。"""
 
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv6Address
 from typing import TYPE_CHECKING, cast
 
 import dns.message
@@ -12,7 +12,8 @@ from dns.rdataclass import RdataClass
 from dns.rdatatype import RdataType
 from dns.resolver import Answer
 
-from smartdns.models.context import Context, Request, Response
+from smartdns.models.context import Context, Request, Response, published_ip_infos
+from smartdns.models.geodata import IPInfo
 from smartdns.utils.deadline import SharedDeadline
 
 if TYPE_CHECKING:
@@ -121,3 +122,29 @@ def test_for_subquery_allows_qname_and_rdtype_overrides() -> None:
     assert sub.request.rdtype == RdataType.HTTPS
     assert sub.request.rdclass == RdataClass.IN
     assert sub.request.listener == "test"
+
+
+def test_published_ip_infos_drops_unpublished_and_restores_overwritten() -> None:
+    shared, own = IPv4Address("192.0.2.1"), IPv4Address("192.0.2.2")
+    published = IPInfo(ip=shared, rtt=10.0, resolver="good")
+    published_own = IPInfo(ip=own, rtt=20.0, resolver="good")
+    candidate = Response(rcode=Rcode.NOERROR, ip_infos=[published, published_own])
+    # 未发布的同 IP 候选覆盖了聚合表中的 shared，另有一条只属于它的 IP。
+    ip_infos: dict[IPv4Address | IPv6Address, IPInfo] = {
+        shared: IPInfo(ip=shared, rtt=1.0, resolver="ghost"),
+        own: published_own,
+        IPv4Address("192.0.2.3"): IPInfo(ip=IPv4Address("192.0.2.3"), resolver="ghost"),
+    }
+
+    result = published_ip_infos({"good": candidate}, ip_infos)
+
+    assert result == {shared: published, own: published_own}
+
+
+def test_context_collections_default_to_independent_dicts() -> None:
+    request = Request.from_message(dns.message.make_query("example.com.", "A"), "t")
+    first = Context(worker_id=0, request=request)
+    second = Context(worker_id=0, request=request)
+    first.candidates["x"] = Response.servfail("x")
+    assert first.ip_infos == {}
+    assert second.candidates == {}

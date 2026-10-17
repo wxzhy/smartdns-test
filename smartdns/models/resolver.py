@@ -15,7 +15,19 @@ class BaseResolverConfig(StrictModel):
     timeout: float = Field(default=5.0, ge=0.1, description="请求超时时间（秒）")
 
 
-class PlainResolverConfig(BaseResolverConfig):
+class UpstreamResolverConfig(BaseResolverConfig):
+    """直接查询上游的解析器（plain/aiodns）共用配置。"""
+
+    cache_size: int = Field(
+        default=10000,
+        ge=0,
+        description="应答缓存容量（按应答自身 TTL 过期，跨 Worker 共享）；0 表示关闭",
+    )
+    rotate: bool = Field(default=True, description="是否轮询上游nameserver")
+    edns: bool = Field(default=True, description="是否启用EDNS")
+
+
+class PlainResolverConfig(UpstreamResolverConfig):
     """Plain Resolver 配置。"""
 
     type: Literal["plain"]
@@ -28,13 +40,6 @@ class PlainResolverConfig(BaseResolverConfig):
             "保证首个上游无应答时仍有时间切换到其他上游"
         ),
     )
-    cache_size: int = Field(
-        default=10000,
-        ge=0,
-        description="应答缓存容量（按应答自身 TTL 过期，跨 Worker 共享）；0 表示关闭",
-    )
-    rotate: bool = Field(default=True, description="是否轮询上游nameserver")
-    edns: bool = Field(default=True, description="是否启用EDNS")
     ecs: IPvAnyNetwork | None = Field(
         default=None, description="是否启用ECS，指定ECS网段"
     )
@@ -46,19 +51,12 @@ class PlainResolverConfig(BaseResolverConfig):
     )
 
 
-class AioDNSResolverConfig(BaseResolverConfig):
+class AioDNSResolverConfig(UpstreamResolverConfig):
     """AioDNS Resolver 配置。"""
 
     type: Literal["aiodns"]
     nameservers: list[IPvAnyAddress] = Field(description="上游 DNS 服务器地址列表")
     port: int = Field(default=53, ge=1, le=65535, description="上游nameserver端口")
-    cache_size: int = Field(
-        default=10000,
-        ge=0,
-        description="应答缓存容量（按应答自身 TTL 过期，跨 Worker 共享）；0 表示关闭",
-    )
-    rotate: bool = Field(default=True, description="是否轮询上游nameserver")
-    edns: bool = Field(default=True, description="是否启用EDNS")
     tcp: bool = Field(default=False, description="是否启用TCP")
     tries: int = Field(default=5, ge=1, description="请求尝试次数")
     max_queries: int = Field(

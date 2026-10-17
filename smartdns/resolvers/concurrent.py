@@ -6,8 +6,9 @@ from anyio import create_memory_object_stream, create_task_group, current_time
 from dns.rcode import Rcode
 from loguru import logger
 
-from smartdns.models.context import Context, Request, Response
+from smartdns.models.context import Context, Request, Response, published_ip_infos
 from smartdns.resolvers.base import BaseResolver
+from smartdns.utils.components import lookup_all
 from smartdns.utils.deadline import response_scope, response_timeout
 
 if TYPE_CHECKING:
@@ -30,7 +31,7 @@ class ConcurrentResolver(BaseResolver):
         self._manager = resolvers
         self._wait_all = config.wait_all
         self._nodata_grace = config.nodata_grace
-        self._actions = [actions.get(name) for name in config.actions]
+        self._actions = lookup_all(actions, config.actions)
 
     async def start(self) -> None:
         logger.info(
@@ -44,17 +45,12 @@ class ConcurrentResolver(BaseResolver):
         logger.info("ConcurrentResolver {} 已停止", self.name)
 
     def _resolve_upstreams(self) -> list[BaseResolver]:
-        return [
-            resolver
-            for name in self._upstream_names
-            if (resolver := self._manager.get(name)) is not None
-        ]
+        return lookup_all(self._manager, self._upstream_names)
 
     async def _run_actions(self, context: Context, candidate: Response) -> None:
         if candidate.rcode == Rcode.NOERROR and candidate.ans is not None:
             for action in self._actions:
-                if action is not None:
-                    await action.on_resolver(context, candidate)
+                await action.on_resolver(context, candidate)
                 if candidate.invalid:
                     break
 
@@ -120,31 +116,8 @@ class ConcurrentResolver(BaseResolver):
         子上下文按上游名索引候选、按 IP 索引测速结果，同键后写覆盖；
         外层动作（speedcheck 择优等）因此能看见内层已收集的数据。
         """
-        if child.candidates:
-            if context.candidates is None:
-                context.candidates = {}
-            context.candidates.update(child.candidates)
-        if child.ip_infos:
-            if context.ip_infos is None:
-                context.ip_infos = {}
-            valid_ips = {
-                (name, info.ip)
-                for name, candidate in (child.candidates or {}).items()
-                for info in candidate.ip_infos or ()
-            }
-            context.ip_infos.update(
-                (ip, info)
-                for ip, info in child.ip_infos.items()
-                if (info.resolver, ip) in valid_ips
-            )
-            # 未发布的同 IP 候选可能覆盖聚合表；恢复已通过检查候选自己的信息。
-            for candidate in (child.candidates or {}).values():
-                for info in candidate.ip_infos or ():
-                    if (
-                        info.ip in child.ip_infos
-                        and (info.resolver, info.ip) in valid_ips
-                    ):
-                        context.ip_infos.setdefault(info.ip, info)
+        context.candidates.update(child.candidates)
+        context.ip_infos.update(published_ip_infos(child.candidates, child.ip_infos))
 
     async def query(self, request: Request, context: Context | None = None) -> Response:
         """在总超时内返回最快成功应答，并保留所有已完成候选。
@@ -179,8 +152,6 @@ class ConcurrentResolver(BaseResolver):
                     candidates[result.upstream] = result
                     if context is not None and child_context is not None:
                         # 只有本层已完整消费的分支才发布候选和测速信息。
-                        if child_context.candidates is None:
-                            child_context.candidates = {}
                         child_context.candidates[result.upstream] = result
                         self._merge_child_results(context, child_context)
                     if result.rcode == Rcode.NOERROR and result.ans is not None:
@@ -207,8 +178,6 @@ class ConcurrentResolver(BaseResolver):
         await send.aclose()
         await receive.aclose()
         if context is not None:
-            if context.candidates is None:
-                context.candidates = {}
             context.candidates.update(candidates)
         result = self._pick(winner, nodata, candidates)
         logger.debug(

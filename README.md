@@ -237,7 +237,7 @@ match()? → before actions → resolver.query() → after actions → 返回是
 
 - `match_request()`：请求级（query type 大小写归一、domain include/exclude），**include fail-closed**（配置了 include 但无 geo 标签则不匹配）、exclude 仅在有标签时判断。
 - `match_response()` / `filter_ip()`：响应级，按 IP 标签与 ASN 判断；响应 include 用 OR（IP 或 ASN 任一命中），exclude 全局优先（任一项命中则整体失败）。
-- `match_context()`：同时看请求域名和响应 CNAME 链的标签。
+- `match_context()` / `match_candidate()`：同时看请求域名和响应 CNAME 链的标签；后者直接判定指定候选应答（Filter/Replace 在 resolver 阶段使用），不改动上下文。
 - `match_response_cname()`：CNAME 链标签匹配。
 
 ### 调用点

@@ -311,7 +311,7 @@ async def test_nested_context_state_is_isolated() -> None:
     assert upstream.contexts[0] is not None
     assert upstream.contexts[0].is_subquery
     assert context.response is None
-    assert context.ip_infos is None
+    assert context.ip_infos == {}
     assert context.stop is False
     assert context.ext == {"parent": True}
     # 嵌套解析器写入子上下文的候选与测速结果合并回父上下文。
