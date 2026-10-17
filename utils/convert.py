@@ -3,9 +3,8 @@
 import pickle
 from collections import defaultdict
 from ipaddress import ip_network
-from itertools import chain, repeat
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import ujson
 from loguru import logger
@@ -15,6 +14,9 @@ from typer import Option, Typer
 
 from smartdns.routing.geosite import domain_key, full_key, keyword_key
 from utils.mihomo.component.geodata.router import DomainType, GeoSiteList
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 app = Typer()
 
@@ -56,6 +58,18 @@ def _display(domain_type: DomainType, value: str) -> str:
     return f"{prefix}:{value}"
 
 
+def _tag_lines(directory: Path) -> Iterator[tuple[str, str]]:
+    """逐行产出 directory/*.txt 中的 (标签, 规则)；标签为小写文件名，跳过空行与注释。"""
+    if not directory.is_dir():
+        return
+    for tag_file in directory.glob("*.txt"):
+        tag = tag_file.stem.lower()
+        for raw_line in tag_file.read_text(encoding="ascii").splitlines():
+            line = raw_line.strip()
+            if line and not line.startswith("#"):
+                yield tag, line
+
+
 def convert(geodata_path: Path, tag_path: Path, output_path: Path) -> None:
     """转换 GeoSite/IPSet 数据，并确保首次运行即可写出全部产物。"""
     sites: defaultdict[str, set[str]] = defaultdict(set)
@@ -87,41 +101,29 @@ def convert(geodata_path: Path, tag_path: Path, output_path: Path) -> None:
                     labels.update((f"{name}@{key}", f"@{key}"))
                 add_rule(labels, domain.type, domain.value)
 
-    geosite_path = tag_path / "geosite"
-    if geosite_path.is_dir():
-        for tag_file in geosite_path.glob("*.txt"):
-            for raw_line in tag_file.read_text(encoding="ascii").splitlines():
-                line = raw_line.strip()
-                if line and not line.startswith("#"):
-                    add_rule({tag_file.stem.lower()}, *_parse_text_rule(line))
+    for tag, line in _tag_lines(tag_path / "geosite"):
+        add_rule({tag}, *_parse_text_rule(line))
 
     if skipped_regex:
         logger.warning(
             "跳过 {} 条 regexp 规则（GeoSite 不支持正则匹配）", skipped_regex
         )
 
-    geoip_path = tag_path / "geoip"
-    if geoip_path.is_dir():
-        for tag_file in geoip_path.glob("*.txt"):
-            for raw_line in tag_file.read_text(encoding="ascii").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                network = ip_network(line, strict=False)
-                node = radix.add(
-                    packed=network.network_address.packed,
-                    masklen=network.prefixlen,
-                )
-                node.data[tag_file.stem.lower()] = True
+    for tag, line in _tag_lines(tag_path / "geoip"):
+        network = ip_network(line, strict=False)
+        node = radix.add(
+            packed=network.network_address.packed, masklen=network.prefixlen
+        )
+        node.data[tag] = True
 
     output_path.mkdir(parents=True, exist_ok=True)
     with (output_path / "geosite.json").open("w", encoding="utf-8") as output:
         ujson.dump(sites, output, default=tuple)
-    tags, domains = [], []
-    for label, values in normalized_sites.items():
-        tags.append(repeat(label.encode("ascii"), len(values)))
-        domains.append(values)
-    trie = BytesTrie(zip(chain(*domains), chain(*tags), strict=True))
+    trie = BytesTrie(
+        (key, label.encode("ascii"))
+        for label, keys in normalized_sites.items()
+        for key in keys
+    )
     trie.save(str(output_path / "geosite.trie"))
     with (output_path / "geoip.radix").open("wb") as output:
         pickle.dump(radix, output)

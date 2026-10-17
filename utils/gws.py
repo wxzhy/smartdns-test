@@ -41,12 +41,8 @@ def _register(address: Address, alias: str, results: Results) -> None:
         return
     datacenter, offset = parsed
     try:
-        value = int(address) - offset
-        base = (
-            IPv4Address(value)
-            if isinstance(address, IPv4Address)
-            else IPv6Address(value)
-        )
+        # 地址减整数保持原地址族；越界时抛 AddressValueError（ValueError 子类）。
+        base = address - offset
     except ValueError:
         return
     results.setdefault(datacenter, set()).add(base)
